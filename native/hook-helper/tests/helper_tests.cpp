@@ -28,7 +28,7 @@ static int g_fail = 0;
   } while (0)
 
 namespace {
-constexpr uint32_t ALT = 0xA4, CTRL = 0xA2, KEY_P = 0x50, ESC = 0x1B, CAPS = 0x14, KEY_V = 0x56, KEY_T = 0x54, TAB = 0x09;
+constexpr uint32_t ALT = 0xA4, CTRL = 0xA2, WIN = 0x5B, KEY_P = 0x50, ESC = 0x1B, CAPS = 0x14, KEY_V = 0x56, KEY_T = 0x54, TAB = 0x09;
 using S = Decision::State;
 
 InputEvent key(EvKind k, uint32_t vk) {
@@ -91,6 +91,17 @@ void openEmoteWheel(Decision& d) {
   d.onEvent(mv(130, 100));
 }
 bool emitIs(const Emit* e, WheelKind w) { return e != nullptr && e->wheel == w; }
+// Pings on Alt, emotes on Ctrl, asks on `ask`.
+Decision withAsk(Trigger ask = Trigger::Win, uint32_t vk = 0, bool askClick = false) {
+  Config c;
+  c.emoteTrigger = Trigger::Ctrl;
+  c.askTrigger = ask;
+  c.askTriggerVk = vk;
+  c.askClick = askClick;
+  Decision d;
+  d.setConfig(c);
+  return d;
+}
 }  // namespace
 
 static void test_alt_drag_opens_wheel_and_releases() {
@@ -1171,6 +1182,151 @@ static void test_releasing_emote_trigger_mid_wheel_keeps_wheel() {
   CHECK(d.state() == S::Idle);
 }
 
+static void test_ask_drag_opens_ask_wheel() {
+  Decision d = withAsk();
+  CHECK(!d.onEvent(kd(WIN)).swallow);
+  CHECK(d.onEvent(md(Btn::Left, 100, 100)).swallow);
+  Result r = d.onEvent(mv(120, 100));
+  const Emit* open = findEmit(r, Emit::Kind::WheelOpen);
+  CHECK(emitIs(open, WheelKind::Ask) && open->x == 100 && open->y == 100);
+  CHECK(emitIs(findEmit(r, Emit::Kind::WheelMove), WheelKind::Ask));
+  r = d.onEvent(mu(Btn::Left, 120, 100));
+  CHECK(r.swallow);
+  const Emit* rel = findEmit(r, Emit::Kind::WheelRelease);
+  CHECK(emitIs(rel, WheelKind::Ask) && rel->x == 120 && rel->y == 100);
+  CHECK(d.state() == S::Idle);
+}
+
+static void test_ask_click_masks_win_menu() {
+  Decision d = withAsk(Trigger::Win, 0, true);
+  d.onEvent(kd(WIN));
+  CHECK(d.onEvent(md(Btn::Left, 50, 60)).swallow);
+  Result r = d.onEvent(mu(Btn::Left, 50, 60));
+  CHECK(r.swallow && r.injects.empty());
+  const Emit* c = findEmit(r, Emit::Kind::Click);
+  CHECK(emitIs(c, WheelKind::Ask) && c->x == 50 && c->y == 60);
+  // The Win press carried an ask, so Start must not open: the mask key goes before the Win-up.
+  r = d.onEvent(ku(WIN));
+  CHECK(r.swallow && r.injects.size() == 3);
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[0], InjectKind::KeyDown, Btn::None, kMaskVk));
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[1], InjectKind::KeyUp, Btn::None, kMaskVk));
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[2], InjectKind::KeyUp, Btn::None, WIN));
+}
+
+static void test_lone_win_tap_passes() {
+  for (const bool click : {false, true}) {
+    Decision d = withAsk(Trigger::Win, 0, click);
+    Result r = d.onEvent(kd(WIN));
+    CHECK(!r.swallow && r.injects.empty() && r.emits.empty());
+    r = d.onEvent(ku(WIN));  // Start opens as usual
+    CHECK(!r.swallow && r.injects.empty() && r.emits.empty());
+  }
+}
+
+static void test_trigger_up_after_gesture_only() {
+  Decision d = withAsk();
+  d.onEvent(kd(WIN));
+  d.onEvent(md(Btn::Left, 100, 100));
+  d.onEvent(mv(130, 100));
+  // Still held: more spots may come.
+  CHECK(findEmit(d.onEvent(mu(Btn::Left, 130, 100)), Emit::Kind::TriggerUp) == nullptr);
+  Result r = d.onEvent(ku(WIN));
+  CHECK(emitIs(findEmit(r, Emit::Kind::TriggerUp), WheelKind::Ask));
+  // Once reported, a later lone tap reports nothing.
+  CHECK(d.onEvent(kd(WIN)).emits.empty());
+  r = d.onEvent(ku(WIN));
+  CHECK(r.emits.empty());
+  // An ask click counts too, even when the key-up is what places it.
+  Decision c = withAsk(Trigger::Win, 0, true);
+  c.onEvent(kd(WIN));
+  c.onEvent(md(Btn::Left, 10, 10));
+  r = c.onEvent(ku(WIN));
+  CHECK(r.emits.size() == 2 && r.emits[0].kind == Emit::Kind::Click && emitIs(&r.emits[0], WheelKind::Ask));
+  CHECK(r.emits.size() == 2 && r.emits[1].kind == Emit::Kind::TriggerUp && emitIs(&r.emits[1], WheelKind::Ask));
+  CHECK(c.onEvent(mu(Btn::Left, 10, 10)).swallow);
+  // A cancelled gesture is no spot.
+  Decision x = withAsk();
+  x.onEvent(kd(WIN));
+  x.onEvent(md(Btn::Left, 100, 100));
+  x.onEvent(mv(130, 100));
+  x.onEvent(kd(ESC));
+  x.onEvent(ku(ESC));
+  x.onEvent(mu(Btn::Left, 130, 100));
+  CHECK(findEmit(x.onEvent(ku(WIN)), Emit::Kind::TriggerUp) == nullptr);
+}
+
+static void test_ask_off_by_default() {
+  Config c;
+  c.emoteTrigger = Trigger::Ctrl;
+  CHECK(c.askTrigger == Trigger::None);
+  Decision d;
+  d.setConfig(c);
+  CHECK(!d.onEvent(kd(WIN)).swallow);
+  Result r = d.onEvent(md(Btn::Left, 100, 100));
+  CHECK(!r.swallow && r.emits.empty());
+  r = d.onEvent(mv(150, 100));
+  CHECK(!r.swallow && r.emits.empty());
+  r = d.onEvent(mu(Btn::Left, 150, 100));
+  CHECK(!r.swallow && r.emits.empty() && r.injects.empty());
+  r = d.onEvent(ku(WIN));
+  CHECK(!r.swallow && r.emits.empty() && r.injects.empty());
+  // A config with no ask fields leaves the ask key off.
+  const Command cmd = parseCommand(R"({"type":"config","trigger":"alt","emoteTrigger":"ctrl"})", Config{});
+  CHECK(cmd.kind == Command::Kind::Config && cmd.config.askTrigger == Trigger::None && !cmd.config.askClick);
+}
+
+static void test_ask_and_ping_keys_independent() {
+  Decision d = withAsk();
+  openWheel(d);
+  Result r = d.onEvent(mu(Btn::Left, 130, 100));
+  CHECK(emitIs(findEmit(r, Emit::Kind::WheelRelease), WheelKind::Ping));
+  d.onEvent(ku(ALT));
+  openEmoteWheel(d);
+  r = d.onEvent(mu(Btn::Left, 130, 100));
+  CHECK(emitIs(findEmit(r, Emit::Kind::WheelRelease), WheelKind::Emote));
+  d.onEvent(ku(CTRL));
+  // Win and Alt held together: two wheels claim the press, so it passes through untouched.
+  d.onEvent(kd(WIN));
+  d.onEvent(kd(ALT));
+  r = d.onEvent(md(Btn::Left, 100, 100));
+  CHECK(!r.swallow && r.emits.empty());
+  CHECK(!d.onEvent(mu(Btn::Left, 100, 100)).swallow);
+  d.onEvent(ku(ALT));
+  CHECK(!d.onEvent(ku(WIN)).swallow);
+  // Win+Tab belongs to task view: the click passes, no ask.
+  d.onEvent(kd(WIN));
+  d.onEvent(kd(TAB));
+  r = d.onEvent(md(Btn::Left, 100, 100));
+  CHECK(!r.swallow && r.emits.empty());
+}
+
+static void test_custom_ask_key_taps_through() {
+  Decision d = withAsk(Trigger::CustomVk, KEY_V);
+  Result r = d.onEvent(kd(KEY_V));
+  CHECK(r.swallow && r.injects.empty());
+  r = d.onEvent(ku(KEY_V));  // a lone tap types V
+  CHECK(r.swallow && r.injects.size() == 2);
+  CHECK(r.injects.size() == 2 && injectIs(r.injects[0], InjectKind::KeyDown, Btn::None, KEY_V));
+  CHECK(r.injects.size() == 2 && injectIs(r.injects[1], InjectKind::KeyUp, Btn::None, KEY_V));
+  d.onEvent(kd(KEY_V));
+  CHECK(d.onEvent(md(Btn::Left, 0, 0)).swallow);
+  CHECK(emitIs(findEmit(d.onEvent(mv(0, 40)), Emit::Kind::WheelOpen), WheelKind::Ask));
+  CHECK(emitIs(findEmit(d.onEvent(mu(Btn::Left, 0, 40)), Emit::Kind::WheelRelease), WheelKind::Ask));
+  r = d.onEvent(ku(KEY_V));  // the drag used it: nothing typed, and the ask is sent
+  CHECK(r.swallow && r.injects.empty() && emitIs(findEmit(r, Emit::Kind::TriggerUp), WheelKind::Ask));
+}
+
+static void test_parse_config_ask_fields() {
+  const Config cur;
+  Command c = parseCommand(R"({"type":"config","askTrigger":"win","askTriggerVk":0,"askClick":true})", cur);
+  CHECK(c.kind == Command::Kind::Config && c.config.askTrigger == Trigger::Win && c.config.askClick);
+  c = parseCommand(R"({"type":"config","askTrigger":"vk","askTriggerVk":71})", cur);
+  CHECK(c.config.askTrigger == Trigger::CustomVk && c.config.askTriggerVk == 71);
+  c = parseCommand(R"({"type":"config","askTrigger":"off","askClick":false})", c.config);
+  CHECK(c.config.askTrigger == Trigger::None && !c.config.askClick);
+  CHECK(parseCommand(R"({"type":"config","askTrigger":"bogus"})", cur).kind == Command::Kind::Invalid);
+}
+
 static void test_parse_config_emote_fields() {
   const Config cur;
   Command c = parseCommand(R"({"type":"config","emoteTrigger":"off"})", cur);
@@ -1260,6 +1416,13 @@ static void test_format_emit_includes_wheel() {
     e.wheel = WheelKind::Emote;
     CHECK(formatEmit(e).find(R"(,"wheel":"emote"})") != std::string::npos);
   }
+  open.wheel = WheelKind::Ask;
+  CHECK(formatEmit(open) == R"({"type":"wheelOpen","x":1,"y":2,"wheel":"ask"})");
+  Emit up{Emit::Kind::TriggerUp};
+  up.wheel = WheelKind::Ask;
+  CHECK(formatEmit(up) == R"({"type":"triggerUp","wheel":"ask"})");
+  up.wheel = WheelKind::Ping;
+  CHECK(formatEmit(up) == R"({"type":"triggerUp","wheel":"ping"})");
 }
 
 // Review focus: a frozen Electron must never stall the hook thread.
@@ -1443,6 +1606,14 @@ int main() {
   test_mouse5_emote_beside_alt_ping();
   test_pause_stops_both_wheels();
   test_releasing_emote_trigger_mid_wheel_keeps_wheel();
+  test_ask_drag_opens_ask_wheel();
+  test_ask_click_masks_win_menu();
+  test_lone_win_tap_passes();
+  test_trigger_up_after_gesture_only();
+  test_ask_off_by_default();
+  test_ask_and_ping_keys_independent();
+  test_custom_ask_key_taps_through();
+  test_parse_config_ask_fields();
   test_mask_menu_keys_off_leaves_alt_up_alone();
   test_mac_keycodes_map_to_vks();
   test_mac_modifier_held();

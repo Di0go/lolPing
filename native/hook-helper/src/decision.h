@@ -20,10 +20,11 @@ struct InputEvent {
   uint64_t timeMs = 0;
 };
 
-enum class Trigger { Alt, Ctrl, Shift, Win, CapsLock, Mouse4, Mouse5, CustomVk, None };  // None: no trigger (emote key off)
+enum class Trigger { Alt, Ctrl, Shift, Win, CapsLock, Mouse4, Mouse5, CustomVk, None };  // None: no trigger (emote or ask key off)
 
-// The two wheels a gesture can open: each has its own trigger.
-enum class WheelKind { Ping, Emote };
+// The wheels a gesture can open: each has its own trigger.
+enum class WheelKind { Ping, Emote, Ask };
+inline constexpr WheelKind kWheels[] = {WheelKind::Ping, WheelKind::Emote, WheelKind::Ask};
 
 constexpr uint32_t ModCtrl = 1;
 constexpr uint32_t ModAlt = 2;
@@ -40,6 +41,9 @@ struct Config {
   Trigger emoteTrigger = Trigger::None;  // the emote wheel's
   uint32_t emoteTriggerVk = 0;           // only for Trigger::CustomVk
   bool emoteClick = false;
+  Trigger askTrigger = Trigger::None;  // the teammate's ask wheel
+  uint32_t askTriggerVk = 0;           // only for Trigger::CustomVk
+  bool askClick = false;
   int dragThresholdPx = 8;
   uint32_t toggleMods = ModCtrl | ModAlt;
   uint32_t toggleVk = 0x50;  // 'P'
@@ -51,10 +55,11 @@ struct Config {
 };
 
 struct Emit {
-  enum class Kind { WheelOpen, WheelMove, WheelRelease, Click, Cancel, Toggled, TextRequested, Panel } kind;
+  // TriggerUp: a wheel's trigger key came up after a release or click while it was held.
+  enum class Kind { WheelOpen, WheelMove, WheelRelease, Click, Cancel, Toggled, TextRequested, Panel, TriggerUp } kind;
   int x = 0;
   int y = 0;
-  WheelKind wheel = WheelKind::Ping;  // point events only: the wheel whose trigger started the gesture
+  WheelKind wheel = WheelKind::Ping;  // point events and TriggerUp: the wheel whose trigger started the gesture
   bool enabled = false;               // Toggled only
   bool show = false;                  // Panel only
 };
@@ -109,7 +114,7 @@ class Decision {
   const Config& config() const { return cfg_; }
 
  private:
-  // One wheel's trigger settings, read from the ping or emote fields of cfg_.
+  // One wheel's trigger settings, read from the ping, emote or ask fields of cfg_.
   struct Spec {
     Trigger trigger;
     uint32_t vk;  // only for Trigger::CustomVk
@@ -120,13 +125,16 @@ class Decision {
   uint32_t mods() const;
   Spec spec(WheelKind k) const;
   bool held(WheelKind k) const;
+  bool anyHeld() const;
   bool isTriggerVk(WheelKind k, uint32_t vk) const;
+  bool isAnyTriggerVk(uint32_t vk) const;
   bool isMouseTrigger(WheelKind k) const;
   bool isKeyTrigger(WheelKind k) const;  // a key we swallow: Caps Lock or a custom key
   uint32_t keyTriggerVk(WheelKind k) const;
   Btn dragButton(WheelKind k) const;
   bool clickOn(WheelKind k) const { return spec(k).click; }
   bool startsGesture(WheelKind k, Btn btn) const;
+  void markSpot();
   void markSwallow();
   void cancelGesture(Result& r);
   bool flushHeldBack(uint32_t vk, Result& r);
@@ -157,6 +165,9 @@ class Decision {
   uint32_t heldBackVk_ = 0;
   uint32_t typedVk_ = 0;
   WheelKind owner_ = WheelKind::Ping;  // the wheel the current gesture belongs to
+  // Per wheel: a release or click happened while its trigger key was held, so its key-up reports TriggerUp
+  // (the teammate sends an ask's spots then). Indexed by WheelKind.
+  std::array<bool, 3> spotWhileHeld_{};
   Btn dragBtn_ = Btn::None;
   int px_ = 0;
   int py_ = 0;

@@ -30,6 +30,17 @@ describe('parseHelperLine', () => {
     }
   });
 
+  it('reads the ask wheel and triggerUp', () => {
+    expect(parseHelperLine('{"type":"wheelOpen","x":1,"y":2,"wheel":"ask"}')).toEqual({ type: 'wheelOpen', x: 1, y: 2, wheel: 'ask' });
+    expect(parseHelperLine('{"type":"click","x":1,"y":2,"wheel":"ask"}')).toEqual({ type: 'click', x: 1, y: 2, wheel: 'ask' });
+    for (const wheel of ['ping', 'emote', 'ask'] as const) {
+      expect(parseHelperLine(`{"type":"triggerUp","wheel":"${wheel}"}`)).toEqual({ type: 'triggerUp', wheel });
+    }
+    for (const line of ['{"type":"triggerUp"}', '{"type":"triggerUp","wheel":"ASK"}', '{"type":"triggerUp","wheel":1}']) {
+      expect(parseHelperLine(line), line).toBeNull();
+    }
+  });
+
   it('rejects malformed lines', () => {
     for (const line of ['', 'nope', '42', 'null', '{"type":"wheelOpen","x":1}', '{"type":"click","x":1.5,"y":2}',
       '{"type":"toggled"}', '{"type":"panel"}', '{"type":"panel","show":"yes"}', '{"type":"mystery"}', '{"x":1,"y":2}']) {
@@ -42,7 +53,8 @@ describe('commands', () => {
   it('builds a flat config command for named triggers', () => {
     expect(configCommand(DEFAULT_SETTINGS, true)).toEqual({
       type: 'config', trigger: 'alt', triggerVk: 0, clickPing: false, gameCheck: true,
-      emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false, dragThresholdPx: 8,
+      emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false, askTrigger: 'off', askTriggerVk: 0, askClick: false,
+      dragThresholdPx: 8,
       toggleMods: 3, toggleVk: 0x50, textMods: 2, textVk: 0, panelVk: 0, enabled: true,
     });
   });
@@ -79,6 +91,19 @@ describe('commands', () => {
   it('sends no emote key while emotes are off', () => {
     const c = configCommand({ ...DEFAULT_SETTINGS, emoteClick: true, features: { ...DEFAULT_FEATURES, emotes: false } }, true);
     expect(c).toMatchObject({ emoteTrigger: 'off', emoteTriggerVk: 0, emoteClick: false });
+  });
+
+  it('sends the ask key only while the teammate is on and not sharing the ping key', () => {
+    const on = { ...DEFAULT_FEATURES, teammate: true };
+    const teammate = { ...DEFAULT_SETTINGS.teammate, askTrigger: 'win' as const, askClick: true };
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate }, true))
+      .toMatchObject({ askTrigger: 'off', askTriggerVk: 0, askClick: false });
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate, features: on }, true))
+      .toMatchObject({ trigger: 'alt', askTrigger: 'win', askTriggerVk: 0, askClick: true });
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...teammate, askTrigger: { vk: 0x47 }, askClick: false }, features: on }, true))
+      .toMatchObject({ askTrigger: 'vk', askTriggerVk: 0x47, askClick: false });
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...teammate, askTrigger: 'same' }, features: on }, true))
+      .toMatchObject({ trigger: 'alt', askTrigger: 'off', askTriggerVk: 0, askClick: false });
   });
 
   it('keeps the emote key while only rooms are off', () => {

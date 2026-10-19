@@ -4,10 +4,10 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { describe, expect, it } from 'vitest';
-import { parseHelperLine, type HelperEvent } from '../../src/shared/protocol';
+import { HELPER_VERSION, parseHelperLine, type HelperEvent } from '../../src/shared/protocol';
 
 const exe = resolve(__dirname, '../../native/hook-helper/build', process.platform === 'win32' ? 'hook-helper.exe' : 'hook-helper');
-const ALT = 164, CTRL = 162, KEY_P = 80, KEY_T = 84;
+const ALT = 164, CTRL = 162, WIN = 91, KEY_P = 80, KEY_T = 84;
 const config = {
   type: 'config', trigger: 'alt', triggerVk: 0, clickPing: false, emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false,
   dragThresholdPx: 8, toggleMods: 3, toggleVk: 80, textMods: 3, textVk: 84, enabled: true,
@@ -33,7 +33,8 @@ const sim = (ev: string, extra: Record<string, unknown> = {}) => ({ type: 'sim',
 describe('hook-helper --simulate', () => {
   it('announces itself first', async () => {
     const events = await simulate([]);
-    expect(events[0]).toEqual({ type: 'ready', version: 4 });
+    expect(events[0]).toEqual({ type: 'ready', version: HELPER_VERSION });
+    expect(HELPER_VERSION).toBe(5);
   });
 
   it('opens and releases the wheel on Alt+drag', async () => {
@@ -82,6 +83,28 @@ describe('hook-helper --simulate', () => {
     ]);
     expect(events.filter((e) => e.type !== 'sim' && e.type !== 'ready')).toEqual([]);
     expect(events.filter((e) => e.type === 'sim').every((e) => e.type === 'sim' && !e.swallow)).toBe(true);
+  });
+
+  it('parses ask wheel events and triggerUp', async () => {
+    const events = await simulate([
+      { ...config, askTrigger: 'win', askTriggerVk: 0, askClick: true },
+      sim('kdown', { vk: WIN }),
+      sim('mdown', { btn: 'left', x: 100, y: 100 }),
+      sim('move', { x: 130, y: 100 }),
+      sim('mup', { btn: 'left', x: 140, y: 90 }),
+      sim('mdown', { btn: 'left', x: 50, y: 60 }),
+      sim('mup', { btn: 'left', x: 50, y: 60 }),
+      sim('kup', { vk: WIN }),
+    ]);
+    expect(events.filter((e) => e.type !== 'sim' && e.type !== 'ready')).toEqual([
+      { type: 'wheelOpen', x: 100, y: 100, wheel: 'ask' },
+      { type: 'wheelMove', x: 130, y: 100, wheel: 'ask' },
+      { type: 'wheelRelease', x: 140, y: 90, wheel: 'ask' },
+      { type: 'click', x: 50, y: 60, wheel: 'ask' },
+      { type: 'triggerUp', wheel: 'ask' },
+    ]);
+    // The Win-up carried an ask, so it is masked: Start stays closed.
+    expect(events.at(-1)).toEqual({ type: 'sim', swallow: true, inject: 'kdown:252,kup:252,kup:91' });
   });
 
   it('replays a plain Alt+click', async () => {

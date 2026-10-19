@@ -1,8 +1,11 @@
 import { featureOn } from './features';
 import type { Settings } from './settings';
 
-/** Which wheel a gesture belongs to: the ping trigger's or the emote key's. */
-export type WheelKind = 'ping' | 'emote';
+/** Which wheel a gesture belongs to: the ping trigger's, the emote key's or the teammate's ask key. */
+export type WheelKind = 'ping' | 'emote' | 'ask';
+
+/** The helper's `ready` version this build expects. 5: the ask key, `"wheel":"ask"` and `triggerUp`. */
+export const HELPER_VERSION = 5;
 
 /**
  * Messages the hook helper writes to stdout, one JSON object per line.
@@ -15,6 +18,8 @@ export type HelperEvent =
   | { type: 'toggled'; enabled: boolean }
   | { type: 'textRequested' }
   | { type: 'panel'; show: boolean }
+  /** A wheel's trigger key came up after a release or click while it was held. */
+  | { type: 'triggerUp'; wheel: WheelKind }
   | { type: 'error'; message: string; code?: string }
   | { type: 'sim'; swallow: boolean; inject: string };
 
@@ -27,6 +32,7 @@ export const HELPER_EXIT_NO_ACCESS = 3;
 type PointType = 'wheelOpen' | 'wheelMove' | 'wheelRelease' | 'click';
 const POINT_TYPES = new Set<string>(['wheelOpen', 'wheelMove', 'wheelRelease', 'click']);
 const isInt = (x: unknown): x is number => Number.isInteger(x);
+const isWheel = (x: unknown): x is WheelKind => x === 'ping' || x === 'emote' || x === 'ask';
 
 export function parseHelperLine(line: string): HelperEvent | null {
   let v: unknown;
@@ -48,6 +54,8 @@ export function parseHelperLine(line: string): HelperEvent | null {
       return { type: 'textRequested' };
     case 'panel':
       return typeof o.show === 'boolean' ? { type: 'panel', show: o.show } : null;
+    case 'triggerUp':
+      return isWheel(o.wheel) ? { type: 'triggerUp', wheel: o.wheel } : null;
     case 'error':
       if (typeof o.message !== 'string') return null;
       return typeof o.code === 'string' ? { type: 'error', message: o.message, code: o.code } : { type: 'error', message: o.message };
@@ -57,8 +65,8 @@ export function parseHelperLine(line: string): HelperEvent | null {
         : null;
     default:
       if (typeof o.type === 'string' && POINT_TYPES.has(o.type) && isInt(o.x) && isInt(o.y)) {
-        // Anything but "emote" (including no field, from a version 1 helper) is the ping wheel.
-        return { type: o.type as PointType, x: o.x, y: o.y, wheel: o.wheel === 'emote' ? 'emote' : 'ping' };
+        // Anything unknown (including no field, from a version 1 helper) is the ping wheel.
+        return { type: o.type as PointType, x: o.x, y: o.y, wheel: isWheel(o.wheel) ? o.wheel : 'ping' };
       }
       return null;
   }
@@ -79,6 +87,10 @@ export type HelperCommand =
       emoteTrigger: HelperTrigger | 'off';
       emoteTriggerVk: number;
       emoteClick: boolean;
+      /** 'off': no separate ask key (the teammate is off, or it shares the ping key). */
+      askTrigger: HelperTrigger | 'off';
+      askTriggerVk: number;
+      askClick: boolean;
       dragThresholdPx: number;
       toggleMods: number;
       toggleVk: number;
@@ -103,6 +115,8 @@ export function configCommand(
   const t = s.trigger;
   // With the Emotes feature off the helper gets no emote key, so no emote wheel or emote click.
   const e = featureOn(s, 'emotes') ? s.emoteTrigger : 'off';
+  // 'same' asks on the ping wheel, so the helper gets no ask key and reports ping gestures as usual.
+  const a = featureOn(s, 'teammate') && s.teammate.askTrigger !== 'same' ? s.teammate.askTrigger : 'off';
   return {
     type: 'config',
     trigger: typeof t === 'object' ? 'vk' : t,
@@ -112,6 +126,9 @@ export function configCommand(
     emoteTrigger: typeof e === 'object' ? 'vk' : e,
     emoteTriggerVk: typeof e === 'object' ? e.vk : 0,
     emoteClick: s.emoteClick && e !== 'off',
+    askTrigger: typeof a === 'object' ? 'vk' : a,
+    askTriggerVk: typeof a === 'object' ? a.vk : 0,
+    askClick: s.teammate.askClick && a !== 'off',
     dragThresholdPx: s.dragThresholdPx,
     toggleMods: s.toggleHotkey.mods,
     toggleVk: s.toggleHotkey.vk,
