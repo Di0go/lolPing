@@ -61,7 +61,10 @@ import { strings } from '../../src/shared/i18n';
 
 const room = { joinClipboard: vi.fn(), create: vi.fn(), copyCode: vi.fn(), setMuted: vi.fn(), leave: vi.fn(), openSettings: vi.fn() };
 const update = { check: vi.fn(), start: vi.fn() };
-const handlers = { openSettings: vi.fn(), setEnabled: vi.fn(), retryHelper: vi.fn(), quit: vi.fn(), room, update };
+const teammate = { stop: vi.fn(), openHistory: vi.fn(), setHistoryPaused: vi.fn() };
+const handlers = {
+  openSettings: vi.fn(), setEnabled: vi.fn(), retryHelper: vi.fn(), quit: vi.fn(), room, update, teammate,
+};
 
 type Item = { label?: string; type?: string; enabled?: boolean; checked?: boolean; submenu?: Item[]; click?: (item: Item) => void };
 const roomMenu = (): Item[] => (created[0].menus.at(-1) as Item[]).find((i) => i.label === 'Room')!.submenu!;
@@ -142,6 +145,30 @@ describe('AppTray', () => {
     expect(created[0].menus.length).toBe(menus);
     tray.setRoom({ code: 'PING-7KQ4M-2HXTR', count: 3, muted: false });
     expect(created[0].menus.length).toBe(menus + 1);
+  });
+
+  it('shows Stop teammate only while an ask runs', () => {
+    const tray = new AppTray('icon.png', handlers);
+    const labels = (): (string | undefined)[] => menuOf().map((i) => i.label);
+    expect(labels()).not.toContain('Teammate history…');
+    tray.setTeammate({ running: false, historyOn: true, paused: false });
+    expect(labels()).not.toContain('Stop teammate');
+    expect(labels()).toContain('Teammate history…');
+    tray.setTeammate({ running: true, historyOn: true, paused: false });
+    menuOf().find((i) => i.label === 'Stop teammate')!.click!({});
+    expect(teammate.stop).toHaveBeenCalledTimes(1);
+    menuOf().find((i) => i.label === 'Pause history')!.click!({});
+    expect(teammate.setHistoryPaused).toHaveBeenCalledWith(true);
+    tray.setTeammate({ running: false, historyOn: true, paused: true });
+    expect(labels()).not.toContain('Stop teammate');
+    menuOf().find((i) => i.label === 'Resume history')!.click!({});
+    expect(teammate.setHistoryPaused).toHaveBeenCalledWith(false);
+    menuOf().find((i) => i.label === 'Teammate history…')!.click!({});
+    expect(teammate.openHistory).toHaveBeenCalledTimes(1);
+    tray.setTeammate({ running: false, historyOn: false, paused: false });
+    expect(labels()).not.toContain('Pause history');
+    tray.setTeammate(null);
+    expect(labels()).not.toContain('Teammate history…');
   });
 
     it('ignores setRoom() after destroy()', () => {

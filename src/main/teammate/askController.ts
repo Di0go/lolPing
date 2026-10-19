@@ -44,6 +44,8 @@ export interface AskDeps {
   thumbnail: (jpeg: Buffer) => string;
   now: () => number;
   usage: (u: { input: number; output: number }) => void;
+  /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
+  cursor?: () => Point;
   /** Reads and deletes the capture files; the file system by default. */
   files?: { read(path: string): Promise<Buffer>; remove(path: string): Promise<void> };
 }
@@ -99,6 +101,14 @@ interface Run {
   files: string[];
 }
 
+/** One ask and its answer as the card shows them. */
+const entryPair = (
+  label: string, words: string | null, line: string, markdown: string, tagName: string,
+): CardState['entries'] => [
+  { kind: 'ask', label, markdown: words ?? '' },
+  { kind: 'answer', label: tagName, markdown: [line, markdown].filter(Boolean).join('\n\n') },
+];
+
 const near = (p: Point, list: readonly Point[]): boolean =>
   list.some((q) => Math.hypot(p.x - q.x, p.y - q.y) <= NEAR_PX);
 
@@ -140,6 +150,8 @@ export class AskController extends EventEmitter {
   private excluded = 0;
   /** The thread asks continue: kept here so it works with history off or paused, and across a pause. */
   private thread: ThreadRecord | null = null;
+  /** A thread opened from History that the card shows; its reply box continues it. */
+  private viewed: ThreadRecord | null = null;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -163,6 +175,7 @@ export class AskController extends EventEmitter {
     this.clearMarks();
     this.hideBubble();
     this.clearTimer('fade');
+    this.viewed = null;
     this.deps.overlay.setMateTicket(machine.id);
 
     const current = this.currentThread();
@@ -201,9 +214,24 @@ export class AskController extends EventEmitter {
     this.thread = record;
   }
 
+  /** History's Open: the thread as a card at `at` (DIPs), in place of what the teammate had on screen. */
+  showThread(record: ThreadRecord, at: Point): void {
+    this.cancel('user');
+    const t = this.deps.settings().teammate;
+    const lang = this.deps.lang();
+    this.deps.windows.showCard(at, {
+      view: 'card', lang, tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, title: record.title,
+      entries: this.threadEntries(record, lang, t.tagName), streaming: false,
+      footer: { profile: record.profile, model: '', tokens: null, used: [] },
+    });
+    this.cardShown = true;
+    this.viewed = record;
+  }
+
   /** What the bubble and card ask for; the rest (copy, link, history) is the app's to handle. */
   onTeammateAction(view: MateView, a: MateAction): void {
     const run = this.shown;
+    if (!run && this.viewed && view === 'card' && (a.t === 'reply' || a.t === 'deep')) return this.askFromViewed(a);
     switch (a.t) {
       case 'more':
         if (view === 'bubble' && run) this.openCard(run);
@@ -213,6 +241,7 @@ export class AskController extends EventEmitter {
         break;
       case 'close':
         this.hideCard();
+        this.viewed = null;
         break;
       case 'reply':
         if (run) this.ask({ ...run.spot, intent: 'generic' }, { text: a.text, newThread: false });
@@ -237,6 +266,17 @@ export class AskController extends EventEmitter {
     this.hideCard();
     this.clearTimer('fade');
     this.shown = null;
+    this.viewed = null;
+  }
+
+  /** A thread opened from History has no spot of its own: its reply asks at the cursor. */
+  private askFromViewed(a: Extract<MateAction, { t: 'reply' | 'deep' }>): void {
+    const phys = this.deps.cursor?.();
+    const display = phys ? this.deps.overlay.displayAt(phys) : null;
+    if (!phys || !display || !this.viewed) return;
+    if (a.t === 'deep') return this.ask({ intent: 'allin', phys, displayId: display.id });
+    this.thread = this.viewed;
+    this.ask({ intent: 'generic', phys, displayId: display.id }, { text: a.text, newThread: false });
   }
 
   private alive(run: Run): boolean {
@@ -611,15 +651,9 @@ export class AskController extends EventEmitter {
   }
 
   private cardState(run: Run, streaming: boolean): CardState {
-    const s = this.deps.settings().teammate;
     const t = strings(run.lang).teammate;
-    const pair = (label: string, words: string | null, line: string, markdown: string): CardState['entries'] => [
-      { kind: 'ask', label, markdown: words ?? '' },
-      { kind: 'answer', label: run.tag.name, markdown: [line, markdown].filter(Boolean).join('\n\n') },
-    ];
-    const entries = (run.thread?.entries ?? []).flatMap((e) =>
-      pair(intentFor(s, e.intent, run.lang).label, e.words, e.line, e.markdown));
-    entries.push(...pair(run.intent.label, run.words, run.said, run.markdown.join('\n\n')));
+    const entries = run.thread ? this.threadEntries(run.thread, run.lang, run.tag.name) : [];
+    entries.push(...entryPair(run.intent.label, run.words, run.said, run.markdown.join('\n\n'), run.tag.name));
     return {
       view: 'card', lang: run.lang, tag: run.tag, entries, streaming,
       title: run.thread?.title ?? (run.line || run.intent.label).slice(0, TITLE_MAX),
@@ -627,6 +661,12 @@ export class AskController extends EventEmitter {
         profile: run.profile?.name ?? '', model: run.profile?.model ?? '', tokens: run.tokens, used: [t.ask.usedScreen],
       },
     };
+  }
+
+  private threadEntries(thread: ThreadRecord, lang: Lang, tagName: string): CardState['entries'] {
+    const s = this.deps.settings().teammate;
+    return thread.entries.flatMap((e) =>
+      entryPair(intentFor(s, e.intent, lang).label, e.words, e.line, e.markdown, tagName));
   }
 
   private popupAt(run: Run): Point {

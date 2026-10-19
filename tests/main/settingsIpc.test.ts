@@ -6,9 +6,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmoteLibrary } from '../../src/main/emoteLibrary';
 import { registerSettingsIpc, type SettingsIpcDeps } from '../../src/main/settingsIpc';
 import { SettingsStore } from '../../src/main/settingsStore';
+import { SecretStore, type Crypto } from '../../src/main/teammate/secrets';
+import { ProviderError } from '../../src/main/teammate/providers/types';
 import { strings } from '../../src/shared/i18n';
 import { SETTINGS_CH } from '../../src/shared/ipc';
 import { MOD } from '../../src/shared/keys';
+import type { BuiltinProfile } from '../../src/shared/teammate/settings';
 import type { UpdateState } from '../../src/shared/update';
 
 const h = vi.hoisted(() => ({
@@ -246,5 +249,93 @@ describe('update IPC', () => {
     registerWith(fakeUpdate(AVAILABLE, 'file:///C:/Windows/System32/calc.exe'));
     await call(SETTINGS_CH.updateOpenRelease);
     expect(h.opened).toEqual(['https://github.com/darrenprx/lolPing/releases/latest']);
+  });
+});
+
+describe('teammate IPC', () => {
+  const KEY = 'sk-secret-123456';
+  const PROFILE: BuiltinProfile = {
+    id: 'p1', kind: 'builtin', name: 'GPT', tagColor: 3, tagColorCustom: null, provider: 'openai', protocol: 'openai',
+    baseUrl: 'https://api.openai.com/v1', model: '', vision: 'auto',
+  };
+  /** A reversible stand-in for safeStorage. */
+  const crypto: Crypto = {
+    isEncryptionAvailable: () => true,
+    encryptString: (text) => Buffer.from(Buffer.from(text, 'utf8').map((b) => b ^ 0x5a)),
+    decryptString: (b) => Buffer.from(b.map((x) => x ^ 0x5a)).toString('utf8'),
+  };
+
+  let secrets: SecretStore | null;
+  let listModels: (key: string) => Promise<string[]>;
+  let historyOps: string[];
+
+  function registerTeammate(): void {
+    h.handlers.clear();
+    historyOps = [];
+    registerSettingsIpc({
+      store, library, text: () => strings('en'), platform: 'win', room: {},
+      teammate: {
+        secrets: () => secrets,
+        adapter: (_p: BuiltinProfile, key: string) => ({ listModels: () => listModels(key) }),
+        usage: () => ({ month: '2026-10', input: 10, output: 2 }),
+        history: (op: string) => void historyOps.push(op),
+      },
+    } as unknown as SettingsIpcDeps);
+  }
+
+  beforeEach(() => {
+    secrets = new SecretStore(join(mkdtempSync(join(tmpdir(), 'lolping-ipc-secrets-')), 'secrets'), crypto);
+    listModels = async () => ['gpt-4o', 'gpt-4o-mini'];
+    store.update({
+      features: { ...store.get().features, teammate: true }, teammate: { ...store.get().teammate, profiles: [PROFILE] },
+    });
+    registerTeammate();
+  });
+
+  it('never returns a key to the settings window', async () => {
+    expect(await call(SETTINGS_CH.teammateSetKey, 'p1', KEY)).toEqual({ ok: true });
+    expect(secrets?.key('p1')).toBe(KEY);
+    const seen: unknown[] = [
+      await call(SETTINGS_CH.teammateHasKey, 'p1'),
+      await call(SETTINGS_CH.teammateCheckKey, 'p1'),
+      await call(SETTINGS_CH.teammateInstructions),
+      await call(SETTINGS_CH.teammateUsage),
+      await call(SETTINGS_CH.get),
+    ];
+    expect(seen[0]).toBe(true);
+    expect(seen[1]).toEqual({ ok: true, models: ['gpt-4o', 'gpt-4o-mini'] });
+    // Some providers repeat the key they refused in their error message.
+    listModels = async (key) => {
+      throw new ProviderError('auth', `Incorrect API key provided: ${key}`, 401);
+    };
+    const refused = await call(SETTINGS_CH.teammateCheckKey, 'p1');
+    expect(refused).toMatchObject({ ok: false, error: 'auth' });
+    seen.push(refused);
+    for (const result of seen) expect(JSON.stringify(result) ?? '').not.toContain(KEY);
+  });
+
+  it('validates teammate payloads', async () => {
+    for (const [id, key] of [[1, KEY], ['nope', KEY], ['p1', 42], ['p1', 'x'.repeat(5000)], [null, null]]) {
+      expect(await call(SETTINGS_CH.teammateSetKey, id, key)).toEqual({ ok: false });
+    }
+    expect(secrets?.key('p1')).toBeNull();
+    expect(await call(SETTINGS_CH.teammateHasKey, { id: 'p1' })).toBe(false);
+    expect(await call(SETTINGS_CH.teammateCheckKey, 'nope')).toMatchObject({ ok: false, error: 'other' });
+    expect(await call(SETTINGS_CH.teammateCheckKey, 'p1')).toMatchObject({ ok: false, error: 'auth' }); // no key yet
+    for (const raw of [5, null, 'x'.repeat(2001)]) {
+      expect(await call(SETTINGS_CH.teammateSetInstructions, raw)).toEqual({ ok: false });
+    }
+    expect(await call(SETTINGS_CH.teammateInstructions)).toBe('');
+    expect(await call(SETTINGS_CH.teammateSetInstructions, 'Call me Sam.')).toEqual({ ok: true });
+    expect(await call(SETTINGS_CH.teammateInstructions)).toBe('Call me Sam.');
+    for (const op of ['format', null, { op: 'clear' }]) await call(SETTINGS_CH.teammateHistory, op);
+    expect(historyOps).toEqual([]);
+    await call(SETTINGS_CH.teammateHistory, 'clear');
+    expect(historyOps).toEqual(['clear']);
+
+    secrets = null; // the feature is off: nothing is stored
+    expect(await call(SETTINGS_CH.teammateSetKey, 'p1', KEY)).toEqual({ ok: false, error: 'unavailable' });
+    expect(await call(SETTINGS_CH.teammateHasKey, 'p1')).toBe(false);
+    expect(await call(SETTINGS_CH.teammateInstructions)).toBe('');
   });
 });

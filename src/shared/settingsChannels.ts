@@ -33,4 +33,11 @@ export const SETTINGS_CH = {
   updateStart: 'update:start',
   updateOpenRelease: 'update:openRelease',
   showSection: 'settings:showSection',
+  teammateSetKey: 'teammate:setKey',
+  teammateHasKey: 'teammate:hasKey',
+  teammateCheckKey: 'teammate:checkKey',
+  teammateSetInstructions: 'teammate:setInstructions',
+  teammateInstructions: 'teammate:instructions',
+  teammateUsage: 'teammate:usage',
+  teammateHistory: 'teammate:history',
 } as const;

@@ -3,6 +3,7 @@ import {
   ArrowMove24Regular, ArrowSync24Regular, CursorClick24Regular, DataPie24Regular, Games24Regular, Info24Regular, Keyboard24Regular, MusicNote224Regular, Pin24Regular,
   Power24Regular, ResizeLarge24Regular, Rocket24Regular, Settings24Regular, Speaker224Regular, SpeakerMute24Regular,
   Apps24Regular, Timer24Regular, Cursor24Regular, Emoji24Regular, LocalLanguage24Regular, PeopleCommunity24Regular,
+  Sparkle24Regular,
 } from '@fluentui/react-icons';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { LANGUAGE_NAMES, LANGUAGE_PREFS, resolveLang, strings, type LanguagePref, type Strings } from '../../shared/i18n';
@@ -21,6 +22,7 @@ import { PermissionCard } from './components/PermissionCard';
 import { RoomSection } from './components/RoomSection';
 import { SettingRow, SliderRow, SwitchRow } from './components/rows';
 import { StatusCard } from './components/StatusCard';
+import { TeammateSection } from './components/TeammateSection';
 import { TriggerPicker } from './components/TriggerPicker';
 import { WheelEditor, type PoolItem } from './components/WheelEditor';
 import { TextContext, useText } from './text';
@@ -40,6 +42,7 @@ const SECTIONS: { id: string; label: (t: Strings) => string; icon: ReactNode; fe
   { id: 'wheel', label: (t) => t.navWheel, icon: <DataPie24Regular /> },
   { id: 'emotes', label: (t) => t.navEmotes, icon: <Emoji24Regular />, feature: 'emotes' },
   { id: 'room', label: (t) => t.navRoom, icon: <PeopleCommunity24Regular />, feature: 'rooms' },
+  { id: 'teammate', label: (t) => t.navTeammate, icon: <Sparkle24Regular />, feature: 'teammate' },
   { id: 'features', label: (t) => t.navFeatures, icon: <Apps24Regular /> },
   { id: 'app', label: (t) => t.navApp, icon: <Settings24Regular /> },
 ];
@@ -220,6 +223,13 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
           <>
             <div className="section" id="room">{t.navRoom}</div>
             <RoomSection settings={s} update={update} />
+          </>
+        ) : null}
+
+        {featureOn(s, 'teammate') ? (
+          <>
+            <div className="section" id="teammate">{t.navTeammate}</div>
+            <TeammateSection settings={s} update={update} />
           </>
         ) : null}
 

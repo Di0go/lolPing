@@ -156,6 +156,7 @@ function harness(opts: HarnessOptions = {}) {
     thumbnail: () => 'thumb',
     now: () => Date.now() + skew,
     usage: () => undefined,
+    cursor: () => ({ x: 1200, y: 900 }),
     files: { read: async (p) => Buffer.from(p), remove: async () => undefined },
   };
   const ctl = new AskController(deps);
@@ -490,6 +491,30 @@ describe('AskController', () => {
     await flush();
     expect(h.bubbles().map((b) => b.thread)).toEqual(['Old thread']);
     expect(h.appends.map((a) => a.threadId)).toEqual(['old']);
+  });
+
+  it('opens a thread from History as a card, and a reply in it continues that thread at the cursor', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Still there.' })])] });
+    const picked: ThreadRecord = {
+      id: 'old', title: 'Old thread', started: 0, lastActivity: 0, app: '', windowTitle: '', profile: 'fast',
+      entries: [{ at: 0, intent: 'missing', words: null, line: 'Long ago.', markdown: '', thumb: '' }],
+    };
+    h.ctl.showThread(picked, { x: 100, y: 100 });
+    expect(h.cards()).toEqual([expect.objectContaining({
+      title: 'Old thread', streaming: false,
+      entries: [
+        { kind: 'ask', label: t.intent.missing.label, markdown: '' },
+        { kind: 'answer', label: 'AI', markdown: 'Long ago.' },
+      ],
+    })]);
+    expect(h.states).toEqual([]); // nothing is asked by opening it
+    const hidden = h.of('cardHidden').length;
+    h.ctl.onTeammateAction('card', { t: 'reply', text: 'and now?' });
+    await flush();
+    expect(h.of('capture')[0]).toEqual([{ x: 1200, y: 900 }]);
+    expect(h.appends.map((a) => a.threadId)).toEqual(['old']);
+    expect(h.of('cardHidden')).toHaveLength(hidden); // the card stays and fills in
+    expect(h.cards().at(-1)?.entries.map((e) => e.markdown)).toEqual(['', 'Long ago.', 'and now?', 'Still there.']);
   });
 
   it('stops after 6 rounds and never captures for a look on the last one', async () => {

@@ -1,15 +1,21 @@
 import { globalShortcut, ipcMain, shell } from 'electron';
 import { isCustomRef, isEmoteFx, isEmoteRefShape, type CustomEmote, type EmoteRef, type ImportResult, type SoundResult } from '../shared/emotes';
 import type { Strings } from '../shared/i18n';
-import { SETTINGS_CH, type About, type AppStatus, type SetSettingsResult } from '../shared/ipc';
+import {
+  SETTINGS_CH, TEAMMATE_HISTORY_OPS, type About, type AppStatus, type CheckKeyResult, type SecretResult,
+  type SetSettingsResult, type TeammateHistoryOp, type UsageMonth,
+} from '../shared/ipc';
 import { hotkeyLabel, hotkeyToAccelerator, type Hotkey } from '../shared/keys';
 import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
 import { panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
+import type { BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
 import { emoteFileFrom, type EmoteLibrary } from './emoteLibrary';
 import type { SettingsStore } from './settingsStore';
+import { ProviderError, type ProviderAdapter } from './teammate/providers/types';
+import { INSTRUCTIONS_MAX_CHARS, type SecretStore } from './teammate/secrets';
 
 const PROJECT_URL = 'https://github.com/darrenprx/lolPing';
 /** Where "What's new" goes when no update is known. */
@@ -50,7 +56,18 @@ export interface SettingsIpcDeps {
     copyCode(): void;
     retryInternet(): void;
   };
+  teammate: {
+    /** null while the teammate feature is off: then no key or instructions are read or stored. */
+    secrets(): Pick<SecretStore, 'available' | 'key' | 'hasKey' | 'setKey' | 'instructions' | 'setInstructions'> | null;
+    adapter(p: BuiltinProfile, key: string): Pick<ProviderAdapter, 'listModels'>;
+    usage(): UsageMonth;
+    history(op: TeammateHistoryOp): void | Promise<void>;
+  };
 }
+
+/** Longer than any provider's key; anything longer is not a key. */
+const KEY_MAX = 4096;
+const CHECK_KEY_MS = 15_000;
 
 const sameHotkey = (a: Hotkey, b: Hotkey): boolean => a.mods === b.mods && a.vk === b.vk;
 
@@ -161,6 +178,8 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
   ipcMain.handle(SETTINGS_CH.roomCopy, () => d.room.copyCode());
   ipcMain.handle(SETTINGS_CH.roomRetryInternet, () => d.room.retryInternet());
 
+  registerTeammateIpc(d);
+
   ipcMain.handle(SETTINGS_CH.updateGet, (): UpdateState | null => d.update?.state() ?? null);
   ipcMain.handle(SETTINGS_CH.updateCheck, async () => {
     await d.update?.check();
@@ -173,6 +192,61 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
     if (!d.update) return;
     const notes = d.update.notesUrl();
     await shell.openExternal(notes !== null && isWebUrl(notes) ? notes : LATEST_RELEASE_URL);
+  });
+}
+
+/** Keys go in and never come back out: the window learns only whether a profile has one, and what Check key found. */
+function registerTeammateIpc(d: SettingsIpcDeps): void {
+  const profileOf = (id: unknown): BuiltinProfile | null =>
+    typeof id === 'string' ? d.store.get().teammate.profiles.find((p) => p.id === id) ?? null : null;
+  const stored = async (write: () => Promise<void>): Promise<SecretResult> => {
+    try {
+      await write();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'unavailable' };
+    }
+  };
+
+  ipcMain.handle(SETTINGS_CH.teammateSetKey, (_e, id: unknown, key: unknown): Promise<SecretResult> | SecretResult => {
+    const profile = profileOf(id);
+    if (!profile || typeof key !== 'string' || key.length > KEY_MAX) return { ok: false };
+    const secrets = d.teammate.secrets();
+    if (!secrets) return { ok: false, error: 'unavailable' };
+    return stored(() => secrets.setKey(profile.id, key.trim()));
+  });
+  ipcMain.handle(SETTINGS_CH.teammateHasKey, (_e, id: unknown): boolean => {
+    const profile = profileOf(id);
+    return profile !== null && (d.teammate.secrets()?.hasKey(profile.id) ?? false);
+  });
+  ipcMain.handle(SETTINGS_CH.teammateCheckKey, async (_e, id: unknown): Promise<CheckKeyResult> => {
+    const t = d.text().teammate.settings;
+    const profile = profileOf(id);
+    if (!profile) return { ok: false, error: 'other', message: t.checkNoProfile };
+    const key = d.teammate.secrets()?.key(profile.id) ?? null;
+    if (!key) return { ok: false, error: 'auth', message: t.checkNoKey };
+    try {
+      const models = await d.teammate.adapter(profile, key).listModels(AbortSignal.timeout(CHECK_KEY_MS));
+      return { ok: true, models };
+    } catch (err) {
+      const kind = err instanceof ProviderError ? err.kind : 'other';
+      const error = kind === 'auth' || kind === 'network' ? kind : 'other';
+      // Some providers repeat the refused key in their message.
+      const message = err instanceof Error ? err.message.split(key).join('…') : '';
+      return { ok: false, error, message };
+    }
+  });
+  ipcMain.handle(SETTINGS_CH.teammateSetInstructions, (_e, text: unknown): Promise<SecretResult> | SecretResult => {
+    if (typeof text !== 'string' || text.length > INSTRUCTIONS_MAX_CHARS) return { ok: false };
+    const secrets = d.teammate.secrets();
+    if (!secrets) return { ok: false, error: 'unavailable' };
+    return stored(() => secrets.setInstructions(text));
+  });
+  ipcMain.handle(SETTINGS_CH.teammateInstructions, (): string => d.teammate.secrets()?.instructions() ?? '');
+  ipcMain.handle(SETTINGS_CH.teammateUsage, (): UsageMonth => d.teammate.usage());
+  ipcMain.handle(SETTINGS_CH.teammateHistory, async (_e, op: unknown) => {
+    const known = TEAMMATE_HISTORY_OPS.find((o) => o === op);
+    if (known) await d.teammate.history(known);
   });
 }
 

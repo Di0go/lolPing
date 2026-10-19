@@ -178,6 +178,22 @@ export interface About {
 
 export type SetSettingsResult = { ok: true; settings: Settings } | { ok: false; error: string; settings: Settings };
 
+/** Storing a key or Your instructions; 'unavailable': the system can't encrypt them, so nothing was stored. */
+export type SecretResult = { ok: boolean; error?: 'unavailable' };
+/** Check key lists the provider's models; it never asks for a completion. `message` never contains the key. */
+export type CheckKeyResult =
+  | { ok: true; models: string[] }
+  | { ok: false; error: 'auth' | 'network' | 'other'; message: string };
+/** The tokens the teammate's providers reported this month. */
+export interface UsageMonth {
+  /** YYYY-MM */
+  month: string;
+  input: number;
+  output: number;
+}
+export type TeammateHistoryOp = 'open' | 'pause' | 'resume' | 'clear';
+export const TEAMMATE_HISTORY_OPS: readonly TeammateHistoryOp[] = ['open', 'pause', 'resume', 'clear'];
+
 // SETTINGS_CH lives in its own module so the settings preload can import it without sharing a chunk
 // with the overlay preload (a sandboxed preload can only require('electron'), never a sibling file).
 export { SETTINGS_CH } from './settingsChannels';
@@ -232,4 +248,13 @@ export interface SettingsApi {
   startUpdate(): Promise<void>;
   /** Opens the release notes of the version that was found, or else the page of the latest release. */
   openReleasePage(): Promise<void>;
+  /** Stores a profile's key (an empty key removes it). The key is never sent back to this window. */
+  setTeammateKey(profileId: string, key: string): Promise<SecretResult>;
+  hasTeammateKey(profileId: string): Promise<boolean>;
+  checkTeammateKey(profileId: string): Promise<CheckKeyResult>;
+  setTeammateInstructions(text: string): Promise<SecretResult>;
+  /** Your instructions: the user's own text, so this window may read it back. */
+  getTeammateInstructions(): Promise<string>;
+  getTeammateUsage(): Promise<UsageMonth>;
+  teammateHistory(op: TeammateHistoryOp): Promise<void>;
 }

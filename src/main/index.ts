@@ -1,10 +1,14 @@
-import { app, clipboard, dialog, Menu, powerMonitor, screen, shell, systemPreferences } from 'electron';
+import {
+  app, clipboard, dialog, Menu, nativeImage, powerMonitor, safeStorage, screen, shell, systemPreferences,
+} from 'electron';
 import { randomBytes, randomInt } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { resolveLang, strings, type Strings } from '../shared/i18n';
-import { SETTINGS_CH, type About, type AppStatus, type PanelAction, type PanelState } from '../shared/ipc';
+import {
+  SETTINGS_CH, type About, type AppStatus, type PanelAction, type PanelState, type TeammateHistoryOp,
+} from '../shared/ipc';
 import { announcedEmoteHashes } from '../shared/emotes';
 import { featureOn, liveKeys, roomFeaturesOff } from '../shared/features';
 import { hotkeyLabel } from '../shared/keys';
@@ -15,6 +19,9 @@ import type { VoteKind } from '../shared/roomProtocol';
 import { formatRoomCode, parseRoomCode } from '../shared/roomCode';
 import { sameTagRgb, tagWire } from '../shared/roomColors';
 import { overlaySettings, soundLevel, type Settings } from '../shared/settings';
+import type { Spot } from '../shared/teammate/askMachine';
+import { wordsContinuesByDefault } from '../shared/teammate/threads';
+import type { HistoryState, MateAction, MateView } from '../shared/teammateIpc';
 import { parseTextInput } from '../shared/textCommands';
 import { updateErrorText, type UpdateState } from '../shared/update';
 import { registerAppScheme, serveAppScheme } from './appProtocol';
@@ -27,8 +34,10 @@ import { InputBridge } from './inputBridge';
 import { LanTransport } from './lanTransport';
 import { RELAYS } from './relays';
 import { RelayTransport } from './relayTransport';
-import { OverlayManager, type SharedEmote, type SharedPing } from './overlayManager';
-import { assetPath, buildResourcePath, helperExePath, IS_LINUX, IS_MAC, PLATFORM, settingsDir } from './paths';
+import { OverlayManager, type AskClick, type AskRelease, type SharedEmote, type SharedPing } from './overlayManager';
+import {
+  assetPath, buildResourcePath, contextHelperPath, helperExePath, IS_LINUX, IS_MAC, PLATFORM, settingsDir,
+} from './paths';
 import { deriveRoomKeys } from './roomCrypto';
 import { RoomHistory } from './roomHistory';
 import { PanelWindows } from './panelWindows';
@@ -37,6 +46,13 @@ import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
+import { AskController } from './teammate/askController';
+import { ContextClient } from './teammate/contextClient';
+import { HistoryStore } from './teammate/historyStore';
+import { MateWindows } from './teammate/mateWindows';
+import { createAdapter } from './teammate/providers';
+import { SecretStore } from './teammate/secrets';
+import { UsageLog } from './teammate/usage';
 import { onSettingsWindowGone, openSettingsWindow, settingsWindow } from './settingsWindow';
 import { closeTextWindow, onTextWindowGone, openTextWindow, registerTextWindow } from './textWindow';
 import { AppTray, trayUpdateFrom, type TrayMode } from './tray';
@@ -84,6 +100,36 @@ function relayUrls(): readonly string[] {
   return urls.length > 0 ? urls : RELAYS;
 }
 
+/** History keeps a 512 px JPEG of each ask's screen. */
+const THUMB_PX = 512;
+
+function thumbnail(jpeg: Buffer): string {
+  const img = nativeImage.createFromBuffer(jpeg);
+  if (img.isEmpty()) return '';
+  const { width, height } = img.getSize();
+  const scale = Math.min(1, THUMB_PX / Math.max(width, height));
+  const small = scale < 1
+    ? img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' })
+    : img;
+  return small.toJPEG(80).toString('base64');
+}
+
+/** The cursor in the helper's physical pixels: DIPs on macOS and Linux, where the overlays map them 1:1. */
+function cursorPhys(): { x: number; y: number } {
+  const p = screen.getCursorScreenPoint();
+  return IS_MAC || IS_LINUX ? p : screen.dipToScreenPoint(p);
+}
+
+/** The teammate's parts. They exist only while the feature is on. */
+interface Mate {
+  secrets: SecretStore;
+  history: HistoryStore;
+  usage: UsageLog;
+  context: ContextClient;
+  windows: MateWindows;
+  controller: AskController;
+}
+
 /** macOS: the app, Edit and Window menus, so Cmd+Q, Cmd+W and the clipboard shortcuts work in the settings window. */
 function setMacMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
@@ -112,6 +158,8 @@ function start(): void {
   let quitting = false; // read by pushStatus: once true, the tray and overlays are gone
   let capturing = false; // the settings page is listening for a key, so the helper must stay suspended
   let textOpen = false;
+  let wordsOpen = false; // the teammate's words box has the keyboard: the helper stays suspended, as for the text box
+  let mate: Mate | null = null; // the teammate, while its feature is on
 
   const overlays = new OverlayManager(
     overlaySettings(settings, resolveLang(settings.language, app.getLocale())),
@@ -276,6 +324,11 @@ function start(): void {
         setMuted: (on) => store.update({ roomMuted: on }),
         leave: () => room.leave(),
         openSettings: () => openSettingsWindow('room'),
+      },
+      teammate: {
+        stop: () => mate?.controller.cancel('user'),
+        openHistory: () => void openHistory(),
+        setHistoryPaused: (paused) => setHistoryPaused(paused),
       },
       // The tray has no card to show a result on, so the handlers toast it. Nothing to toast on once the overlays are gone.
       update: updater
@@ -463,14 +516,18 @@ function start(): void {
     if (on === enabled) return;
     enabled = on;
     sendConfig(); // also refreshes the config re-sent after restarts
-    if (!on) overlays.dropKeptPings();
+    if (!on) {
+      overlays.dropKeptPings();
+      mate?.controller.cancel('pause');
+      closeWords();
+    }
     const t = text();
     overlays.toast(on ? t.toastOn : t.toastOff, t.toastToggleHint(hotkeyLabel(store.get().toggleHotkey, PLATFORM)));
     syncRoomFlags();
     pushStatus();
   }
 
-  const syncSuspended = (): void => bridge.send({ type: 'suspend', on: capturing || textOpen });
+  const syncSuspended = (): void => bridge.send({ type: 'suspend', on: capturing || textOpen || wordsOpen });
   /** A screen point (DIPs) as our own lines and the room see it: its display, the point inside it, and the shared form. */
   const ownSpot = (at: { x: number; y: number }) => {
     const display = screen.getDisplayNearestPoint(at);
@@ -544,14 +601,17 @@ function start(): void {
       else if (live.panel) panels.showRoster(screen.getCursorScreenPoint(), panelState('roster', null));
     } else if (ev.type === 'ready') {
       // A restarted helper starts unsuspended: re-apply an active key capture.
-      if (capturing || textOpen) syncSuspended();
+      if (capturing || textOpen || wordsOpen) syncSuspended();
       panels.hideRoster(); // a restarted helper lost the panel key's up, so a shown roster would stay up
     } else if (ev.type === 'error') console.warn('[helper]', ev.code ?? '', ev.message);
     else overlays.handle(ev);
   });
   bridge.on('status', (s: HelperStatus) => {
     // A helper that is starting or has stopped can no longer send the cancel that dismisses a wheel left on screen.
-    if (s !== 'running') overlays.cancelWheel();
+    if (s !== 'running') {
+      overlays.cancelWheel();
+      mate?.controller.cancel('helper');
+    }
     if (s === 'noAccess' && IS_MAC) {
       // Allowed but still refused is an entry left over from an earlier build. Otherwise wait for the user to allow it.
       if (trusted()) staleAccess = true;
@@ -563,12 +623,182 @@ function start(): void {
   });
   bridge.on('log', (line: string) => console.log('[helper]', line));
 
+  // The teammate: built when its feature is switched on, taken down when it is switched off or the app quits.
+  let wordsSpot: Spot | null = null;
+  let historyQuery = '';
+  const mateLang = () => resolveLang(settings.language, app.getLocale());
+  const mateTag = () => {
+    const t = settings.teammate;
+    return { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom };
+  };
+  function pushMateTray(): void {
+    if (quitting) return;
+    const h = settings.teammate.history;
+    tray.setTeammate(mate
+      ? { running: mate.controller.running, historyOn: h.on && mate.history.available(), paused: h.paused }
+      : null);
+  }
+  function closeWords(): void {
+    mate?.windows.hideWords(); // closes without an action, so the suspend is released here
+    wordsSpot = null;
+    if (!wordsOpen) return;
+    wordsOpen = false;
+    syncSuspended();
+  }
+  const historyState = async (m: Mate, query: string): Promise<HistoryState> => {
+    const base = { view: 'history' as const, lang: mateLang(), query, threads: [] };
+    if (!m.history.available()) return { ...base, available: false, off: 'unavailable' };
+    if (!settings.teammate.history.on) return { ...base, available: false, off: 'disabled' };
+    return { ...base, available: true, threads: await m.history.list(query) };
+  };
+  const refreshHistory = async (m: Mate): Promise<void> => {
+    const state = await historyState(m, historyQuery);
+    if (mate === m) m.windows.updateHistory(state);
+  };
+  async function openHistory(): Promise<void> {
+    const m = mate;
+    if (!m) return;
+    historyQuery = '';
+    const state = await historyState(m, historyQuery);
+    if (mate === m) m.windows.showHistory(state);
+  }
+  function setHistoryPaused(paused: boolean): void {
+    const t = settings.teammate;
+    store.update({ teammate: { ...t, history: { ...t.history, paused } } });
+  }
+  const onHistoryAction = async (m: Mate, a: MateAction): Promise<void> => {
+    switch (a.t) {
+      case 'open':
+      case 'continue': {
+        const record = await m.history.get(a.id);
+        if (!record || mate !== m) return;
+        // Open shows the thread at the cursor, over the History window; Continue makes it the one the next ask joins.
+        if (a.t === 'open') m.controller.showThread(record, screen.getCursorScreenPoint());
+        else m.controller.continueThread(record);
+        return;
+      }
+      case 'delete':
+        await m.history.delete(a.id);
+        return refreshHistory(m);
+      case 'search':
+        historyQuery = a.query;
+        return refreshHistory(m);
+      default:
+        return;
+    }
+  };
+  const onMateAction = ({ view, action }: { view: MateView; action: MateAction }): void => {
+    const m = mate;
+    if (!m) return;
+    if (view === 'words') {
+      const spot = wordsSpot;
+      wordsSpot = null;
+      wordsOpen = false;
+      syncSuspended();
+      if (action.t === 'ask' && spot) m.controller.ask(spot, { text: action.text, newThread: action.newThread });
+      return;
+    }
+    if (view === 'history') {
+      onHistoryAction(m, action).catch((err: unknown) => console.warn('[teammate] history:', err));
+      return;
+    }
+    if (action.t === 'copy') clipboard.writeText(action.text);
+    else if (action.t === 'link') void shell.openExternal(action.url);
+    else if (action.t === 'history') void openHistory();
+    else m.controller.onTeammateAction(view, action);
+  };
+  const createMate = (): Mate => {
+    const dir = join(settingsDir(), 'teammate');
+    const tempDir = join(app.getPath('temp'), 'lolping-teammate');
+    mkdirSync(tempDir, { recursive: true });
+    const secrets = new SecretStore(join(dir, 'secrets'), safeStorage);
+    const history = new HistoryStore(join(dir, 'history'), safeStorage, Date.now, {
+      enabled: () => settings.teammate.history.on && !settings.teammate.history.paused,
+      rule: () => ({ keepDays: settings.teammate.history.keepDays, maxThreads: settings.teammate.history.maxThreads }),
+    });
+    const usage = new UsageLog(join(dir, 'usage.json'), Date.now);
+    const context = new ContextClient({ command: contextHelperPath() }); // context-helper starts on the first capture
+    const windows = new MateWindows();
+    const controller = new AskController({
+      settings: () => settings,
+      lang: mateLang,
+      secrets,
+      context,
+      adapter: (p, key) => createAdapter(p, key),
+      overlay: overlays,
+      windows,
+      history,
+      tempDir: () => tempDir,
+      thumbnail,
+      now: Date.now,
+      usage: (u) => usage.add(u),
+      cursor: cursorPhys,
+    });
+    controller.on('state', pushMateTray);
+    windows.on('action', onMateAction);
+    return { secrets, history, usage, context, windows, controller };
+  };
+  /** Takes the teammate down; settles once its context helper has exited and its usage is on disk. */
+  const stopMate = (): Promise<unknown> => {
+    const m = mate;
+    if (!m) return Promise.resolve();
+    closeWords();
+    mate = null;
+    m.controller.cancel('user');
+    m.controller.removeAllListeners();
+    m.windows.removeAllListeners();
+    m.windows.destroy();
+    pushMateTray();
+    return Promise.allSettled([m.context.stop(), m.usage.flush()]);
+  };
+  const syncMate = (): void => {
+    const on = !IS_LINUX && featureOn(settings, 'teammate');
+    if (on && !mate) {
+      try {
+        mate = createMate();
+      } catch (err) {
+        console.warn('[teammate] could not start:', err);
+      }
+    } else if (!on && mate) {
+      void stopMate();
+    }
+    pushMateTray();
+  };
+  overlays.on('askRelease', (r: AskRelease) => {
+    mate?.controller.ask({ intent: r.id, phys: r.phys, displayId: r.displayId });
+  });
+  overlays.on('askClick', (c: AskClick) => {
+    const m = mate;
+    if (!m) return;
+    const current = m.controller.currentThread();
+    try {
+      // Showing a box cancels one still open from an earlier gesture, which clears the spot: set it after.
+      m.windows.showWords(overlays.toDip(c.phys) ?? overlays.primaryDip(), {
+        view: 'words', lang: mateLang(), tag: mateTag(), thread: current?.title ?? null,
+        continueByDefault: wordsContinuesByDefault(current, Date.now()),
+      });
+    } catch (err) {
+      console.warn('[teammate] words box:', err);
+      return;
+    }
+    wordsSpot = { intent: 'generic', phys: c.phys, displayId: c.displayId };
+    wordsOpen = true;
+    syncSuspended();
+  });
+  syncMate();
+
   store.on('change', (s: Settings) => {
     const previous = settings;
     settings = s;
     sendConfig();
     syncRoomText();
     syncRoomVotes();
+    syncMate();
+    const h = s.teammate.history;
+    const was = previous.teammate.history;
+    if (mate && (h.keepDays !== was.keepDays || h.maxThreads !== was.maxThreads)) {
+      mate.history.prune({ keepDays: h.keepDays, maxThreads: h.maxThreads }).catch(() => undefined);
+    }
     overlays.updateSettings(overlaySettings(s, resolveLang(s.language, app.getLocale())));
     settingsWindow()?.webContents.send(SETTINGS_CH.changed, s);
     if (s.language !== previous.language) tray.setText(text());
@@ -638,6 +868,19 @@ function start(): void {
       copyCode: copyRoomCode,
       retryInternet: () => relay.retryNow(),
     },
+    teammate: {
+      secrets: () => mate?.secrets ?? null,
+      adapter: (p, key) => createAdapter(p, key),
+      usage: () => mate?.usage.month() ?? { month: '', input: 0, output: 0 },
+      history: async (op: TeammateHistoryOp) => {
+        if (op === 'open') return openHistory();
+        if (op === 'pause' || op === 'resume') return setHistoryPaused(op === 'pause');
+        const m = mate;
+        if (!m) return;
+        await m.history.clear();
+        await refreshHistory(m);
+      },
+    },
   });
   // The page can't report that it went away mid-capture (window closed, renderer crashed): release the suspend here.
   onSettingsWindowGone(() => {
@@ -675,9 +918,11 @@ function start(): void {
     room.quit(); // says bye, so the others see "left" instead of waiting for a timeout
     transfer.stop();
     stopWaitingForAccess();
+    const mateStopped = stopMate();
     tray.destroy();
     panels.destroy();
     overlays.destroy();
-    void Promise.allSettled([bridge.stop(), store.flush(), lan.whenClosed(), relay.whenClosed()]).then(() => app.exit(0));
+    void Promise.allSettled([bridge.stop(), store.flush(), lan.whenClosed(), relay.whenClosed(), mateStopped])
+      .then(() => app.exit(0));
   });
 }

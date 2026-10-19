@@ -149,6 +149,18 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .roomWaiting { padding: 8px 0 10px 20px; }
 .displays { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums; }
 .roomNote { margin: 8px 2px 0; }
+/* Teammate */
+.card.mate { display: block; }
+.card.mate:hover { background: var(--card); }
+.mateHead { display: flex; align-items: center; gap: 16px; }
+.mateHead .lbl { flex: 1; }
+.mateHead b { flex: 1; }
+.mateFields { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; align-items: center; margin-top: 12px; }
+.mateRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.mateIntent { display: grid; grid-template-columns: 150px auto 150px 1fr auto; gap: 8px 12px; align-items: start; padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 10px; }
+.mateIntentName { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.mateIntentName img { width: 24px; height: 24px; }
+.mateInstructions { display: flex; width: 100%; margin: 12px 0 8px; }
 /* Updates */
 .card.update .lbl { display: flex; flex-direction: column; gap: 4px; }
 .card.update.failed { border-color: #ff9c48; }

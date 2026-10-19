@@ -44,6 +44,13 @@ const api: SettingsApi = {
   checkForUpdates: () => ipcRenderer.invoke(SETTINGS_CH.updateCheck),
   startUpdate: () => ipcRenderer.invoke(SETTINGS_CH.updateStart),
   openReleasePage: () => ipcRenderer.invoke(SETTINGS_CH.updateOpenRelease),
+  setTeammateKey: (profileId, key) => ipcRenderer.invoke(SETTINGS_CH.teammateSetKey, profileId, key),
+  hasTeammateKey: (profileId) => ipcRenderer.invoke(SETTINGS_CH.teammateHasKey, profileId),
+  checkTeammateKey: (profileId) => ipcRenderer.invoke(SETTINGS_CH.teammateCheckKey, profileId),
+  setTeammateInstructions: (text) => ipcRenderer.invoke(SETTINGS_CH.teammateSetInstructions, text),
+  getTeammateInstructions: () => ipcRenderer.invoke(SETTINGS_CH.teammateInstructions),
+  getTeammateUsage: () => ipcRenderer.invoke(SETTINGS_CH.teammateUsage),
+  teammateHistory: (op) => ipcRenderer.invoke(SETTINGS_CH.teammateHistory, op),
 };
 
 contextBridge.exposeInMainWorld('settingsApi', api);
