@@ -9,7 +9,7 @@ import { LANGUAGE_NAMES, LANGUAGE_PREFS, resolveLang, strings, type LanguagePref
 import type { AppStatus } from '../../shared/ipc';
 import { featureOn, type FeatureId } from '../../shared/features';
 import { hotkeyParts } from '../../shared/keys';
-import { ALL_PINGS, DEFAULT_CLICK_PING, DEFAULT_WHEEL, textureUrl, type PingId } from '../../shared/pings';
+import { ALL_PINGS, DEFAULT_CLICK_PING, DEFAULT_WHEEL, LOGO_TEXTURE, textureUrl, type PingId } from '../../shared/pings';
 import { triggerLabel, type Settings } from '../../shared/settings';
 import type { WheelPatch } from '../../shared/wheelLayout';
 import { api } from './api';
@@ -124,7 +124,7 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
   return (
     <div className="app">
       <div className="titlebar">
-        <img src={textureUrl('generic_ping')} alt="" />
+        <img src={textureUrl(LOGO_TEXTURE)} alt="" />
         lolPing
       </div>
       <nav className="side">
