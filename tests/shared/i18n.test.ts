@@ -34,6 +34,18 @@ describe('language', () => {
     expect(zh.limitations).toHaveLength(en.limitations.length);
   });
 
+  it('has a teammate label and instruction for every ping in both languages', () => {
+    for (const lang of ['en', 'zh-CN'] as const) {
+      const t = strings(lang).teammate.intent;
+      for (const p of ALL_PINGS) {
+        expect(t[p.id].label.trim(), `${lang} ${p.id} label`).not.toBe('');
+        expect(t[p.id].instruction.trim(), `${lang} ${p.id} instruction`).not.toBe('');
+      }
+    }
+    expect(strings('en').teammate.intent.danger.label).toBe("What's wrong");
+    expect(strings('zh-CN').teammate.intent.omw.label).toBe('交给我');
+  });
+
   it('has the same Mac wording in both languages', () => {
     const en = strings('en', 'mac');
     const zh = strings('zh-CN', 'mac');

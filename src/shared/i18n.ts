@@ -236,6 +236,59 @@ const en = {
     bait: 'Bait', visioncleared: 'Vision Cleared', missingflip: 'Upside-down Missing',
   } as Record<PingId, string>,
 
+  teammate: {
+    intent: {
+      missing: {
+        label: 'Explain',
+        instruction: 'Explain what is at the spot, what it means or why it is there. Point at the parts that matter with Need Vision or Enemy Missing pings.',
+      },
+      push: {
+        label: 'Keep going',
+        instruction: 'Continue the current thread from the new spot with more detail. Add Push pings where the next point is.',
+      },
+      danger: {
+        label: "What's wrong",
+        instruction: 'Find errors, typos, wrong numbers, bugs, risky terms and scams. Place a Danger ping on each and say how sure you are.',
+      },
+      assist: {
+        label: 'Show me how',
+        instruction: 'Show the steps for what the user is trying to do. Place numbered Assist Me pings in order and change nothing.',
+      },
+      omw: {
+        label: 'Do it',
+        instruction: 'Do the job the user asked for, such as pasting a reply or filling in a form, using the tools you are given. Mark what you did with Vision Cleared pings.',
+      },
+      needvision: {
+        label: 'Look it up',
+        instruction: 'Give background, definitions and sources for what is at the spot, and read the file if there is one. Search the web if you can. Point at the key terms with Need Vision pings.',
+      },
+      allin: {
+        label: 'Whole picture',
+        instruction: 'Summarise and analyse the whole page, file or thread. Mark the key points with All In pings.',
+      },
+      enemyvision: {
+        label: 'Grab',
+        instruction: 'Lift the text, table, date, address or code at the spot off the screen and copy it. Ping what you grabbed with Enemy Vision pings.',
+      },
+      generic: {
+        label: 'Ask with words',
+        instruction: 'Answer the question the user typed about the spot. Use Generic pings to show where you mean.',
+      },
+      visioncleared: {
+        label: 'Polish',
+        instruction: 'Rewrite the text at the spot so it reads better and keeps its meaning. Offer the rewrite for replacing, and mark the fixed text with a Vision Cleared ping.',
+      },
+      missingflip: {
+        label: 'Translate',
+        instruction: 'Translate the paragraph or block at the spot into the app language, or into English if it is already in that language. Ping the translated block with a Generic ping.',
+      },
+      bait: {
+        label: 'Save for later',
+        instruction: 'Save the spot to history with a short title, a summary and a link or file name. Say only that it is saved.',
+      },
+    },
+  } as { intent: Record<PingId, { label: string; instruction: string }> },
+
   // main process
   limitations: [
     'The wheel can’t be triggered over elevated (administrator) windows such as Task Manager.',
@@ -576,6 +629,59 @@ const zh: Strings = {
     danger: '危险', push: '推进', omw: '正在赶来', allin: '全力进攻', assist: '请求协助',
     needvision: '需要视野', missing: '敌人消失', enemyvision: '敌方视野', generic: '普通信号',
     bait: '诱饵', visioncleared: '视野已清除', missingflip: '反向问号',
+  },
+
+  teammate: {
+    intent: {
+      missing: {
+        label: '解释',
+        instruction: '解释这个位置是什么、意味着什么或为什么会这样。用“需要视野”或“敌人消失”信号指出关键部分。',
+      },
+      push: {
+        label: '继续',
+        instruction: '从新的位置接着当前对话，给出更多细节。在下一个要点处放“推进”信号。',
+      },
+      danger: {
+        label: '哪里不对',
+        instruction: '找出错误、错别字、错误数字、程序错误、有风险的条款和骗局。在每处放“危险”信号，并说明把握有多大。',
+      },
+      assist: {
+        label: '教我',
+        instruction: '给出用户想做的事的步骤。按顺序放带编号的“请求协助”信号，不要改动任何内容。',
+      },
+      omw: {
+        label: '交给我',
+        instruction: '用提供的工具完成用户交代的事，例如粘贴回复或填写表单。用“视野已清除”信号标出做完的部分。',
+      },
+      needvision: {
+        label: '查一下',
+        instruction: '给出这个位置相关的背景、定义和来源；有文件就读文件，能联网就搜索。用“需要视野”信号指出关键词。',
+      },
+      allin: {
+        label: '全局',
+        instruction: '总结并分析整个页面、文件或对话。用“全力进攻”信号标出重点。',
+      },
+      enemyvision: {
+        label: '提取',
+        instruction: '把这个位置的文字、表格、日期、地址或代码从屏幕上提取并复制。用“敌方视野”信号标出提取的内容。',
+      },
+      generic: {
+        label: '我来问',
+        instruction: '回答用户就这个位置输入的问题。用“普通信号”指出你说的是哪里。',
+      },
+      visioncleared: {
+        label: '润色',
+        instruction: '改写这个位置的文字，让它更通顺并保持原意。提供替换改写的选项，并用“视野已清除”信号标出改好的文字。',
+      },
+      missingflip: {
+        label: '翻译',
+        instruction: '把这个位置的段落或文字块翻译成应用语言；如果本来就是应用语言，就翻译成英文。用“普通信号”标出翻译的文字块。',
+      },
+      bait: {
+        label: '稍后看',
+        instruction: '把这个位置存入历史，附上简短标题、摘要和链接或文件名。只需说明已保存。',
+      },
+    },
   },
 
   limitations: [
