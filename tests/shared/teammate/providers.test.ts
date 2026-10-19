@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest';
+import { PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
+
+describe('providers', () => {
+  it('lists every provider in the spec once', () => {
+    expect(PROVIDERS.map((p) => p.id).sort()).toEqual([...PROVIDER_IDS].sort());
+    const presets = PROVIDERS.filter((p) => p.id !== 'custom');
+    const order = presets.map((p) => `${p.group === 'cloud' ? 0 : 1}${p.name.toLowerCase()}`);
+    expect(order).toEqual([...order].sort());
+    expect(PROVIDERS[PROVIDERS.length - 1].id).toBe('custom');
+    for (const p of presets) expect(p.baseUrl).toMatch(/^https?:\/\/[^/]+/);
+    expect(PROVIDERS.find((p) => p.id === 'custom')?.baseUrl).toBe('');
+    expect(PROVIDERS.find((p) => p.id === 'anthropic')).toMatchObject({
+      protocol: 'anthropic', baseUrl: 'https://api.anthropic.com',
+    });
+    expect(PROVIDERS.filter((p) => p.protocol === 'anthropic').map((p) => p.id)).toEqual(['anthropic']);
+    const local = (id: string): unknown => PROVIDERS.find((p) => p.id === id);
+    expect(local('ollama')).toMatchObject({ group: 'local', baseUrl: 'http://localhost:11434/v1' });
+    expect(local('lmstudio')).toMatchObject({ group: 'local', baseUrl: 'http://localhost:1234/v1' });
+  });
+
+  it('guesses vision for known model names', () => {
+    for (const m of [
+      'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-5', 'gpt-5-mini', 'claude-3-5-sonnet-20241022', 'claude-sonnet-4-5',
+      'claude-opus-4-1', 'gemini-2.5-flash', 'qwen-vl-max', 'qwen2.5-vl-72b-instruct', 'qwen3-vl-plus',
+      'doubao-1-5-vision-pro-32k', 'glm-4v-plus', 'glm-4.5v', 'moonshot-v1-8k-vision-preview', 'grok-2-vision-1212',
+      'openai/gpt-4o', 'anthropic/claude-3.7-sonnet', 'llava:13b',
+    ]) {
+      expect(visionGuess(m), m).toBe(true);
+    }
+    for (const m of [
+      'deepseek-chat', 'deepseek-reasoner', 'gpt-3.5-turbo', 'o3-mini', 'claude-2.1', 'qwen-max', 'qwen-plus',
+      'glm-4-plus', 'moonshot-v1-8k', 'kimi-k2-0905-preview', 'mistral-large-latest',
+    ]) {
+      expect(visionGuess(m), m).toBe(false);
+    }
+    expect(visionGuess('my-local-model')).toBeNull();
+    expect(visionGuess('')).toBeNull();
+  });
+});
