@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { PingId } from '../../shared/pings';
+import { isPingId, type PingId } from '../../shared/pings';
 import { prune, type ThreadRecord } from '../../shared/teammate/history';
 import { renameWithRetry } from '../settingsStore';
 import type { Crypto } from './secrets';
@@ -35,10 +34,9 @@ const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.is
 function parseEntry(raw: unknown): Entry | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const x = raw as Record<string, unknown>;
-  if (!isNumber(x.at) || !isString(x.intent) || !(x.words === null || isString(x.words))) return null;
+  if (!isNumber(x.at) || !isPingId(x.intent) || !(x.words === null || isString(x.words))) return null;
   if (!isString(x.line) || !isString(x.markdown) || !isString(x.thumb)) return null;
-  // The intent is stored as written by this app; readers treat an unknown id as plain text.
-  return { at: x.at, intent: x.intent as PingId, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb };
+  return { at: x.at, intent: x.intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb };
 }
 
 /** Validates decrypted text from disk; anything malformed is rejected rather than trusted. */
@@ -71,10 +69,29 @@ function parseThread(text: string): ThreadRecord | null {
   }
 }
 
-/** Threads kept on disk, one file each, encrypted through the system keychain. */
+interface IndexRow extends ThreadSummary {
+  /** Lower-cased title, lines and words, so a search never touches the files. */
+  searchText: string;
+}
+
+const rowOf = (t: ThreadRecord): IndexRow => ({
+  id: t.id,
+  title: t.title,
+  lastActivity: t.lastActivity,
+  app: t.app,
+  intents: t.entries.map((e) => e.intent),
+  searchText: [t.title, ...t.entries.flatMap((e) => [e.line, e.words ?? ''])].join(' ').toLowerCase(),
+});
+
+/**
+ * Threads kept on disk, one file each, encrypted through the system keychain.
+ * An in-memory index built once at start serves list, search and prune, so asking never decrypts every thread.
+ */
 export class HistoryStore {
   private currentId: string | null = null;
-  private queue: Promise<unknown> = Promise.resolve();
+  private currentRecord: ThreadRecord | null = null;
+  private readonly index = new Map<string, IndexRow>();
+  private queue: Promise<unknown>;
 
   constructor(
     private readonly dir: string,
@@ -82,7 +99,13 @@ export class HistoryStore {
     private readonly now: () => number,
     private readonly options: HistoryOptions = {},
   ) {
-    if (this.available()) void this.prune(this.rule()).catch(() => undefined);
+    // Jobs run one at a time; the first builds the index and prunes, and nothing else starts before it.
+    this.queue = this.available()
+      ? this.enqueue(async () => {
+          await this.load();
+          await this.pruneNow(this.rule(), null);
+        }).catch(() => undefined)
+      : Promise.resolve();
   }
 
   available(): boolean {
@@ -90,73 +113,84 @@ export class HistoryStore {
   }
 
   current(): ThreadRecord | null {
-    return this.currentId === null ? null : this.readSync(this.currentId);
+    return this.currentRecord !== null && this.currentRecord.id === this.currentId ? this.currentRecord : null;
   }
 
   setCurrent(id: string | null): void {
     this.currentId = id !== null && ID_RE.test(id) ? id : null;
+    this.currentRecord = null;
+    if (this.currentId === null) return;
+    const wanted = this.currentId;
+    void this.enqueue(async () => {
+      const t = await this.read(wanted);
+      if (this.currentId === wanted) this.currentRecord = t;
+    }).catch(() => undefined);
   }
 
-  async append(
+  append(
     threadId: string | null,
     entry: Entry,
     meta: { title: string; app: string; windowTitle: string; profile: string },
   ): Promise<ThreadRecord> {
-    const writable = this.writable();
-    const existing = writable && threadId !== null ? this.readSync(threadId) : null;
-    const at = this.now();
-    const record: ThreadRecord = existing
-      ? { ...existing, lastActivity: at, entries: [...existing.entries, entry] }
-      : { id: randomUUID(), ...meta, started: at, lastActivity: at, entries: [entry] };
-    if (!writable) return record;
-    await this.enqueue(async () => {
+    // Read, build and write in one queued job so overlapping appends to a thread can't drop each other's entry.
+    return this.enqueue(async () => {
+      const writable = this.writable();
+      const existing = writable && threadId !== null ? await this.read(threadId) : null;
+      const at = this.now();
+      const record: ThreadRecord = existing
+        ? { ...existing, lastActivity: at, entries: [...existing.entries, entry] }
+        : { id: randomUUID(), ...meta, started: at, lastActivity: at, entries: [entry] };
+      if (!writable) return record;
       await this.write(record);
-      await this.pruneNow(this.rule());
+      this.index.set(record.id, rowOf(record));
+      this.currentId = record.id;
+      this.currentRecord = record;
+      // The thread just written is never pruned by its own append.
+      await this.pruneNow(this.rule(), record.id);
+      return record;
     });
-    this.currentId = record.id;
-    return record;
   }
 
   async list(query?: string): Promise<ThreadSummary[]> {
+    await this.enqueue(async () => undefined);
     const q = query?.trim().toLowerCase() ?? '';
-    const out: ThreadSummary[] = [];
-    for (const t of await this.all()) {
-      if (q && !this.matches(t, q)) continue;
-      out.push({
-        id: t.id,
-        title: t.title,
-        lastActivity: t.lastActivity,
-        app: t.app,
-        intents: t.entries.map((e) => e.intent),
-      });
-    }
-    return out.sort((a, b) => b.lastActivity - a.lastActivity);
+    return [...this.index.values()]
+      .filter((r) => !q || r.searchText.includes(q))
+      .map(({ searchText: _text, ...summary }) => summary)
+      .sort((a, b) => b.lastActivity - a.lastActivity);
   }
 
-  async get(id: string): Promise<ThreadRecord | null> {
-    return this.readSync(id);
+  get(id: string): Promise<ThreadRecord | null> {
+    return this.enqueue(() => this.read(id));
   }
 
   async delete(id: string): Promise<void> {
     if (!ID_RE.test(id)) return;
-    await this.enqueue(() => rm(this.path(id), { force: true }));
-    if (this.currentId === id) this.currentId = null;
+    await this.enqueue(async () => {
+      await rm(this.path(id), { force: true });
+      this.forget(id);
+    });
   }
 
   async clear(): Promise<void> {
     await this.enqueue(async () => {
       for (const id of await this.ids()) await rm(this.path(id), { force: true });
+      for (const id of [...this.index.keys()]) this.forget(id);
+      this.currentId = null;
+      this.currentRecord = null;
     });
-    this.currentId = null;
   }
 
   async prune(rule: PruneRule): Promise<void> {
-    await this.enqueue(() => this.pruneNow(rule));
+    await this.enqueue(() => this.pruneNow(rule, null));
   }
 
-  private matches(t: ThreadRecord, q: string): boolean {
-    if (t.title.toLowerCase().includes(q)) return true;
-    return t.entries.some((e) => e.line.toLowerCase().includes(q) || (e.words ?? '').toLowerCase().includes(q));
+  private forget(id: string): void {
+    this.index.delete(id);
+    if (this.currentId === id) {
+      this.currentId = null;
+      this.currentRecord = null;
+    }
   }
 
   private writable(): boolean {
@@ -171,10 +205,11 @@ export class HistoryStore {
     return join(this.dir, id + EXT);
   }
 
-  private readSync(id: string): ThreadRecord | null {
-    if (!this.available() || !ID_RE.test(id) || !existsSync(this.path(id))) return null;
+  /** Reads and decrypts one thread; a missing, undecryptable or malformed file is simply absent. */
+  private async read(id: string): Promise<ThreadRecord | null> {
+    if (!this.available() || !ID_RE.test(id)) return null;
     try {
-      const t = parseThread(this.crypto.decryptString(readFileSync(this.path(id))));
+      const t = parseThread(this.crypto.decryptString(await readFile(this.path(id))));
       return t && t.id === id ? t : null;
     } catch {
       return null;
@@ -192,21 +227,20 @@ export class HistoryStore {
     }
   }
 
-  /** Every readable thread; a file that won't decrypt or parse is skipped, not deleted. */
-  private async all(): Promise<ThreadRecord[]> {
-    if (!this.available()) return [];
-    const out: ThreadRecord[] = [];
+  /** Builds the index once; a file that won't decrypt or parse is skipped, not deleted. */
+  private async load(): Promise<void> {
     for (const id of await this.ids()) {
-      const t = this.readSync(id);
-      if (t) out.push(t);
+      const t = await this.read(id);
+      if (t) this.index.set(id, rowOf(t));
     }
-    return out;
   }
 
-  private async pruneNow(rule: PruneRule): Promise<void> {
-    const doomed = prune(await this.all(), this.now(), rule);
-    for (const id of doomed) await rm(this.path(id), { force: true });
-    if (this.currentId !== null && doomed.includes(this.currentId)) this.currentId = null;
+  private async pruneNow(rule: PruneRule, keep: string | null): Promise<void> {
+    const doomed = prune([...this.index.values()], this.now(), rule).filter((id) => id !== keep);
+    for (const id of doomed) {
+      await rm(this.path(id), { force: true });
+      this.forget(id);
+    }
   }
 
   private async write(t: ThreadRecord): Promise<void> {
@@ -224,7 +258,7 @@ export class HistoryStore {
   }
 
   private enqueue<T>(job: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(job);
+    const run = (this.queue ?? Promise.resolve()).then(job);
     this.queue = run.catch(() => undefined);
     return run;
   }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -115,5 +115,57 @@ describe('HistoryStore', () => {
     const restarted = new HistoryStore(d, fakeCrypto(), () => now, { rule });
     await restarted.prune(rule());
     expect(await restarted.list()).toEqual([]);
+  });
+
+  it('keeps both entries when two appends to one thread overlap', async () => {
+    const store = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000);
+    const first = await store.append(null, entry('one'), meta);
+    await Promise.all([store.append(first.id, entry('two'), meta), store.append(first.id, entry('three'), meta)]);
+    expect((await store.get(first.id))?.entries.map((e) => e.line)).toEqual(['one', 'two', 'three']);
+  });
+
+  it('lists and prunes from its index without re-reading thread files', async () => {
+    const d = join(root(), 'history');
+    let decrypts = 0;
+    const crypto = fakeCrypto();
+    const counting: Crypto = { ...crypto, decryptString: (b) => (decrypts++, crypto.decryptString(b)) };
+    const seed = new HistoryStore(d, crypto, () => 1000);
+    const a = await seed.append(null, entry('alpha'), meta);
+    const store = new HistoryStore(d, counting, () => 1000);
+    expect((await store.list()).map((t) => t.id)).toEqual([a.id]);
+    const afterStart = decrypts;
+    rmSync(join(d, a.id + '.thread'));
+    expect((await store.list('alpha')).map((t) => t.id)).toEqual([a.id]);
+    await store.prune({ keepDays: 30, maxThreads: 5 });
+    expect(decrypts).toBe(afterStart);
+  });
+
+  it('clears every thread', async () => {
+    const d = join(root(), 'history');
+    const store = new HistoryStore(d, fakeCrypto(), () => 1000);
+    await store.append(null, entry('a'), meta);
+    await store.append(null, entry('b'), meta);
+    await store.clear();
+    expect(await store.list()).toEqual([]);
+    expect(readdirSync(d)).toEqual([]);
+    expect(store.current()).toBeNull();
+  });
+
+  it('keeps the thread it just appended even when the rule would drop it', async () => {
+    const store = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000, {
+      rule: () => ({ keepDays: null, maxThreads: 0 }),
+    });
+    const t = await store.append(null, entry('mine'), meta);
+    expect((await store.list()).map((x) => x.id)).toEqual([t.id]);
+  });
+
+  it('rejects a stored entry with an unknown intent', async () => {
+    const d = join(root(), 'history');
+    const crypto = fakeCrypto();
+    const store = new HistoryStore(d, crypto, () => 1000);
+    const t = await store.append(null, entry('ok'), meta);
+    const bad = { ...t, entries: [{ ...t.entries[0], intent: 'nope' }] };
+    writeFileSync(join(d, t.id + '.thread'), crypto.encryptString(JSON.stringify(bad)));
+    expect(await new HistoryStore(d, crypto, () => 1000).list()).toEqual([]);
   });
 });
