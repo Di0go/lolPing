@@ -6,10 +6,11 @@ import { DEFAULT_SETTINGS, overlaySettings } from '../../src/shared/settings';
 type Rect = { x: number; y: number; width: number; height: number };
 
 const h = vi.hoisted(() => {
-  const displays = [
+  const initial = () => [
     { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 },
     { id: 2, bounds: { x: 1920, y: 0, width: 1280, height: 1024 }, scaleFactor: 1 },
   ];
+  const displays = initial();
   return {
     windows: [] as Array<{
       x: number;
@@ -27,6 +28,10 @@ const h = vi.hoisted(() => {
     setDisplayBounds(id: number, b: { width?: number; height?: number }): void {
       const d = displays.find((d) => d.id === id);
       if (d) d.bounds = { ...d.bounds, ...b };
+    },
+    /** Puts the fake displays back the way each test starts. */
+    resetDisplays(): void {
+      displays.splice(0, displays.length, ...initial());
     },
   };
 });
@@ -101,6 +106,7 @@ beforeEach(async () => {
   h.handlers.clear();
   h.isMac = false;
   h.isLinux = false;
+  h.resetDisplays();
   vi.resetModules();
   const { OverlayManager } = await import('../../src/main/overlayManager');
   resolveArt = vi.fn(art);
@@ -332,6 +338,27 @@ describe('OverlayManager stale display bounds', () => {
     mgr.spawnRemote({ displayId: 2, x: 10, y: 10, id: 'danger', tag: { name: 'Bot', color: 0 } });
     expect(h.windows[1].bounds).toEqual({ x: 1920, y: 0, width: 1280, height: 899 });
     expect(sent(1)).toEqual([['ping:spawn', { id: 'danger', x: 10, y: 10, tag: { name: 'Bot', color: 0 } }]]);
+  });
+
+  it('rebuilds when only the scale changed, as when a 4K panel at 200% drops to 1080p at 100%', () => {
+    for (const w of h.windows) w.emit('ready-to-show');
+    h.displays[0].scaleFactor = 2; // same DIP bounds, so only the scale tells the modes apart
+    mgr.handle({ type: 'wheelOpen', x: 900, y: 400, wheel: 'ping' });
+    expect(sent(0)).toEqual([['wheel:open', { x: 450, y: 200, wheel: 'ping' }]]);
+  });
+
+  it('leaves a Retina display alone on macOS, whose maps are in DIPs at scale 1', async () => {
+    h.isMac = true;
+    h.displays[0].scaleFactor = 2;
+    vi.resetModules();
+    const { OverlayManager } = await import('../../src/main/overlayManager');
+    const mac = new OverlayManager(overlaySettings(DEFAULT_SETTINGS), resolveArt);
+    mac.start();
+    const rebuilt = vi.fn();
+    mac.on('displays', rebuilt);
+    mac.handle({ type: 'wheelOpen', x: 100, y: 200, wheel: 'ping' });
+    mac.toast('t', 'b');
+    expect(rebuilt).not.toHaveBeenCalled();
   });
 
   it('leaves the overlays alone while every display is as the last rebuild saw it', () => {
