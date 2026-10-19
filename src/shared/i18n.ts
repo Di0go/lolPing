@@ -201,6 +201,7 @@ const en = {
   roomLimitValue: (n: number) => (n === 0 ? 'Unlimited' : `${n} / s`),
   roomRejoin: 'Rejoin last room on launch',
   featureTitle: {
+    teammate: 'AI teammate',
     emotes: 'Emotes',
     rooms: 'Rooms',
     roomText: 'Room text',
@@ -208,6 +209,7 @@ const en = {
     roomPanel: 'Room panel',
   } satisfies Record<FeatureId, string>,
   featureDesc: {
+    teammate: 'Ask an AI to ping what it sees on your screen.',
     emotes: 'The emote wheel and emotes from friends.',
     rooms: 'Ping with friends in a room.',
     roomText: 'Send short text to the room.',
@@ -541,6 +543,7 @@ const zh: Strings = {
   roomLimitValue: (n) => (n === 0 ? '不限' : `${n} 次/秒`),
   roomRejoin: '启动时重新加入上次的房间',
   featureTitle: {
+    teammate: 'AI 队友',
     emotes: '表情',
     rooms: '房间',
     roomText: '房间文字',
@@ -548,6 +551,7 @@ const zh: Strings = {
     roomPanel: '房间面板',
   } satisfies Record<FeatureId, string>,
   featureDesc: {
+    teammate: '让 AI 在你的屏幕上看一眼并发出信号。',
     emotes: '表情轮盘和好友发来的表情。',
     rooms: '在房间里和好友一起发信号。',
     roomText: '向房间发送简短的文字。',

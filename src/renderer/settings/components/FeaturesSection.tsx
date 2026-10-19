@@ -1,5 +1,5 @@
 import {
-  Chat24Regular, CheckboxChecked24Regular, Emoji24Regular, PeopleCommunity24Regular, People24Regular,
+  Bot24Regular, Chat24Regular, CheckboxChecked24Regular, Emoji24Regular, PeopleCommunity24Regular, People24Regular,
 } from '@fluentui/react-icons';
 import type { ReactNode } from 'react';
 import { FEATURES, type FeatureId } from '../../../shared/features';
@@ -9,6 +9,7 @@ import type { Update } from '../useAppState';
 import { SwitchRow } from './rows';
 
 const ICONS: Record<FeatureId, ReactNode> = {
+  teammate: <Bot24Regular />,
   emotes: <Emoji24Regular />,
   rooms: <PeopleCommunity24Regular />,
   roomText: <Chat24Regular />,

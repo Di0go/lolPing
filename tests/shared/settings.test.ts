@@ -8,6 +8,14 @@ import {
 } from '../../src/shared/settings';
 
 describe('normalizeSettings', () => {
+  it('loads a 0.5.3 settings file with the teammate off', () => {
+    const { teammate: _t, features: _f, ...old } = DEFAULT_SETTINGS;
+    const s = normalizeSettings({ ...old, features: { emotes: false, rooms: true } });
+    expect(s.features.teammate).toBe(false);
+    expect(s.features.emotes).toBe(false);
+    expect(s.teammate).toEqual(DEFAULT_SETTINGS.teammate);
+  });
+
   it('returns defaults for missing or non-object input', () => {
     for (const raw of [undefined, null, 42, 'x', [1, 2]]) expect(normalizeSettings(raw)).toEqual(DEFAULT_SETTINGS);
   });
@@ -566,10 +574,12 @@ describe('update settings', () => {
 });
 
 describe('feature settings', () => {
-  it('loads a 0.5.2 settings file with every feature on', () => {
+  it('loads a 0.5.2 settings file with every feature on but the teammate', () => {
     const { features: _features, ...old } = DEFAULT_SETTINGS;
     expect(normalizeSettings(old).features).toEqual(DEFAULT_SETTINGS.features);
-    expect(Object.values(normalizeSettings(old).features).every((v) => v)).toBe(true);
+    const { teammate, ...rest } = normalizeSettings(old).features;
+    expect(teammate).toBe(false);
+    expect(Object.values(rest).every((v) => v)).toBe(true);
   });
 
   it('keeps a switched-off feature', () => {

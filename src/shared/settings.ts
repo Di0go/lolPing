@@ -13,6 +13,7 @@ import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from './roomColors'
 import { parseRoomCode } from './roomCode';
 import { sanitizeName } from './roomProtocol';
 import { isVersion } from './update';
+import { DEFAULT_TEAMMATE, normalizeTeammate, type TeammateSettings } from './teammate/settings';
 import { isValidWheel } from './wheelLayout';
 
 export type NamedTrigger = 'alt' | 'ctrl' | 'shift' | 'win' | 'capslock' | 'mouse4' | 'mouse5';
@@ -89,6 +90,8 @@ export interface Settings {
   features: Features;
   /** How room text appears here: a bubble at the spot the sender pointed at, or a line scrolling across the top. */
   roomTextStyle: RoomTextStyle;
+  /** The AI teammate: its ask key, profiles and history. Used only while features.teammate is on. */
+  teammate: TeammateSettings;
 }
 
 /** Per-machine defaults for the room profile: the OS username and a random tag colour. */
@@ -138,6 +141,7 @@ export const DEFAULT_SETTINGS: Settings = {
   updateNotifiedVersion: null,
   features: { ...DEFAULT_FEATURES },
   roomTextStyle: 'spot',
+  teammate: { ...DEFAULT_TEAMMATE },
 };
 
 export const LIMITS = {
@@ -340,6 +344,7 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     updateNotifiedVersion: isVersion(r.updateNotifiedVersion) ? r.updateNotifiedVersion : null,
     features: normalizeFeatures(r.features),
     roomTextStyle: r.roomTextStyle === 'danmaku' ? 'danmaku' : 'spot',
+    teammate: normalizeTeammate(r.teammate, { platform, trigger: pingTrigger, emoteTrigger: emote }),
   };
 }
 
