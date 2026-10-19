@@ -253,6 +253,23 @@ describe('OverlayManager ask wheel', () => {
     expect(sent(1)).toEqual([['mate:ticket', { id: 't1' }]]);
   });
 
+  it('keeps the receipt and draws a tag-only one, and stops every tag’s dots once the teammate speaks', () => {
+    const tag = { name: 'AI', color: 3 };
+    mgr.spawnMate({ displayId: 1, x: 1, y: 2, id: 'omw', thinking: true, keep: true, tagOnly: true, tag });
+    mgr.mateSaid();
+    expect(sent(0)).toEqual([
+      ['ping:spawn', { id: 'omw', x: 1, y: 2, thinking: true, keep: true, tagOnly: true, owner: 'mate', tag }],
+      ['mate:said', null],
+    ]);
+    expect(sent(1)).toEqual([['mate:said', null]]);
+  });
+
+  it('maps a physical point to a screen point in DIPs for the teammate’s windows', () => {
+    h.displays[1].scaleFactor = 2;
+    mgr.handle({ type: 'wheelOpen', x: 10, y: 10, wheel: 'ping' }); // the next gesture picks up the new scale
+    expect(mgr.toDip({ x: 1920 + 100, y: 60 })).toEqual({ x: 1920 + 50, y: 30 });
+  });
+
   it('finds the display under a physical point and maps it into that overlay', () => {
     expect(mgr.displayAt({ x: 1920 + 10, y: 10 })).toEqual({ id: 2, rect: { x: 1920, y: 0, w: 1280, h: 1024 } });
     expect(mgr.toLocal({ x: 1920 + 10, y: 30 })).toEqual({ displayId: 2, x: 10, y: 30 });

@@ -40,6 +40,6 @@ describe('parsePanelAction', () => {
 
 describe('OVERLAY_CHANNELS', () => {
   it('lists the mate channels', () => {
-    expect(OVERLAY_CHANNELS).toEqual(expect.arrayContaining(['mate:clear', 'mate:fade', 'mate:ticket']));
+    expect(OVERLAY_CHANNELS).toEqual(expect.arrayContaining(['mate:clear', 'mate:fade', 'mate:ticket', 'mate:said']));
   });
 });

@@ -44,6 +44,14 @@ describe('language', () => {
     }
   });
 
+  it('has every teammate failure line in both languages', () => {
+    const en = strings('en').teammate.ask;
+    const zh = strings('zh-CN').teammate.ask;
+    expect(Object.keys(zh.failed).sort()).toEqual(Object.keys(en.failed).sort());
+    for (const [key, value] of Object.entries(zh.failed)) expect(value.trim(), key).not.toBe('');
+    expect(en.failed.noProfile).toMatch(/^Set me up first/);
+  });
+
   it('has a teammate label and instruction for every ping in both languages', () => {
     for (const lang of ['en', 'zh-CN'] as const) {
       const t = strings(lang).teammate.intent;

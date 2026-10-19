@@ -81,12 +81,14 @@ function applySettings(s: OverlaySettings): void {
 applySettings(settings);
 
 function ping(def: PingDef, x: number, y: number, tag?: PingTag, keep = false, mate: MateMark = {}): void {
-  if (keep) dropKeptPing();
-  const { owner, label, ring, thinking } = mate;
+  const { owner, label, ring, thinking, tagOnly } = mate;
+  // The teammate's kept receipt goes with mate:clear or mate:fade; it never replaces the user's own kept ping.
+  const ours = keep && owner !== 'mate';
+  if (ours) dropKeptPing();
   const el = spawnPing(pingLayer, def, x, y, {
-    sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep, owner, label, ring, thinking,
+    sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep, owner, label, ring, thinking, tagOnly,
   });
-  if (keep) keptPing = el;
+  if (ours) keptPing = el;
   if (!mate.silent) sounds.play(def.sound, volume());
 }
 
@@ -171,6 +173,9 @@ window.overlay.on('mate:clear', clearMate);
 window.overlay.on('mate:fade', fadeMate);
 window.overlay.on('mate:ticket', (t) => {
   mateTicket = t.id;
+});
+window.overlay.on('mate:said', () => {
+  for (const el of document.querySelectorAll('[data-owner="mate"] .tag.dots')) el.classList.remove('dots');
 });
 
 /** Resolves with `label` when the image at `url` doesn't load. */

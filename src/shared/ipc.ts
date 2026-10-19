@@ -47,6 +47,8 @@ export interface OverlayEvents {
   'mate:fade': null;
   /** The ask now running: teammate marks stamped with another ticket belong to a cancelled ask and are dropped. */
   'mate:ticket': { id: string };
+  /** The teammate said its first line: the dots on its tags stop. */
+  'mate:said': null;
 }
 
 /** What a teammate ping carries on top of a ping. `ticket` is the ask it answers, set by the overlay manager. */
@@ -60,6 +62,8 @@ export interface MateMark {
   thinking?: boolean;
   /** No sound: every ping of a set but the first, and the receipt when its sound is off. */
   silent?: boolean;
+  /** Only the name tag, no ping art: the receipt for a Do it ask, whose On My Way the user already placed. */
+  tagOnly?: boolean;
   ticket?: string;
 }
 
@@ -67,7 +71,7 @@ export type OverlayChannel = keyof OverlayEvents;
 
 export const OVERLAY_CHANNELS: readonly OverlayChannel[] = [
   'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
-  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket',
+  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket', 'mate:said',
 ];
 
 export const TEXT_CH = { submit: 'text:submit', cancel: 'text:cancel', strings: 'text:strings' } as const;

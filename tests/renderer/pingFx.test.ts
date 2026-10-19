@@ -89,4 +89,24 @@ describe('spawnPing for the teammate', () => {
     expect(layer.children[1].dataset.owner).toBeUndefined();
     expect(classes(layer.children[1])).not.toContain('label');
   });
+
+  it('keeps the teammate’s receipt on screen until the caller removes it', () => {
+    const layer = new FakeElement();
+    spawnPing(layer as unknown as HTMLElement, danger, 0, 0, {
+      sizePx: 110, durationS: 3, owner: 'mate', thinking: true, keep: true, tag: { name: 'AI', color: 3 },
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(layer.children).toHaveLength(1);
+    expect(layer.children[0].className).toBe('ping kept');
+  });
+
+  it('draws only the name tag with its dots for a tag-only receipt', () => {
+    const layer = new FakeElement();
+    spawnPing(layer as unknown as HTMLElement, danger, 0, 0, {
+      sizePx: 110, durationS: 3, owner: 'mate', thinking: true, keep: true, tagOnly: true, tag: { name: 'AI', color: 3 },
+    });
+    const root = layer.children[0];
+    expect(root.className).toBe('ping kept tag-only');
+    expect(classes(root)).toEqual(['tag dots']);
+  });
 });

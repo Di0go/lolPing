@@ -9,7 +9,7 @@ import { isPingId, type PingId } from '../shared/pings';
 import type { HelperEvent, WheelKind } from '../shared/protocol';
 import type { OverlaySettings, RoomTextStyle } from '../shared/settings';
 import type { Shot } from '../shared/teammate/coords';
-import { displayAtPhysical, physicalToLocal, type DisplayMap, type LocalPoint } from './coords';
+import { displayAtPhysical, physicalToDip, physicalToLocal, type DisplayMap, type LocalPoint } from './coords';
 import { numberDisplays, type NumberedDisplay } from './displayNumbers';
 import { IS_LINUX, IS_MAC, loadPage, preloadPath } from './paths';
 
@@ -200,9 +200,13 @@ export class OverlayManager extends EventEmitter {
     for (const displayId of this.windows.keys()) this.send(displayId, 'mate:ticket', { id });
   }
 
-  /** One of the teammate's pings, already mapped onto one of our displays. Never shared with a room. */
+  /**
+   * One of the teammate's pings, already mapped onto one of our displays. Never shared with a room.
+   * `keep`: stays until clearMate or fadeMate (the receipt). It never touches the user's own kept ping.
+   */
   spawnMate(p: {
-    displayId: number; x: number; y: number; id: PingId; label?: string; ring?: boolean; thinking?: boolean; silent?: boolean; tag: PingTag;
+    displayId: number; x: number; y: number; id: PingId; label?: string; ring?: boolean; thinking?: boolean;
+    silent?: boolean; keep?: boolean; tagOnly?: boolean; tag: PingTag;
   }): void {
     const { displayId, ...ping } = p;
     const ticket = this.mateTicket === null ? {} : { ticket: this.mateTicket };
@@ -226,6 +230,11 @@ export class OverlayManager extends EventEmitter {
     for (const id of this.windows.keys()) this.send(id, 'mate:fade', null);
   }
 
+  /** The teammate said its first line: the thinking dots on its tags stop. */
+  mateSaid(): void {
+    for (const id of this.windows.keys()) this.send(id, 'mate:said', null);
+  }
+
   /** The display under a physical point, with its rect in physical px. */
   displayAt(phys: { x: number; y: number }): { id: number; rect: Shot['display'] } | null {
     const d = displayAtPhysical(phys.x, phys.y, this.maps);
@@ -235,6 +244,12 @@ export class OverlayManager extends EventEmitter {
   /** A physical point in CSS px inside the overlay of the display under it. */
   toLocal(phys: { x: number; y: number }): LocalPoint | null {
     return physicalToLocal(phys.x, phys.y, this.maps);
+  }
+
+  /** A physical point as a screen point in DIPs, where the teammate's windows are placed. */
+  toDip(phys: { x: number; y: number }): { x: number; y: number } | null {
+    const p = physicalToDip(phys.x, phys.y, this.maps);
+    return p ? { x: p.x, y: p.y } : null;
   }
 
   /** Shows an emote in the middle of the main display, without sharing it (the settings page's preview). */

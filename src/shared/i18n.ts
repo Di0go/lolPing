@@ -2,6 +2,7 @@ import type { FeatureId } from './features';
 import type { PingId } from './pings';
 import type { Platform } from './platform';
 import type { MemberPath } from './room';
+import type { AskFailure } from './teammate/askMachine';
 
 export type Lang = 'en' | 'zh-CN';
 /** The language setting: 'auto' follows the system display language. */
@@ -44,6 +45,28 @@ const enMateUi = {
   noMatch: 'No thread matches.',
   historyDisabled: 'History is off. Turn it on in Settings → Teammate.',
   historyUnavailable: 'History is off because this system can’t encrypt it.',
+};
+
+/** The teammate's line when an ask fails (spec §12), and the card footer's sources. */
+interface MateAskText {
+  failed: Record<AskFailure, string>;
+  usedScreen: string;
+}
+
+const enMateAsk: MateAskText = {
+  failed: {
+    noProfile: 'Set me up first in Settings → Teammate.',
+    notReceived: 'The provider didn’t answer within 10 seconds.',
+    timeout: 'That took too long, so I stopped.',
+    auth: 'The provider refused the key. Check it in Settings → Teammate.',
+    rate: 'The provider is rate limiting. Try again in a moment.',
+    network: 'I can’t reach the provider.',
+    images: 'This model can’t see images. Choose a model with vision.',
+    tools: 'This model can’t use tools. Choose another model.',
+    capture: 'I couldn’t capture the screen.',
+    other: 'Something went wrong with that answer.',
+  },
+  usedScreen: 'screen',
 };
 
 const en = {
@@ -319,7 +342,8 @@ const en = {
       },
     },
     ui: enMateUi,
-  } as { intent: Record<PingId, { label: string; instruction: string }>; ui: typeof enMateUi },
+    ask: enMateAsk,
+  } as { intent: Record<PingId, { label: string; instruction: string }>; ui: typeof enMateUi; ask: MateAskText },
 
   // main process
   limitations: [
@@ -742,6 +766,21 @@ const zh: Strings = {
       noMatch: '没有匹配的对话。',
       historyDisabled: '历史已关闭。可在“设置 → 队友”中打开。',
       historyUnavailable: '这个系统无法加密历史，所以历史已关闭。',
+    },
+    ask: {
+      failed: {
+        noProfile: '先在“设置 → 队友”中设置我。',
+        notReceived: '服务商 10 秒内没有回应。',
+        timeout: '用时太长，我停下了。',
+        auth: '服务商拒绝了这个密钥。请在“设置 → 队友”中检查。',
+        rate: '服务商限制了请求频率，请稍后再试。',
+        network: '连不上服务商。',
+        images: '这个模型看不了图片。请选择支持视觉的模型。',
+        tools: '这个模型不能使用工具。请换一个模型。',
+        capture: '没能截取屏幕。',
+        other: '这次回答出了问题。',
+      },
+      usedScreen: '屏幕',
     },
   },
 
