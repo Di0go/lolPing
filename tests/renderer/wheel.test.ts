@@ -119,3 +119,37 @@ describe('wheel centre', () => {
     expect(hrefs().filter((h) => /^\d\.png$/.test(h))).toHaveLength(8);
   });
 });
+
+describe('wheel labels', () => {
+  const centre = (svg: FakeElement): string =>
+    svg.children.find((c) => c.attrs.get('class') === 'centerTxt')?.textContent ?? '';
+
+  it('shows the hovered slice label in the centre', () => {
+    const { wheel, svg } = makeWheel();
+    wheel.setItems(Array.from({ length: 8 }, (_, i) => ({ key: String(i), icon: `${i}.png`, label: `Label ${i}` })));
+    expect(centre(svg)).toBe('WHEEL');
+    wheel.open(800, 500);
+    wheel.move(800, 360);
+    expect(centre(svg)).toBe('Label 0');
+    wheel.move(940, 500);
+    expect(centre(svg)).toBe('Label 2');
+    wheel.move(800, 500);
+    expect(centre(svg)).toBe('WHEEL');
+    wheel.setCenterLabel('ASK');
+    expect(centre(svg)).toBe('ASK');
+    wheel.move(800, 360);
+    wheel.release(800, 360);
+    expect(centre(svg)).toBe('ASK');
+    wheel.setCenterLabel(null);
+    expect(centre(svg)).toBe('WHEEL');
+  });
+
+  it('dims the slices it is told to, and only those', () => {
+    const { wheel, svg } = makeWheel();
+    const icons = svg.children.filter((c) => c.attrs.get('class') === 'icon');
+    wheel.setDimmed(['1', '5']);
+    expect(icons.map((c) => c.classes.has('dim'))).toEqual([false, true, false, false, false, true, false, false]);
+    wheel.setDimmed([]);
+    expect(icons.some((c) => c.classes.has('dim'))).toBe(false);
+  });
+});

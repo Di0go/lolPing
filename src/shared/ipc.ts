@@ -32,22 +32,42 @@ export interface OverlayEvents {
   'wheel:release': Point & { wheel?: WheelKind };
   'wheel:cancel': null;
   /** `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one. */
-  'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean };
+  'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean } & MateMark;
   /** Removes the ping kept on this display, if any: we pinged on another display, or paused. */
   'ping:unkeep': null;
   /** `owner` is 'self', 'preview' or a room member: each owner has at most one emote on screen. */
-  'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag };
+  'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag; ticket?: string };
   'emote:clear': { owner: string };
   'toast:show': { title: string; body: string };
   /** `owner` is 'self' or a room member: each owner has at most 3 lines on screen. */
   'text:spawn': Point & { text: string; owner: string; style: RoomTextStyle; tag?: PingTag };
+  /** Removes every teammate ping and emote at once. */
+  'mate:clear': null;
+  /** Fades every teammate ping and emote out, then removes them. */
+  'mate:fade': null;
+  /** The ask now running: teammate marks stamped with another ticket belong to a cancelled ask and are dropped. */
+  'mate:ticket': { id: string };
+}
+
+/** What a teammate ping carries on top of a ping. `ticket` is the ask it answers, set by the overlay manager. */
+export interface MateMark {
+  owner?: 'mate';
+  /** Shown next to the ping, at most 20 characters. */
+  label?: string;
+  /** An area ring instead of the icon's precise anchor. */
+  ring?: boolean;
+  /** Animated dots on the tag until the teammate says something. */
+  thinking?: boolean;
+  /** No sound: every ping of a set but the first, and the receipt when its sound is off. */
+  silent?: boolean;
+  ticket?: string;
 }
 
 export type OverlayChannel = keyof OverlayEvents;
 
 export const OVERLAY_CHANNELS: readonly OverlayChannel[] = [
   'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
-  'toast:show', 'text:spawn',
+  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket',
 ];
 
 export const TEXT_CH = { submit: 'text:submit', cancel: 'text:cancel', strings: 'text:strings' } as const;

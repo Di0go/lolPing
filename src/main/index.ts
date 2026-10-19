@@ -114,7 +114,7 @@ function start(): void {
   let textOpen = false;
 
   const overlays = new OverlayManager(
-    overlaySettings(settings),
+    overlaySettings(settings, resolveLang(settings.language, app.getLocale())),
     (ref, remote) =>
       resolveEmoteArt(ref, settings.customEmotes, remote, (hash) => {
         if (!settings.friendEmotes || !cache.has(hash)) return false; // off: friends' images show as the placeholder
@@ -569,7 +569,7 @@ function start(): void {
     sendConfig();
     syncRoomText();
     syncRoomVotes();
-    overlays.updateSettings(overlaySettings(s));
+    overlays.updateSettings(overlaySettings(s, resolveLang(s.language, app.getLocale())));
     settingsWindow()?.webContents.send(SETTINGS_CH.changed, s);
     if (s.language !== previous.language) tray.setText(text());
     if (

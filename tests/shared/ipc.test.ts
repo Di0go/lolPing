@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePanelAction } from '../../src/shared/ipc';
+import { OVERLAY_CHANNELS, parsePanelAction } from '../../src/shared/ipc';
 
 const peer = '0123456789abcdef';
 
@@ -35,5 +35,11 @@ describe('parsePanelAction', () => {
     expect(parsePanelAction({ t: 'vote', kind: 'kick' })).toBeNull();
     expect(parsePanelAction({ t: 'vote', kind: 'remake' })).toBeNull();
     expect(parsePanelAction({ t: 'ballot', yes: true, extra: 'x' })).toEqual({ t: 'ballot', yes: true });
+  });
+});
+
+describe('OVERLAY_CHANNELS', () => {
+  it('lists the mate channels', () => {
+    expect(OVERLAY_CHANNELS).toEqual(expect.arrayContaining(['mate:clear', 'mate:fade', 'mate:ticket']));
   });
 });

@@ -43,6 +43,7 @@ export class EmoteStage {
   spawn(owner: string, art: EmoteArt, x: number, y: number, opts: EmoteOptions): void {
     this.clear(owner);
     const root = div('emote');
+    if (owner === 'mate') root.dataset.owner = owner; // 'mate:fade' finds the teammate's marks by it, pings and emotes alike
     root.style.left = `${x}px`;
     root.style.top = `${y}px`;
     root.style.setProperty('--size', `${opts.sizePx}px`);

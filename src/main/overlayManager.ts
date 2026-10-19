@@ -4,10 +4,12 @@ import { isEmoteRefShape, type EmoteArt, type EmoteRef } from '../shared/emotes'
 import {
   OVERLAY_ASSETS, OVERLAY_EMOTED, OVERLAY_PINGED, type OverlayChannel, type OverlayEvents, type PingTag,
 } from '../shared/ipc';
+import { WHEEL, pickSlice } from '../shared/geometry';
 import { isPingId, type PingId } from '../shared/pings';
 import type { HelperEvent, WheelKind } from '../shared/protocol';
 import type { OverlaySettings, RoomTextStyle } from '../shared/settings';
-import { physicalToLocal, type DisplayMap } from './coords';
+import type { Shot } from '../shared/teammate/coords';
+import { displayAtPhysical, physicalToLocal, type DisplayMap, type LocalPoint } from './coords';
 import { numberDisplays, type NumberedDisplay } from './displayNumbers';
 import { IS_LINUX, IS_MAC, loadPage, preloadPath } from './paths';
 
@@ -27,6 +29,23 @@ export interface SharedEmote {
   y: number;
 }
 
+/** An ask-wheel release on a slice whose intent is on: the wheel centre, in overlay CSS px and physical px. */
+export interface AskRelease {
+  displayId: number;
+  x: number;
+  y: number;
+  phys: { x: number; y: number };
+  id: PingId;
+}
+
+/** Ask key + click (no drag), in overlay CSS px and physical px. */
+export interface AskClick {
+  displayId: number;
+  x: number;
+  y: number;
+  phys: { x: number; y: number };
+}
+
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
 /**
@@ -42,10 +61,14 @@ const mapScale = (d: Display): number => (IS_MAC || IS_LINUX ? 1 : d.scaleFactor
 /** Messages that put something new on an overlay. */
 const RAISING_CHANNELS: ReadonlySet<OverlayChannel> = new Set<OverlayChannel>(['wheel:open', 'ping:spawn', 'emote:spawn', 'toast:show', 'text:spawn']);
 
+/** The owner of the teammate's pings and emotes on every overlay. */
+const MATE = 'mate';
+
 /**
  * One transparent, click-through, always-on-top window per display.
  * Emits 'shared' (SharedPing) for every wheel or trigger+click ping and 'sharedEmote' (SharedEmote) for every wheel or
- * trigger+click emote, never for settings previews.
+ * trigger+click emote, never for settings previews. Ask-wheel gestures are never shared: a release on an enabled slice
+ * emits 'askRelease' (AskRelease) and an ask click 'askClick' (AskClick).
  */
 export class OverlayManager extends EventEmitter {
   readonly missingAssets = new Set<string>();
@@ -54,6 +77,9 @@ export class OverlayManager extends EventEmitter {
   private numberedList: NumberedDisplay[] = [];
   private wheelDisplay: number | null = null;
   private wheelKind: WheelKind = 'ping';
+  /** Where the open wheel was opened, in its overlay and in physical px: an ask release reports the centre. */
+  private wheelAt: { local: LocalPoint; phys: { x: number; y: number } } | null = null;
+  private mateTicket: string | null = null;
 
   /** `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here. */
   constructor(private settings: OverlaySettings, private readonly resolveArt: (ref: EmoteRef, remote: boolean) => EmoteArt) {
@@ -102,6 +128,7 @@ export class OverlayManager extends EventEmitter {
         if (!p) return;
         this.wheelDisplay = p.displayId;
         this.wheelKind = ev.wheel;
+        this.wheelAt = { local: p, phys: { x: ev.x, y: ev.y } };
         this.send(p.displayId, 'wheel:open', { x: p.x, y: p.y, wheel: ev.wheel });
         break;
       }
@@ -111,12 +138,20 @@ export class OverlayManager extends EventEmitter {
         const p = physicalToLocal(ev.x, ev.y, this.maps, this.wheelDisplay);
         if (!p) return;
         this.send(p.displayId, ev.type === 'wheelMove' ? 'wheel:move' : 'wheel:release', { x: p.x, y: p.y, wheel: this.wheelKind });
-        if (ev.type === 'wheelRelease') this.wheelDisplay = null;
+        if (ev.type === 'wheelRelease') {
+          if (this.wheelKind === 'ask') this.askReleased(p);
+          this.wheelDisplay = null;
+          this.wheelAt = null;
+        }
         break;
       }
       case 'click': {
         const p = physicalToLocal(ev.x, ev.y, this.maps);
         if (!p) break;
+        if (ev.wheel === 'ask') {
+          this.emit('askClick', { displayId: p.displayId, x: p.x, y: p.y, phys: { x: ev.x, y: ev.y } } satisfies AskClick);
+          break;
+        }
         if (ev.wheel === 'emote') {
           const ref = this.settings.clickEmoteId;
           this.send(p.displayId, 'emote:spawn', { owner: 'self', art: this.resolveArt(ref, false), x: p.x, y: p.y });
@@ -146,6 +181,49 @@ export class OverlayManager extends EventEmitter {
   /** A room member's ping, already mapped onto one of our displays. */
   spawnRemote(p: { displayId: number; x: number; y: number; id: PingId; tag: PingTag }): void {
     this.send(p.displayId, 'ping:spawn', { id: p.id, x: p.x, y: p.y, tag: p.tag });
+  }
+
+  /** The ask now running. The teammate's marks sent after this carry it, so an overlay drops any from an older ask. */
+  setMateTicket(id: string): void {
+    this.mateTicket = id;
+    for (const displayId of this.windows.keys()) this.send(displayId, 'mate:ticket', { id });
+  }
+
+  /** One of the teammate's pings, already mapped onto one of our displays. Never shared with a room. */
+  spawnMate(p: {
+    displayId: number; x: number; y: number; id: PingId; label?: string; ring?: boolean; thinking?: boolean; silent?: boolean; tag: PingTag;
+  }): void {
+    const { displayId, ...ping } = p;
+    const ticket = this.mateTicket === null ? {} : { ticket: this.mateTicket };
+    this.send(displayId, 'ping:spawn', { ...ping, owner: MATE, ...ticket });
+  }
+
+  /** The teammate's emote (a bundled slug). It replaces its earlier one, whichever display that was on. */
+  spawnMateEmote(p: { displayId: number; x: number; y: number; slug: string; tag: PingTag }): void {
+    const ticket = this.mateTicket === null ? {} : { ticket: this.mateTicket };
+    this.send(p.displayId, 'emote:spawn', { owner: MATE, art: { kind: 'bundled', slug: p.slug }, x: p.x, y: p.y, tag: p.tag, ...ticket });
+    this.clearElsewhere(p.displayId, MATE);
+  }
+
+  /** Removes the teammate's pings and emotes on every display at once. */
+  clearMate(): void {
+    for (const id of this.windows.keys()) this.send(id, 'mate:clear', null);
+  }
+
+  /** Fades the teammate's pings and emotes out on every display. */
+  fadeMate(): void {
+    for (const id of this.windows.keys()) this.send(id, 'mate:fade', null);
+  }
+
+  /** The display under a physical point, with its rect in physical px. */
+  displayAt(phys: { x: number; y: number }): { id: number; rect: Shot['display'] } | null {
+    const d = displayAtPhysical(phys.x, phys.y, this.maps);
+    return d ? { id: d.id, rect: { x: d.phys.x, y: d.phys.y, w: d.phys.width, h: d.phys.height } } : null;
+  }
+
+  /** A physical point in CSS px inside the overlay of the display under it. */
+  toLocal(phys: { x: number; y: number }): LocalPoint | null {
+    return physicalToLocal(phys.x, phys.y, this.maps);
   }
 
   /** Shows an emote in the middle of the main display, without sharing it (the settings page's preview). */
@@ -195,6 +273,18 @@ export class OverlayManager extends EventEmitter {
     if (this.wheelDisplay === null) return;
     this.send(this.wheelDisplay, 'wheel:cancel', null);
     this.wheelDisplay = null;
+    this.wheelAt = null;
+  }
+
+  /** The slice is worked out here from the same geometry the wheel draws, so the overlay has nothing to report. */
+  private askReleased(at: LocalPoint): void {
+    const open = this.wheelAt;
+    if (!open || open.local.displayId !== at.displayId) return;
+    const slice = pickSlice(at.x - open.local.x, at.y - open.local.y, (WHEEL.innerR * this.settings.wheelSizePx) / WHEEL.size);
+    const id = slice >= 0 ? this.settings.wheel[slice] : undefined;
+    if (id === undefined || this.settings.ask.disabled.includes(id)) return;
+    const { displayId, x, y } = open.local;
+    this.emit('askRelease', { displayId, x, y, phys: open.phys, id } satisfies AskRelease);
   }
 
   private displayOf(sender: WebContents): number | undefined {

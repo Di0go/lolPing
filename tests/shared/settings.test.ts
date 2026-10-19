@@ -532,7 +532,23 @@ describe('helpers', () => {
       pingSizePx: 110, pingDurationS: 3.2, keepLastPing: false, volume: 70, muted: false, tickSound: true,
       wheelSizePx: 600, wheel: ['danger', 'push', 'omw', 'allin', 'assist', 'needvision', 'missing', 'enemyvision'], clickPingId: 'generic',
       emoteWheel: [...DEFAULT_EMOTE_WHEEL], clickEmoteId: DEFAULT_CLICK_EMOTE, emoteSizePx: 150, emoteSound: true, customEmotes: [],
+      ask: {
+        tag: { name: 'AI', color: 3, rgb: null },
+        labels: {
+          danger: "What's wrong", push: 'Keep going', omw: 'Do it', allin: 'Whole picture', assist: 'Show me how',
+          needvision: 'Look it up', missing: 'Explain', enemyvision: 'Grab',
+        },
+        disabled: [],
+      },
     });
+  });
+
+  it('labels the ask wheel in the app language and lists the switched-off intents', () => {
+    const s = normalizeSettings({ teammate: { intents: { danger: { enabled: false }, push: { label: 'More' } } } });
+    const { ask } = overlaySettings(s, 'zh-CN');
+    expect(ask.disabled).toEqual(['danger']);
+    expect(ask.labels.push).toBe('More');
+    expect(ask.labels.missing).toBe('解释');
   });
 
   it('overlaySettings carries the emote fields', () => {
@@ -591,6 +607,13 @@ describe('feature settings', () => {
   it('falls back to every feature on when features is not an object', () => {
     for (const raw of ['yes', 1, null, [true]]) expect(normalizeSettings({ features: raw }).features).toEqual(DEFAULT_SETTINGS.features);
     expect(normalizeSettings({ features: { rooms: 1 } }).features.rooms).toBe(true);
+  });
+
+  it('keeps the teammate off on Linux, where it is not built', () => {
+    const on = { features: { ...DEFAULT_SETTINGS.features, teammate: true } };
+    expect(normalizeSettings(on, 'linux').features.teammate).toBe(false);
+    expect(normalizeSettings(on, 'win').features.teammate).toBe(true);
+    expect(normalizeSettings(on, 'mac').features.teammate).toBe(true);
   });
 });
 

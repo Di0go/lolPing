@@ -12,6 +12,14 @@ export interface PingFxOptions {
   tag?: PingTag;
   /** Stays after its animation, until the caller removes it. */
   keep?: boolean;
+  /** 'mate': the teammate's, which 'mate:clear' and 'mate:fade' find by its data-owner. */
+  owner?: 'mate';
+  /** The teammate's words for this spot, next to the ping. */
+  label?: string;
+  /** An area ring on the ground instead of the icon's precise anchor. */
+  ring?: boolean;
+  /** Animated dots on the tag: the teammate is still thinking. */
+  thinking?: boolean;
 }
 
 function img(name: string, cls = ''): HTMLImageElement {
@@ -39,7 +47,8 @@ export function spawnPing(layer: HTMLElement, def: PingDef, x: number, y: number
   root.style.setProperty('--c', def.color);
   root.style.setProperty('--size', `${opts.sizePx}px`);
   root.style.setProperty('--dur', `${opts.durationS}s`);
-  root.append(div('ground'), div('ring'), div('ring r2'), div('ring r3'));
+  if (opts.owner) root.dataset.owner = opts.owner;
+  root.append(div(opts.ring ? 'area' : 'ground'), div('ring'), div('ring r2'), div('ring r3'));
 
   const art = div('art');
   if (def.art.length === 2) {
@@ -52,8 +61,13 @@ export function spawnPing(layer: HTMLElement, def: PingDef, x: number, y: number
     art.append(pop);
   }
   root.append(art);
+  if (opts.label) {
+    const label = div('label');
+    label.textContent = opts.label; // never HTML: the words come from a model
+    root.append(label);
+  }
   if (opts.tag) {
-    const tag = div('tag');
+    const tag = div(opts.thinking ? 'tag dots' : 'tag');
     tag.textContent = opts.tag.name; // never HTML: the name comes from another machine
     tag.style.setProperty('--tag', tagColorCss(opts.tag.color, opts.tag.rgb));
     root.append(tag);

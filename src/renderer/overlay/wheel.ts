@@ -20,11 +20,19 @@ function sector(r0: number, r1: number, a0: number, a1: number): string {
   return `M${x0},${y0} L${x1},${y1} A${r1},${r1} 0 0 1 ${x2},${y2} L${x3},${y3} A${r0},${r0} 0 0 0 ${x0},${y0}Z`;
 }
 
-/** One slice: `key` is what release() hands back, `icon` the image URL drawn in the slice. */
+/** One slice: `key` is what release() hands back, `icon` the image URL drawn in the slice, `label` shown in the centre on hover. */
 export interface WheelItem {
   key: string;
   icon: string;
+  label?: string;
 }
+
+/** Longer labels are cut so they stay inside the wheel's centre. */
+const CENTER_LABEL_MAX = 14;
+const fitLabel = (text: string): string => {
+  const chars = [...text];
+  return chars.length > CENTER_LABEL_MAX ? `${chars.slice(0, CENTER_LABEL_MAX - 1).join('')}…` : text;
+};
 
 /**
  * The League-style wheel (see prototype/wheel-demo.html), for pings or emotes: the slices are whatever items it is given.
@@ -34,6 +42,10 @@ export class Wheel {
   private readonly wedges: SVGPathElement[] = [];
   private readonly icons: SVGImageElement[] = [];
   private hub: SVGImageElement | null = null;
+  private centerTxt: SVGTextElement | null = null;
+  /** Replaces the constructor's centre text while set. */
+  private idleLabel: string | null = null;
+  private dimmed = new Set<string>();
   private items: readonly WheelItem[] = [];
   private hot = -1;
   private ox = 0;
@@ -57,6 +69,24 @@ export class Wheel {
       const item = items[i];
       if (item) icon.setAttribute('href', item.icon);
       else icon.removeAttribute('href');
+    });
+    this.setDimmed([...this.dimmed]);
+    this.showCenterText();
+  }
+
+  /** The centre's text while no labelled slice is hovered; null puts the wheel's own back. */
+  setCenterLabel(text: string | null): void {
+    this.idleLabel = text;
+    this.showCenterText();
+  }
+
+  /** Greys out the slices holding these keys (an ask wheel's switched-off intents). */
+  setDimmed(keys: string[]): void {
+    this.dimmed = new Set(keys);
+    this.icons.forEach((icon, i) => {
+      const item = this.items[i];
+      if (item && this.dimmed.has(item.key)) icon.classList.add('dim');
+      else icon.classList.remove('dim');
     });
   }
 
@@ -123,6 +153,13 @@ export class Wheel {
       this.icons[i].classList.add('hot');
       if (this.opened) this.onHover(i);
     }
+    this.showCenterText();
+  }
+
+  private showCenterText(): void {
+    if (!this.centerTxt) return;
+    const label = this.hot >= 0 ? this.items[this.hot]?.label : undefined;
+    this.centerTxt.textContent = label ? fitLabel(label) : this.idleLabel ?? this.centerLabel;
   }
 
   private build(): void {
@@ -160,10 +197,11 @@ export class Wheel {
     });
 
     el('circle', { r: innerR + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: 0.6 }, svg);
-    el('circle', { r: innerR, fill: `url(#${id}-core)`, stroke: '#c8aa6e', 'stroke-width': 3 }, svg);
+    el('circle', { r: innerR, fill: `url(#${id}-core)`, stroke: '#c8aa6e', 'stroke-width': 3, class: 'core' }, svg);
     el('circle', { r: innerR - 7, fill: 'none', stroke: '#8a7448', 'stroke-width': 1, opacity: 0.6 }, svg);
     this.hub = el('image', { href: this.centerIcon, x: -20, y: -58, width: 40, height: 40, class: 'hub' }, svg);
-    el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt' }, svg).textContent = this.centerLabel;
+    this.centerTxt = el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt' }, svg);
+    this.centerTxt.textContent = this.centerLabel;
     el('text', { x: 6, y: 50, 'text-anchor': 'middle', class: 'backTxt' }, svg).textContent = 'BACK';
     const mouse = el('g', { opacity: 0.55, transform: 'translate(-26,40)' }, svg);
     el('rect', { x: 0, y: 0, width: 11, height: 16, rx: 5.5, fill: 'none', stroke: '#6c7a7c', 'stroke-width': 1.3 }, mouse);

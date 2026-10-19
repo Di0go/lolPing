@@ -13,6 +13,8 @@ import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from './roomColors'
 import { parseRoomCode } from './roomCode';
 import { sanitizeName } from './roomProtocol';
 import { isVersion } from './update';
+import type { PingTag } from './ipc';
+import { intentFor } from './teammate/intents';
 import { DEFAULT_TEAMMATE, normalizeTeammate, type TeammateSettings } from './teammate/settings';
 import { isValidWheel } from './wheelLayout';
 
@@ -342,7 +344,8 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     friendEmotes: bool(r.friendEmotes, 'friendEmotes'),
     autoUpdateCheck: bool(r.autoUpdateCheck, 'autoUpdateCheck'),
     updateNotifiedVersion: isVersion(r.updateNotifiedVersion) ? r.updateNotifiedVersion : null,
-    features: normalizeFeatures(r.features),
+    // The teammate isn't built for Linux, so a settings file carried over from another system can't switch it on.
+    features: platform === 'linux' ? { ...normalizeFeatures(r.features), teammate: false } : normalizeFeatures(r.features),
     roomTextStyle: r.roomTextStyle === 'danmaku' ? 'danmaku' : 'spot',
     teammate: normalizeTeammate(r.teammate, { platform, trigger: pingTrigger, emoteTrigger: emote }),
   };
@@ -380,14 +383,31 @@ export type OverlaySettings = Pick<
   Settings,
   'pingSizePx' | 'pingDurationS' | 'keepLastPing' | 'volume' | 'muted' | 'tickSound' | 'wheelSizePx' | 'wheel' | 'clickPingId'
   | 'emoteWheel' | 'clickEmoteId' | 'emoteSizePx' | 'emoteSound' | 'customEmotes'
->;
+> & {
+  /** The ask wheel: the teammate's name tag, each slice's intent label, and the slices whose intent is off. */
+  ask: { tag: PingTag; labels: Partial<Record<PingId, string>>; disabled: PingId[] };
+};
 
 /** How loud lolPing's sounds play, 0 to 1: the volume setting, or 0 when muted. */
 export const soundLevel = (s: Pick<Settings, 'volume' | 'muted'>): number => (s.muted ? 0 : s.volume / 100);
 
-export const overlaySettings = (s: Settings): OverlaySettings => ({
+/** `lang` is the app's language: the ask wheel's labels are in it. */
+export const overlaySettings = (s: Settings, lang: Lang = 'en'): OverlaySettings => ({
   pingSizePx: s.pingSizePx, pingDurationS: s.pingDurationS, keepLastPing: s.keepLastPing, volume: s.volume, muted: s.muted, tickSound: s.tickSound,
   wheelSizePx: s.wheelSizePx, wheel: [...s.wheel], clickPingId: s.clickPingId,
   emoteWheel: [...s.emoteWheel], clickEmoteId: s.clickEmoteId, emoteSizePx: s.emoteSizePx, emoteSound: s.emoteSound,
   customEmotes: s.customEmotes.map((c) => ({ ...c })),
+  ask: askWheel(s, lang),
 });
+
+function askWheel(s: Settings, lang: Lang): OverlaySettings['ask'] {
+  const t = s.teammate;
+  const labels: Partial<Record<PingId, string>> = {};
+  const disabled: PingId[] = [];
+  for (const id of s.wheel) {
+    const intent = intentFor(t, id, lang);
+    labels[id] = intent.label;
+    if (!intent.enabled) disabled.push(id);
+  }
+  return { tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled };
+}

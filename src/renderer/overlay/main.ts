@@ -7,8 +7,9 @@ import {
 import {
   DEFAULT_CLICK_PING, TICK_SOUND, allSoundNames, allTextureNames, pingById, pingsFor, soundUrl, textureUrl, type PingDef,
 } from '../../shared/pings';
-import type { PingTag } from '../../shared/ipc';
+import type { MateMark, PingTag } from '../../shared/ipc';
 import type { WheelKind } from '../../shared/protocol';
+import { tagColorCss } from '../../shared/roomColors';
 import { DEFAULT_SETTINGS, overlaySettings, soundLevel, type OverlaySettings } from '../../shared/settings';
 import '../shared/emoteFx.css';
 import { EmoteStage } from './emoteStage';
@@ -43,6 +44,7 @@ const tick = (): void => {
   if (settings.tickSound) sounds.play(TICK_SOUND, volume() * 0.5);
 };
 const centers = centerIcons(settings);
+// The ask wheel is the ping wheel dressed in the teammate's colour, with each slice's intent label on hover.
 const pingWheel = new Wheel(pingSvg, 'PING', centers.ping, tick);
 const emoteWheel = new Wheel(emoteSvg, 'EMOTE', centers.emote, tick);
 
@@ -78,11 +80,44 @@ function applySettings(s: OverlaySettings): void {
 }
 applySettings(settings);
 
-function ping(def: PingDef, x: number, y: number, tag?: PingTag, keep = false): void {
+function ping(def: PingDef, x: number, y: number, tag?: PingTag, keep = false, mate: MateMark = {}): void {
   if (keep) dropKeptPing();
-  const el = spawnPing(pingLayer, def, x, y, { sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep });
+  const { owner, label, ring, thinking } = mate;
+  const el = spawnPing(pingLayer, def, x, y, {
+    sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep, owner, label, ring, thinking,
+  });
   if (keep) keptPing = el;
-  sounds.play(def.sound, volume());
+  if (!mate.silent) sounds.play(def.sound, volume());
+}
+
+/** The ask that is running. A teammate mark stamped with another one is from a cancelled ask: drop it. */
+let mateTicket: string | null = null;
+const staleMate = (p: { ticket?: string }): boolean => p.ticket !== undefined && mateTicket !== null && p.ticket !== mateTicket;
+
+const mateMarks = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-owner="mate"]')];
+
+function clearMate(): void {
+  for (const el of mateMarks()) el.remove();
+  stage.clear('mate');
+}
+
+const MATE_FADE_MS = 600;
+function fadeMate(): void {
+  const marks = mateMarks();
+  for (const el of marks) el.classList.add('mate-fade');
+  setTimeout(() => {
+    for (const el of marks) el.remove();
+  }, MATE_FADE_MS);
+}
+
+/** Dresses the ping wheel for an ask or puts it back, each time one of them opens. */
+function dressWheel(ask: boolean): void {
+  pingSvg.classList.toggle('ask', ask);
+  const { tag, labels, disabled } = settings.ask;
+  pingSvg.style.setProperty('--ask', tagColorCss(tag.color, tag.rgb));
+  pingWheel.setItems(pingsFor(settings.wheel).map((def) => (ask ? { ...pingItem(def), label: labels[def.id] } : pingItem(def))));
+  pingWheel.setDimmed(ask ? disabled : []);
+  pingWheel.setCenterLabel(ask ? tag.name : null);
 }
 
 function emote(owner: string, art: EmoteArt, x: number, y: number, tag?: PingTag): void {
@@ -95,7 +130,10 @@ function emote(owner: string, art: EmoteArt, x: number, y: number, tag?: PingTag
 const wheelOf = (p: { wheel?: WheelKind }): Wheel => (p.wheel === 'emote' ? emoteWheel : pingWheel);
 
 window.overlay.on('overlay:settings', applySettings);
-window.overlay.on('wheel:open', (p) => wheelOf(p).open(p.x, p.y));
+window.overlay.on('wheel:open', (p) => {
+  if (p.wheel !== 'emote') dressWheel(p.wheel === 'ask');
+  wheelOf(p).open(p.x, p.y);
+});
 window.overlay.on('wheel:move', (p) => wheelOf(p).move(p.x, p.y));
 window.overlay.on('wheel:release', (p) => {
   const chosen = wheelOf(p).release(p.x, p.y);
@@ -103,6 +141,10 @@ window.overlay.on('wheel:release', (p) => {
   if (p.wheel === 'emote') {
     emote('self', localArt(chosen.key), chosen.x, chosen.y);
     window.overlay.reportEmote(chosen.key, chosen.x, chosen.y);
+  } else if (p.wheel === 'ask') {
+    // The main process reports the ask itself; this ping is only ours to see, so it is never reported to a room.
+    const def = pingById(chosen.key);
+    if (def && !settings.ask.disabled.includes(def.id)) ping(def, chosen.x, chosen.y);
   } else {
     const def = pingById(chosen.key) ?? fallbackPing;
     ping(def, chosen.x, chosen.y, undefined, settings.keepLastPing);
@@ -113,12 +155,23 @@ window.overlay.on('wheel:cancel', () => {
   pingWheel.cancel();
   emoteWheel.cancel();
 });
-window.overlay.on('ping:spawn', (p) => ping(pingById(p.id) ?? fallbackPing, p.x, p.y, p.tag, p.keep === true));
+window.overlay.on('ping:spawn', (p) => {
+  if (p.owner === 'mate' && staleMate(p)) return;
+  ping(pingById(p.id) ?? fallbackPing, p.x, p.y, p.tag, p.keep === true, p);
+});
 window.overlay.on('ping:unkeep', dropKeptPing);
-window.overlay.on('emote:spawn', (p) => emote(p.owner, p.art, p.x, p.y, p.tag));
+window.overlay.on('emote:spawn', (p) => {
+  if (p.owner === 'mate' && staleMate(p)) return;
+  emote(p.owner, p.art, p.x, p.y, p.tag);
+});
 window.overlay.on('emote:clear', (p) => stage.clear(p.owner));
 window.overlay.on('toast:show', (t) => showToast(toastLayer, t.title, t.body));
 window.overlay.on('text:spawn', (t) => texts.spawn(t));
+window.overlay.on('mate:clear', clearMate);
+window.overlay.on('mate:fade', fadeMate);
+window.overlay.on('mate:ticket', (t) => {
+  mateTicket = t.id;
+});
 
 /** Resolves with `label` when the image at `url` doesn't load. */
 const probe = (url: string, label: string): Promise<string | null> =>

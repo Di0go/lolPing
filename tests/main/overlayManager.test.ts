@@ -164,6 +164,95 @@ describe('OverlayManager emote clicks', () => {
   });
 });
 
+describe('OverlayManager ask wheel', () => {
+  const askOn = (intents: object = {}) => mgr.updateSettings(overlaySettings({
+    ...DEFAULT_SETTINGS, features: { ...DEFAULT_SETTINGS.features, teammate: true },
+    teammate: { ...DEFAULT_SETTINGS.teammate, intents },
+  }));
+
+  it('reports an ask release without sharing it with the room', () => {
+    askOn();
+    const shared = vi.fn();
+    const asked = vi.fn();
+    mgr.on('shared', shared);
+    mgr.on('sharedEmote', shared);
+    mgr.on('askRelease', asked);
+    mgr.handle({ type: 'wheelOpen', x: 1920 + 500, y: 500, wheel: 'ask' });
+    mgr.handle({ type: 'wheelMove', x: 1920 + 500, y: 380, wheel: 'ask' });
+    mgr.handle({ type: 'wheelRelease', x: 1920 + 500, y: 360, wheel: 'ask' });
+    expect(sent(1)).toEqual([
+      ['wheel:open', { x: 500, y: 500, wheel: 'ask' }],
+      ['wheel:move', { x: 500, y: 380, wheel: 'ask' }],
+      ['wheel:release', { x: 500, y: 360, wheel: 'ask' }],
+    ]);
+    expect(asked).toHaveBeenCalledExactlyOnceWith({ displayId: 2, x: 500, y: 500, phys: { x: 1920 + 500, y: 500 }, id: 'danger' });
+    expect(shared).not.toHaveBeenCalled();
+  });
+
+  it('ignores a release on a switched-off intent', () => {
+    askOn({ danger: { enabled: false } });
+    const asked = vi.fn();
+    mgr.on('askRelease', asked);
+    mgr.handle({ type: 'wheelOpen', x: 500, y: 500, wheel: 'ask' });
+    mgr.handle({ type: 'wheelRelease', x: 500, y: 360, wheel: 'ask' });
+    mgr.handle({ type: 'wheelOpen', x: 500, y: 500, wheel: 'ask' });
+    mgr.handle({ type: 'wheelRelease', x: 500, y: 490, wheel: 'ask' }); // the dead zone
+    expect(asked).not.toHaveBeenCalled();
+    mgr.handle({ type: 'wheelOpen', x: 500, y: 500, wheel: 'ask' });
+    mgr.handle({ type: 'wheelRelease', x: 640, y: 500, wheel: 'ask' }); // east: the third slice
+    expect(asked).toHaveBeenCalledExactlyOnceWith({ displayId: 1, x: 500, y: 500, phys: { x: 500, y: 500 }, id: 'omw' });
+  });
+
+  it('reports an ask click without sharing it or drawing a ping', () => {
+    askOn();
+    const shared = vi.fn();
+    const clicked = vi.fn();
+    mgr.on('shared', shared);
+    mgr.on('sharedEmote', shared);
+    mgr.on('askClick', clicked);
+    mgr.handle({ type: 'click', x: 1920 + 30, y: 40, wheel: 'ask' });
+    expect(clicked).toHaveBeenCalledExactlyOnceWith({ displayId: 2, x: 30, y: 40, phys: { x: 1920 + 30, y: 40 } });
+    expect(shared).not.toHaveBeenCalled();
+    expect(sent(0)).toEqual([]);
+    expect(sent(1)).toEqual([]);
+  });
+
+  it('draws the teammate\'s pings and emotes with its tag, and clears or fades them everywhere', () => {
+    const tag = { name: 'AI', color: 3 };
+    mgr.spawnMate({ displayId: 2, x: 10, y: 20, id: 'danger', label: 'typo', ring: true, silent: true, tag });
+    mgr.spawnMateEmote({ displayId: 1, x: 5, y: 6, slug: 'okay', tag });
+    mgr.clearMate();
+    mgr.fadeMate();
+    expect(sent(1)).toEqual([
+      ['ping:spawn', { id: 'danger', x: 10, y: 20, owner: 'mate', label: 'typo', ring: true, silent: true, tag }],
+      ['emote:clear', { owner: 'mate' }],
+      ['mate:clear', null],
+      ['mate:fade', null],
+    ]);
+    expect(sent(0)).toEqual([
+      ['emote:spawn', { owner: 'mate', art: { kind: 'bundled', slug: 'okay' }, x: 5, y: 6, tag }],
+      ['mate:clear', null],
+      ['mate:fade', null],
+    ]);
+  });
+
+  it('stamps the teammate\'s pings with the current ask\'s ticket', () => {
+    const tag = { name: 'AI', color: 3 };
+    mgr.setMateTicket('t1');
+    mgr.spawnMate({ displayId: 1, x: 1, y: 2, id: 'push', tag });
+    expect(sent(0)).toEqual([
+      ['mate:ticket', { id: 't1' }],
+      ['ping:spawn', { id: 'push', x: 1, y: 2, owner: 'mate', tag, ticket: 't1' }],
+    ]);
+    expect(sent(1)).toEqual([['mate:ticket', { id: 't1' }]]);
+  });
+
+  it('finds the display under a physical point and maps it into that overlay', () => {
+    expect(mgr.displayAt({ x: 1920 + 10, y: 10 })).toEqual({ id: 2, rect: { x: 1920, y: 0, w: 1280, h: 1024 } });
+    expect(mgr.toLocal({ x: 1920 + 10, y: 30 })).toEqual({ displayId: 2, x: 10, y: 30 });
+  });
+});
+
 describe('OverlayManager emote reports from the overlay', () => {
   const sender = (i: number): unknown => h.windows[i].webContents;
 
