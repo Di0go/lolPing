@@ -1,9 +1,7 @@
 import type { BuiltinProfile } from '../../../shared/teammate/settings';
+import { isRecord, joinUrl, parseEvent, readModelIds, send, streamError } from './http';
 import { readSse } from './sse';
-import {
-  ProviderError, classifyError, errorMessage, isRecord, joinUrl, parseEvent, readModelIds, send,
-  type Part, type ProviderAdapter, type RawCall, type Turn,
-} from './types';
+import { ProviderError, type Part, type ProviderAdapter, type RawCall, type Turn } from './types';
 
 type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
@@ -70,9 +68,12 @@ export function openaiCompatAdapter(p: BuiltinProfile, key: string, fetchImpl: t
         method: 'POST', headers: headers(), body: JSON.stringify(body),
       }, signal);
       if (!res.body) throw new ProviderError('other', 'Empty response');
+      // Accepted on the response itself: keepalive comments can precede the first event by many seconds.
+      h.accepted();
 
-      let accepted = false;
       let text = '';
+      // Several chunks may carry usage; the last one is the total, reported once.
+      let usage = null as { input: number; output: number } | null;
       const slots: RawCall[] = [];
       const byIndex = new Map<number, RawCall>();
       const slotFor = (tc: Record<string, unknown>): RawCall => {
@@ -93,22 +94,21 @@ export function openaiCompatAdapter(p: BuiltinProfile, key: string, fetchImpl: t
         return slot;
       };
 
-      await readSse(res.body, (_event, data) => {
-        if (!accepted) {
-          accepted = true;
-          h.accepted();
+      const readUsage = (u: unknown): void => {
+        if (isRecord(u) && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+          usage = { input: u.prompt_tokens, output: u.completion_tokens };
         }
+      };
+
+      await readSse(res.body, (_event, data) => {
         if (data === '[DONE]') return;
         const chunk = parseEvent(data);
         if (!chunk) return;
-        if (chunk.error !== undefined && chunk.error !== null) {
-          throw classifyError(undefined, errorMessage(chunk) ?? 'The provider reported an error');
-        }
-        const u = chunk.usage;
-        if (isRecord(u) && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
-          h.usage({ input: u.prompt_tokens, output: u.completion_tokens });
-        }
+        if (chunk.error !== undefined && chunk.error !== null) throw streamError(chunk);
+        readUsage(chunk.usage);
         const choice: unknown = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+        // Kimi (Moonshot) puts usage on the choice instead of the chunk.
+        if (isRecord(choice)) readUsage(choice.usage);
         const delta = isRecord(choice) ? choice.delta : undefined;
         if (!isRecord(delta)) return;
         if (typeof delta.content === 'string' && delta.content !== '') {
@@ -128,6 +128,7 @@ export function openaiCompatAdapter(p: BuiltinProfile, key: string, fetchImpl: t
         }
       }, signal);
 
+      if (usage) h.usage(usage);
       const calls = slots
         .filter((s) => s.name !== '')
         .map((s, i) => ({ id: s.id || `call_${i}`, name: s.name, args: s.args.trim() || '{}' }));

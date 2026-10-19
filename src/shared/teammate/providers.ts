@@ -41,10 +41,11 @@ export const PROVIDERS: readonly ProviderPreset[] = [
   { id: 'custom', name: 'Custom', group: 'cloud', protocol: 'openai', baseUrl: '' },
 ];
 
-// First match wins, so the vision variants come before the text-only family names they contain.
+// First match wins, so the vision variants come before the text-only names they contain. A "no" is only for models
+// known to refuse images; anything unsure stays unknown (null), because a wrong no silently drops the screenshot.
 const VISION_PATTERNS: readonly [RegExp, boolean][] = [
-  [/gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-4-vision|gpt-5/, true],
-  [/(^|\/)o(1|3|4)-mini/, false],
+  [/gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-4.*vision|gpt-5/, true],
+  [/(^|\/)o(1-mini|1-preview|3-mini)/, false],
   [/(^|\/)o(1|3|4)(-|$)/, true],
   [/claude-(3|[4-9]|(opus|sonnet|haiku)-[4-9])/, true],
   [/gemini|gemma-?3/, true],
@@ -54,7 +55,14 @@ const VISION_PATTERNS: readonly [RegExp, boolean][] = [
   [/(moonshot|kimi).*vision/, true],
   [/grok.*vision|grok-4/, true],
   [/llava|pixtral|minicpm-v|llama-?3\.2.*vision|llama-?4|deepseek-vl/, true],
-  [/deepseek|gpt-3\.5|gpt-4|claude-|qwen|glm-|moonshot|kimi|doubao|grok|mistral|codestral|minimax|abab/, false],
+  [/gpt-3\.5|gpt-4(-\d{4}|-32k)?$|claude-(2|instant)/, false],
+  [/deepseek-(chat|reasoner|coder|r1|v2|v3)/, false],
+  [/qwen-(max|plus|turbo|long|coder)|qwen3-(max|coder)|qwq/, false],
+  [/glm-(4-|4\.[5-7](-|$)|z1)/, false],
+  [/moonshot-v1-(\d+k|auto)$|kimi-k2(-|$)/, false],
+  [/doubao-(1[-.]5-)?(pro|lite)/, false],
+  [/grok-(2|3)(-|$)|grok-code|grok-beta/, false],
+  [/codestral|minimax-m\d|abab/, false],
 ];
 
 /** Whether a model can see images, from its name; null when the name is unknown (treated as yes until refused). */

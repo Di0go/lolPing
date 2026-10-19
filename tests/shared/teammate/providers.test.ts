@@ -24,17 +24,22 @@ describe('providers', () => {
       'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-5', 'gpt-5-mini', 'claude-3-5-sonnet-20241022', 'claude-sonnet-4-5',
       'claude-opus-4-1', 'gemini-2.5-flash', 'qwen-vl-max', 'qwen2.5-vl-72b-instruct', 'qwen3-vl-plus',
       'doubao-1-5-vision-pro-32k', 'glm-4v-plus', 'glm-4.5v', 'moonshot-v1-8k-vision-preview', 'grok-2-vision-1212',
-      'openai/gpt-4o', 'anthropic/claude-3.7-sonnet', 'llava:13b',
+      'openai/gpt-4o', 'anthropic/claude-3.7-sonnet', 'llava:13b', 'o1', 'o3', 'o4-mini', 'gpt-4-1106-vision-preview',
     ]) {
       expect(visionGuess(m), m).toBe(true);
     }
     for (const m of [
-      'deepseek-chat', 'deepseek-reasoner', 'gpt-3.5-turbo', 'o3-mini', 'claude-2.1', 'qwen-max', 'qwen-plus',
-      'glm-4-plus', 'moonshot-v1-8k', 'kimi-k2-0905-preview', 'mistral-large-latest',
+      'deepseek-chat', 'deepseek-reasoner', 'gpt-3.5-turbo', 'o3-mini', 'o1-mini', 'o1-preview', 'claude-2.1', 'qwen-max',
+      'qwen-plus', 'glm-4-plus', 'moonshot-v1-8k', 'kimi-k2-0905-preview', 'codestral-latest',
     ]) {
       expect(visionGuess(m), m).toBe(false);
     }
-    expect(visionGuess('my-local-model')).toBeNull();
+    // Unsure is null, never a wrong no.
+    for (const m of [
+      'my-local-model', 'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest', 'kimi-k2.5',
+    ]) {
+      expect(visionGuess(m), m).toBeNull();
+    }
     expect(visionGuess('')).toBeNull();
   });
 });

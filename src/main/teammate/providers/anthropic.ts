@@ -1,9 +1,7 @@
 import type { BuiltinProfile } from '../../../shared/teammate/settings';
+import { isRecord, joinUrl, parseEvent, readModelIds, send, streamError } from './http';
 import { readSse } from './sse';
-import {
-  ProviderError, classifyError, errorMessage, isRecord, joinUrl, parseEvent, readModelIds, send,
-  type Part, type ProviderAdapter, type RawCall, type Turn,
-} from './types';
+import { ProviderError, type Part, type ProviderAdapter, type RawCall, type Turn } from './types';
 
 const API_VERSION = '2023-06-01';
 const MAX_TOKENS = 4096;
@@ -77,8 +75,9 @@ export function anthropicAdapter(p: BuiltinProfile, key: string, fetchImpl: type
         method: 'POST', headers: headers(), body: JSON.stringify(body),
       }, signal);
       if (!res.body) throw new ProviderError('other', 'Empty response');
+      // Accepted on the response itself: ping events and keepalives can precede the content.
+      h.accepted();
 
-      let accepted = false;
       let text = '';
       const calls: RawCall[] = [];
       const byIndex = new Map<number, RawCall>();
@@ -87,14 +86,10 @@ export function anthropicAdapter(p: BuiltinProfile, key: string, fetchImpl: type
       let sawUsage = false;
 
       await readSse(res.body, (event, data) => {
-        if (!accepted) {
-          accepted = true;
-          h.accepted();
-        }
         const e = parseEvent(data);
         if (!e) return;
         const type = typeof e.type === 'string' ? e.type : event;
-        if (type === 'error') throw classifyError(undefined, errorMessage(e) ?? 'The provider reported an error');
+        if (type === 'error') throw streamError(e);
         if (type === 'message_start' && isRecord(e.message) && isRecord(e.message.usage)) {
           const u = e.message.usage;
           // Cached prompt tokens are still prompt tokens.

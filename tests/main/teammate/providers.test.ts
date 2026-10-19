@@ -21,17 +21,19 @@ const TOOLS: ToolDef[] = [
 ];
 const ASK: Turn[] = [{ role: 'user', parts: [{ text: 'hello' }] }];
 
-type Recorder = StreamHandlers & { texts: string[]; usages: { input: number; output: number }[] };
+type Recorder = StreamHandlers & { texts: string[]; usages: { input: number; output: number }[]; log: string[] };
 
 function recorder(onText?: () => void): Recorder & { accepted: ReturnType<typeof vi.fn<() => void>> } {
   const texts: string[] = [];
   const usages: { input: number; output: number }[] = [];
+  const log: string[] = [];
   return {
-    accepted: vi.fn<() => void>(),
-    text: (d) => { texts.push(d); onText?.(); },
+    accepted: vi.fn<() => void>(() => { log.push('accepted'); }),
+    text: (d) => { texts.push(d); log.push('text'); onText?.(); },
     usage: (u) => { usages.push(u); },
     texts,
     usages,
+    log,
   };
 }
 
@@ -45,7 +47,9 @@ const tc = (index: number, f: Record<string, unknown>, id?: string): string =>
 const OPENAI_STREAM = (() => {
   const split = tc(1, { arguments: '"x":1,"y":2}' });
   return [
-    delta({ role: 'assistant', content: 'On ' }),
+    data({
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'On ' }, usage: { prompt_tokens: 3, completion_tokens: 1 } }],
+    }),
     delta({ content: 'it.' }),
     tc(0, { name: 'say', arguments: '' }, 'call_1'),
     tc(0, { arguments: '{"text":' }),
@@ -100,6 +104,32 @@ describe('readSse', () => {
     await readSse(body, (e, d) => { got.push([e, d]); });
     expect(got).toEqual([['a', '1\n2'], ['message', '3'], ['message', 'tail']]);
   });
+
+  it('keeps a multi-byte character that is split across chunks', async () => {
+    const bytes = new TextEncoder().encode('data: 中文\n\n');
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(bytes.slice(0, 7));
+        c.enqueue(bytes.slice(7));
+        c.close();
+      },
+    });
+    const got: string[] = [];
+    await readSse(body, (_e, d) => { got.push(d); });
+    expect(got).toEqual(['中文']);
+  });
+
+  it('dispatches nothing after an abort, even later events in the same chunk', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(new TextEncoder().encode('data: 1\n\ndata: 2\n\ndata: 3\n\n')); },
+    });
+    const ctrl = new AbortController();
+    const got: string[] = [];
+    const e: unknown = await readSse(body, (_e, d) => { got.push(d); ctrl.abort(); }, ctrl.signal)
+      .then(() => null, (err: unknown) => err);
+    expect(e).toMatchObject({ name: 'AbortError' });
+    expect(got).toEqual(['1']);
+  });
 });
 
 describe('provider adapters', () => {
@@ -121,6 +151,7 @@ describe('provider adapters', () => {
     expect(h.accepted).toHaveBeenCalledTimes(1);
     expect(h.texts).toEqual(['On ', 'it.']);
     expect(h.usages).toEqual([{ input: 10, output: 5 }]);
+    expect(h.log[0]).toBe('accepted');
     expect(fake.requests).toHaveLength(1);
     expect(fake.requests[0]).toMatchObject({ method: 'POST', url: '/v1/chat/completions' });
     expect(lastBody()).toMatchObject({
@@ -146,6 +177,7 @@ describe('provider adapters', () => {
     expect(h.accepted).toHaveBeenCalledTimes(1);
     expect(h.texts).toEqual(['On ', 'it.']);
     expect(h.usages).toEqual([{ input: 12, output: 30 }]);
+    expect(h.log[0]).toBe('accepted');
     expect(fake.requests[0]).toMatchObject({ method: 'POST', url: '/v1/messages' });
     expect(lastBody()).toMatchObject({
       model: 'm1',
@@ -242,6 +274,40 @@ describe('provider adapters', () => {
       expect(fake.requests[0].url).toBe(protocol === 'openai' ? '/models' : '/v1/models?limit=1000');
     });
 
+    it(`counts a stream as accepted before its first event (${protocol})`, async () => {
+      fake.reply({ sse: [': OPENROUTER PROCESSING\n\n', ': OPENROUTER PROCESSING\n\n'], hold: true });
+      const ctrl = new AbortController();
+      const h = recorder();
+      const done = createAdapter(profile(protocol, fake.url), 'k')
+        .turn({ system: 's', turns: ASK, tools: TOOLS, model: 'm' }, h, ctrl.signal)
+        .then(() => null, (err: unknown) => err);
+      await vi.waitFor(() => expect(h.accepted).toHaveBeenCalledTimes(1));
+      ctrl.abort();
+      expect(await done).toMatchObject({ name: 'AbortError' });
+      expect(h.texts).toEqual([]);
+    });
+
+    it(`maps errors sent inside the stream like refused requests (${protocol})`, async () => {
+      const streamError = (type: string, message: string): string => protocol === 'openai'
+        ? data({ error: { type, message } })
+        : ev('error', { error: { type, message } });
+      const cases: [string, string, string][] = [
+        ['overloaded_error', 'Overloaded', 'rate'],
+        ['rate_limit_error', 'Too many requests', 'rate'],
+        ['authentication_error', 'invalid x-api-key', 'auth'],
+        ['invalid_request_error', 'Image input is not supported by this model', 'images'],
+        ['api_error', 'Internal error', 'other'],
+      ];
+      for (const [type, message, kind] of cases) {
+        fake.reply({ sse: [streamError(type, message)] });
+        expect(await failure(), type).toMatchObject({ kind, message });
+      }
+      if (protocol === 'openai') {
+        fake.reply({ sse: [data({ error: { code: 429, message: 'Rate limit reached' } })] });
+        expect(await failure()).toMatchObject({ kind: 'rate' });
+      }
+    });
+
     it(`stops when aborted (${protocol})`, async () => {
       const first = protocol === 'openai'
         ? delta({ content: 'Hel' })
@@ -257,6 +323,29 @@ describe('provider adapters', () => {
       await vi.waitFor(() => expect(fake.dropped()).toBe(1));
     });
   }
+
+  it('reports a profile without a base URL as other, without a request', async () => {
+    const e: unknown = await createAdapter(profile('openai', ''), 'k')
+      .turn({ system: 's', turns: ASK, tools: [], model: 'm' }, recorder(), new AbortController().signal)
+      .then(() => null, (err: unknown) => err);
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e).toMatchObject({ kind: 'other', message: expect.stringMatching(/base URL/) });
+    expect(fake.requests).toEqual([]);
+  });
+
+  it('reports usage once, from the last chunk that carried it', async () => {
+    fake.reply({ sse: [
+      data({ choices: [{ index: 0, delta: { content: 'a' }, usage: { prompt_tokens: 7, completion_tokens: 2 } }] }),
+      data({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop', usage: { prompt_tokens: 7, completion_tokens: 4 } }],
+      }),
+      'data: [DONE]\n\n',
+    ] });
+    const h = recorder();
+    await createAdapter(profile('openai', fake.url), 'k')
+      .turn({ system: 's', turns: ASK, tools: [], model: 'm' }, h, new AbortController().signal);
+    expect(h.usages).toEqual([{ input: 7, output: 4 }]);
+  });
 
   it('reports a server it cannot reach as network', async () => {
     const url = fake.url;

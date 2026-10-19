@@ -14,6 +14,8 @@ export async function readSse(
   let data: string[] = [];
   const line = (l: string): void => {
     if (l === '') {
+      // One chunk can hold many events; none of them may reach onEvent after an abort.
+      if (signal?.aborted) throw signal.reason;
       if (data.length > 0) onEvent(event || 'message', data.join('\n'));
       event = '';
       data = [];
