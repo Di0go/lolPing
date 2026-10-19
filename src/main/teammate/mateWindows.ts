@@ -86,14 +86,15 @@ export class MateWindows extends EventEmitter {
     this.leave('card', 'fast');
   }
 
+  /**
+   * Opens a fresh box at `at`. A box still open from an earlier gesture is cancelled first: its tag, thread and spot
+   * belong to that gesture. Each box has its own slot, so a box that is still closing can't end the new one.
+   */
   showWords(at: Point, s: WordsState): void {
-    const slot = this.slots.words;
-    if (slot.win && !slot.win.isDestroyed()) {
-      slot.win.show();
-      slot.win.focus();
-      return;
-    }
-    Object.assign(slot, emptySlot('words'), { at, state: s, shown: true });
+    const old = this.slots.words;
+    if (old.win && !old.win.isDestroyed()) this.endWords(old, { t: 'cancel' });
+    const slot: Slot = { ...emptySlot('words'), at, state: s, shown: true };
+    this.slots.words = slot;
     const w = this.create('words', slot, { focusable: true, ...this.popupOptions() });
     w.setAlwaysOnTop(true, 'screen-saver');
     let focused = false;
@@ -102,10 +103,10 @@ export class MateWindows extends EventEmitter {
     });
     // Clicking away cancels. Not before the box has had focus once, or showing it would close it.
     w.on('blur', () => {
-      if (focused) this.endWords({ t: 'cancel' });
+      if (focused) this.endWords(slot, { t: 'cancel' });
     });
     setTimeout(() => {
-      if (!w.isDestroyed() && !focused) this.endWords({ t: 'cancel' });
+      if (!w.isDestroyed() && !focused) this.endWords(slot, { t: 'cancel' });
     }, FOCUS_WAIT_MS);
     w.once('ready-to-show', () => {
       w.show();
@@ -233,8 +234,7 @@ export class MateWindows extends EventEmitter {
     }, LEAVE_MS[how]);
   }
 
-  private endWords(action: MateAction): void {
-    const slot = this.slots.words;
+  private endWords(slot: Slot, action: MateAction): void {
     if (slot.ended) return;
     slot.ended = true;
     this.emit('action', { view: 'words', action });
@@ -277,7 +277,7 @@ export class MateWindows extends EventEmitter {
         slot.ended = true;
         this.emit('action', { view, action: { t: 'cancel' } });
       }
-      if (slot.win === w) this.slots[view] = emptySlot(view);
+      if (this.slots[view] === slot) this.slots[view] = emptySlot(view);
     });
     w.webContents.on('did-finish-load', () => {
       slot.loaded = true;
@@ -318,7 +318,7 @@ export class MateWindows extends EventEmitter {
     const action = parseMateAction(raw, view);
     if (!action) return;
     // The words box's job ends with an ask or a cancel: it closes, and the keyboard goes back where it was.
-    if (view === 'words') return this.endWords(action);
+    if (view === 'words') return this.endWords(this.slots.words, action);
     this.emit('action', { view, action });
   };
 

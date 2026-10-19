@@ -76,8 +76,12 @@ vi.mock('electron', async () => {
       this.destroyed = true;
       this.emit('closed');
     }
+    /** Like Electron, close() only asks: the window goes away (blur, then closed) a moment later. */
     close(): void {
-      this.destroy();
+      setTimeout(() => {
+        this.emit('blur');
+        this.destroy();
+      }, 0);
     }
   }
   const screen = {
@@ -161,13 +165,51 @@ describe('MateWindows', () => {
     expect(b.y + b.height).toBeLessThanOrEqual(1040);
   });
 
-  it('cancels the words box when it loses focus, and closes it', () => {
+  it('cancels the words box when it loses focus, and closes it', async () => {
     mate.showWords({ x: 10, y: 10 }, words);
     const w = h.windows[0];
     w.emit('focus');
     w.emit('blur');
     expect(actions).toEqual([{ view: 'words', action: { t: 'cancel' } }]);
-    expect(w.destroyed).toBe(true);
+    await vi.waitFor(() => expect(w.destroyed).toBe(true));
+    expect(actions).toHaveLength(1);
+  });
+
+  it('replaces an open words box with a fresh one at the new spot, cancelling the old ask', async () => {
+    mate.showWords({ x: 10, y: 10 }, words);
+    const a = h.windows[0];
+    a.emit('focus');
+    const second: WordsState = { ...words, thread: 'Invoice' };
+    mate.showWords({ x: 900, y: 500 }, second);
+    expect(actions).toEqual([{ view: 'words', action: { t: 'cancel' } }]);
+    const b = h.windows[1];
+    expect(b).toBeDefined();
+    expect(b.bounds).toMatchObject({ x: 900, y: 500 });
+    b.webContents.emit('did-finish-load');
+    expect(b.webContents.send).toHaveBeenCalledWith('mate:state', second);
+    b.emit('focus');
+    await vi.waitFor(() => expect(a.destroyed).toBe(true)); // the old box's blur and close don't touch the new one
+    sendAction(0, { t: 'ask', text: 'old', newThread: false });
+    sendAction(1, { t: 'ask', text: 'new', newThread: false });
+    expect(actions).toEqual([
+      { view: 'words', action: { t: 'cancel' } },
+      { view: 'words', action: { t: 'ask', text: 'new', newThread: false } },
+    ]);
+  });
+
+  it('opens a new words box when shown again before the hidden one has closed', async () => {
+    mate.showWords({ x: 10, y: 10 }, words);
+    const a = h.windows[0];
+    a.emit('focus');
+    mate.hideWords();
+    mate.showWords({ x: 300, y: 300 }, words);
+    const b = h.windows[1];
+    expect(b).toBeDefined();
+    b.emit('focus');
+    await vi.waitFor(() => expect(a.destroyed).toBe(true));
+    expect(b.destroyed).toBe(false);
+    sendAction(1, { t: 'ask', text: 'hi', newThread: true });
+    expect(actions).toEqual([{ view: 'words', action: { t: 'ask', text: 'hi', newThread: true } }]);
   });
 
   it('resizes a window to the size its page reports, within its view limits', () => {

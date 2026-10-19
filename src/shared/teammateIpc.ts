@@ -94,7 +94,7 @@ export interface MateApi {
 /** Longest words the user may type for an ask or a reply. */
 export const MATE_TEXT_MAX = 2000;
 /** A card's whole text can be copied; anything longer than this is not a real answer. */
-const COPY_MAX = 100_000;
+export const MATE_COPY_MAX = 100_000;
 const URL_MAX = 2048;
 const QUERY_MAX = 200;
 /** The same rule as HistoryStore uses before an id reaches a file name. */
@@ -137,7 +137,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'cancel':
       return { t: a.t };
     case 'copy':
-      return typeof a.text === 'string' && a.text.length <= COPY_MAX ? { t: 'copy', text: a.text } : null;
+      return typeof a.text === 'string' && a.text.length <= MATE_COPY_MAX ? { t: 'copy', text: a.text } : null;
     case 'reply':
       return words(a.text) ? { t: 'reply', text: a.text } : null;
     case 'ask':

@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type CardState, type MateAction, type MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
+import { copyAllText, footerText } from './cardText';
 import { renderMarkdown } from './markdown';
 import { useMotion } from './motion';
 import { NameTag } from './NameTag';
@@ -95,7 +96,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent): void => {
-      if (e.key === 'Escape') act({ t: 'close' });
+      if (e.key === 'Escape' && !e.isComposing) act({ t: 'close' });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -120,16 +121,10 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
     setReply('');
   };
   const copyAll = (): void => {
-    act({ t: 'copy', text: s.entries.filter((e) => e.kind === 'answer').map((e) => e.markdown).join('\n\n') });
+    act({ t: 'copy', text: copyAllText(s.entries) });
     setCopied(true);
   };
   const leave = leaving === 'stale' ? m.stale : leaving === 'fast' ? m.shrink : undefined;
-  const { footer } = s;
-  const footerText = [
-    [footer.profile, footer.model].filter(Boolean).join(' · '),
-    footer.tokens !== null ? t.tokens(footer.tokens) : '',
-    footer.used.length ? `${t.used}: ${footer.used.join(', ')}` : '',
-  ].filter(Boolean).join(' · ');
   return (
     <div className={sf.frame}>
       <FluentCard className={mergeClasses(sf.surface, st.card, m.grow, leave)}>
@@ -177,7 +172,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
             <Button size="small" appearance="transparent" icon={<Send16Regular />} aria-label={t.send} onClick={sendReply} />
           }
         />
-        <Caption1 className={st.footer}>{footerText}</Caption1>
+        <Caption1 className={st.footer}>{footerText(s.footer, t)}</Caption1>
       </FluentCard>
     </div>
   );

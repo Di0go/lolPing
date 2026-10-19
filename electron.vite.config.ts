@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 import { pruneAssets } from './tools/pruneAssets';
+import { teammateCsp } from './tools/teammateCsp';
 
 export default defineConfig({
   main: {
@@ -23,7 +24,7 @@ export default defineConfig({
   renderer: {
     root: resolve('src/renderer'),
     publicDir: resolve('assets'),
-    plugins: [react(), pruneAssets()],
+    plugins: [react(), pruneAssets(), teammateCsp()],
     build: {
       rollupOptions: {
         input: {
