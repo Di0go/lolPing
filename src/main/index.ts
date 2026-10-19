@@ -160,6 +160,9 @@ function start(): void {
   let textOpen = false;
   let wordsOpen = false; // the teammate's words box has the keyboard: the helper stays suspended, as for the text box
   let mate: Mate | null = null; // the teammate, while its feature is on
+  let mateFailed = false; // it couldn't start: its ask key stays off for this session
+  /** The settings as the helper and overlays use them: without the teammate once it failed to start. */
+  const effective = (s: Settings): Settings => (mateFailed ? { ...s, features: { ...s.features, teammate: false } } : s);
 
   const overlays = new OverlayManager(
     overlaySettings(settings, resolveLang(settings.language, app.getLocale())),
@@ -371,7 +374,7 @@ function start(): void {
     live = liveKeys(settings, { active: room.state().phase === 'active' }, enabled);
     // The helper stops reporting a held panel key once it is off, so the roster would stay up: hide it here.
     if (!live.panel) panels.hideRoster();
-    bridge.send(configCommand(settings, enabled, live));
+    bridge.send(configCommand(effective(settings), enabled, live));
   };
   room.on('state', () => {
     const next = liveKeys(settings, { active: room.state().phase === 'active' }, enabled);
@@ -679,6 +682,7 @@ function start(): void {
       }
       case 'delete':
         await m.history.delete(a.id);
+        m.controller.forgetThread(a.id);
         return refreshHistory(m);
       case 'search':
         historyQuery = a.query;
@@ -749,18 +753,32 @@ function start(): void {
     m.windows.removeAllListeners();
     m.windows.destroy();
     pushMateTray();
-    return Promise.allSettled([m.context.stop(), m.usage.flush()]);
+    // list() waits for the history queue, so no write of the old store is still running when a new one starts.
+    return Promise.allSettled([m.context.stop(), m.usage.flush(), m.history.list()]);
   };
+  /** A teammate going down: a new one starts only after it, so two stores never write the same files. */
+  let mateStopping: Promise<unknown> | null = null;
   const syncMate = (): void => {
     const on = !IS_LINUX && featureOn(settings, 'teammate');
-    if (on && !mate) {
+    if (on && !mate && !mateFailed) {
+      if (mateStopping) {
+        void mateStopping.then(syncMate);
+        return;
+      }
       try {
         mate = createMate();
       } catch (err) {
         console.warn('[teammate] could not start:', err);
+        mateFailed = true;
+        sendConfig();
+        overlays.updateSettings(overlaySettings(effective(settings), mateLang()));
       }
     } else if (!on && mate) {
-      void stopMate();
+      const stopping = stopMate();
+      mateStopping = stopping;
+      void stopping.then(() => {
+        if (mateStopping === stopping) mateStopping = null;
+      });
     }
     pushMateTray();
   };
@@ -799,7 +817,7 @@ function start(): void {
     if (mate && (h.keepDays !== was.keepDays || h.maxThreads !== was.maxThreads)) {
       mate.history.prune({ keepDays: h.keepDays, maxThreads: h.maxThreads }).catch(() => undefined);
     }
-    overlays.updateSettings(overlaySettings(s, resolveLang(s.language, app.getLocale())));
+    overlays.updateSettings(overlaySettings(effective(s), resolveLang(s.language, app.getLocale())));
     settingsWindow()?.webContents.send(SETTINGS_CH.changed, s);
     if (s.language !== previous.language) tray.setText(text());
     if (
@@ -873,12 +891,20 @@ function start(): void {
       adapter: (p, key) => createAdapter(p, key),
       usage: () => mate?.usage.month() ?? { month: '', input: 0, output: 0 },
       history: async (op: TeammateHistoryOp) => {
-        if (op === 'open') return openHistory();
-        if (op === 'pause' || op === 'resume') return setHistoryPaused(op === 'pause');
+        if (op === 'open') {
+          await openHistory();
+          return mate !== null;
+        }
+        if (op === 'pause' || op === 'resume') {
+          setHistoryPaused(op === 'pause');
+          return true;
+        }
         const m = mate;
-        if (!m) return;
+        if (!m || !m.history.available()) return false;
         await m.history.clear();
+        m.controller.forgetThread();
         await refreshHistory(m);
+        return true;
       },
     },
   });

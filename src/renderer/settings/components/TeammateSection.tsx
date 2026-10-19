@@ -5,9 +5,9 @@ import {
 } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
-import { TAG_COLORS, tagColorCss } from '../../../shared/roomColors';
+import { TAG_COLORS } from '../../../shared/roomColors';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
-import { PROVIDERS, type ProviderId } from '../../../shared/teammate/providers';
+import { needsKey, PROVIDERS, type ProviderId } from '../../../shared/teammate/providers';
 import {
   INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, TAG_NAME_MAX, type BuiltinProfile, type IntentOverride,
   type TeammateSettings,
@@ -95,11 +95,11 @@ function ProfileCard({ p, onChange, onRemove }: {
     }
   };
   const visionLabel = { auto: m.visionAuto, yes: m.visionYes, no: m.visionNo };
+  const keyless = !needsKey(p);
 
   return (
     <div className="card mate">
       <div className="mateHead">
-        <span className="tagDot" style={{ background: tagColorCss(p.tagColor, p.tagColorCustom) }} />
         <b>{p.name || provider?.name}</b>
         <span className="desc inline">{provider?.name}</span>
         <Button size="small" appearance="subtle" onClick={onRemove}>{m.removeProfile}</Button>
@@ -113,7 +113,7 @@ function ProfileCard({ p, onChange, onRemove }: {
         <span>{m.key}</span>
         <div className="mateRow">
           <Input type="password" autoComplete="off" value={key} maxLength={KEY_MAX} style={{ width: 260 }}
-            placeholder={hasKey ? m.keySavedPlaceholder : m.keyPlaceholder}
+            placeholder={hasKey ? m.keySavedPlaceholder : keyless ? m.keyNotNeeded : m.keyPlaceholder}
             onChange={(_, d) => setKey(d.value)}
             onKeyDown={(e) => e.key === 'Enter' && key.trim() && void saveKey(key)} />
           <Button disabled={!key.trim()} onClick={() => void saveKey(key)}>{m.saveKey}</Button>
@@ -122,7 +122,7 @@ function ProfileCard({ p, onChange, onRemove }: {
         {keyError ? <><span /><span className="weImportError">{keyError}</span></> : null}
         <span />
         <div className="mateRow">
-          <Button disabled={!hasKey || checking} onClick={() => void checkKey()}>
+          <Button disabled={(!hasKey && !keyless) || checking} onClick={() => void checkKey()}>
             {checking ? m.checking : m.checkKey}
           </Button>
           <span className={check && !check.ok ? 'weImportError' : 'desc'}>{check ? check.text : m.checkKeyDesc}</span>
@@ -149,9 +149,6 @@ function ProfileCard({ p, onChange, onRemove }: {
             <Option key={v} value={v} text={visionLabel[v]}>{visionLabel[v]}</Option>
           ))}
         </Dropdown>
-        <span>{m.tagColor}</span>
-        <Swatches label={m.tagColor} color={p.tagColorCustom ? -1 : p.tagColor}
-          onPick={(i) => onChange({ tagColor: i, tagColorCustom: null })} />
       </div>
     </div>
   );
@@ -210,7 +207,7 @@ function InstructionsCard() {
   }, []);
   const save = async () => {
     const r = await api.setTeammateInstructions(draft);
-    setError(r.ok ? null : m.keyUnavailable);
+    setError(r.ok ? null : m.instructionsUnavailable);
     if (r.ok) setSaved(draft);
   };
   return (
@@ -253,17 +250,19 @@ function UsageRow() {
   );
 }
 
-function HistoryRows({ s, patch }: { s: TeammateSettings; patch: Patch }) {
+function HistoryRows({ s, patch, secrets }: { s: TeammateSettings; patch: Patch; secrets: boolean }) {
   const t = useText();
   const m = t.teammate.settings;
   const [confirm, setConfirm] = useState(false);
+  const [cleared, setCleared] = useState<boolean | null>(null);
   const h = s.history;
+  const description = !secrets ? m.secretsUnavailable : h.paused ? m.historyPaused : m.historyDesc;
   const keepLabel = (d: number | null) => (d === null ? m.keepForever : m.keepDays(d));
   return (
     <>
-      <SwitchRow icon={<History24Regular />} title={m.history} description={h.paused ? m.historyPaused : m.historyDesc}
-        checked={h.on} onChange={(on) => patch({ history: { ...h, on } })} />
-      <SettingRow icon={<History24Regular />} title={m.keepFor} dim={!h.on}>
+      <SwitchRow icon={<History24Regular />} title={m.history} description={description} dim={!secrets}
+        disabled={!secrets} checked={h.on && secrets} onChange={(on) => patch({ history: { ...h, on } })} />
+      <SettingRow icon={<History24Regular />} title={m.keepFor} dim={!h.on || !secrets}>
         <Dropdown style={{ minWidth: 170 }} value={keepLabel(h.keepDays)} selectedOptions={[String(h.keepDays)]}
           onOptionSelect={(_, d) => {
             const days = KEEP_DAYS.find((k) => String(k) === d.optionValue);
@@ -277,11 +276,19 @@ function HistoryRows({ s, patch }: { s: TeammateSettings; patch: Patch }) {
         {confirm ? (
           <Button appearance="primary" onClick={() => {
             setConfirm(false);
-            void api.teammateHistory('clear');
+            void api.teammateHistory('clear').then(setCleared);
           }}>{m.clearHistoryConfirm}</Button>
-        ) : <Button onClick={() => setConfirm(true)}>{m.clearHistory}</Button>}
+        ) : <Button onClick={() => {
+          setCleared(null);
+          setConfirm(true);
+        }}>{m.clearHistory}</Button>}
         <Button onClick={() => void api.teammateHistory('open')}>{m.openHistory}</Button>
       </SettingRow>
+      {cleared === null ? null : (
+        <div className={cleared ? 'rowNote' : 'rowError'} role="status">
+          {cleared ? m.historyCleared : m.historyClearFailed}
+        </div>
+      )}
     </>
   );
 }
@@ -296,6 +303,10 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
   const askLabel = triggerLabel(mate.askTrigger === 'same' ? s.trigger : mate.askTrigger, t.lang, api.platform);
   const ownAskKey = ASK_KEYS.find((k) => !sameTrigger(k, s.trigger) && !sameTrigger(k, s.emoteTrigger)) ?? 'win';
   const profileName = (id: string | null) => mate.profiles.find((p) => p.id === id)?.name ?? m.noProfile;
+  const [secrets, setSecrets] = useState(true);
+  useEffect(() => {
+    void api.getTeammateStatus().then((st) => setSecrets(st.secretsAvailable));
+  }, []);
 
   const addProfile = (id: ProviderId) => {
     const preset = PROVIDERS.find((p) => p.id === id);
@@ -379,7 +390,8 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         checked={same} onChange={(on) => patch({ askTrigger: on ? 'same' : ownAskKey })} />
       {same ? null : (
         <SettingRow icon={<Keyboard24Regular />} title={m.askKey} description={m.askKeyDesc}>
-          <TriggerPicker value={mate.askTrigger === 'same' ? s.trigger : mate.askTrigger} blocked={s.emoteTrigger}
+          <TriggerPicker value={mate.askTrigger === 'same' ? s.trigger : mate.askTrigger}
+            blocked={[s.emoteTrigger, s.trigger]}
             onChange={(k) => {
               if (k !== 'off') patch({ askTrigger: k });
             }} />
@@ -413,7 +425,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         checked={mate.emotes} onChange={(emotes) => patch({ emotes })} />
       <SwitchRow icon={<MusicNote224Regular />} title={m.receiptSound} description={m.receiptSoundDesc}
         checked={mate.receiptSound} onChange={(receiptSound) => patch({ receiptSound })} />
-      <HistoryRows s={mate} patch={patch} />
+      <HistoryRows s={mate} patch={patch} secrets={secrets} />
       <UsageRow />
       <p className="desc roomNote">{m.privacy}</p>
     </>

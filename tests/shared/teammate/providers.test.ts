@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
+import { needsKey, PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
 
 describe('providers', () => {
   it('lists every provider in the spec once', () => {
@@ -41,5 +41,19 @@ describe('providers', () => {
       expect(visionGuess(m), m).toBeNull();
     }
     expect(visionGuess('')).toBeNull();
+  });
+});
+
+describe('needsKey', () => {
+  it('lets local servers go without a key', () => {
+    expect(needsKey({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1' })).toBe(false);
+    expect(needsKey({ provider: 'lmstudio', baseUrl: 'http://192.168.1.5:1234/v1' })).toBe(false);
+    for (const url of ['http://localhost:8080/v1', 'http://127.0.0.1:8080', 'http://[::1]:8080/v1']) {
+      expect(needsKey({ provider: 'custom', baseUrl: url }), url).toBe(false);
+    }
+    for (const url of ['https://api.example.com/v1', 'http://localhost.example.com', 'not a url', '']) {
+      expect(needsKey({ provider: 'custom', baseUrl: url }), url).toBe(true);
+    }
+    expect(needsKey({ provider: 'openai', baseUrl: 'http://localhost:8080/v1' })).toBe(true);
   });
 });

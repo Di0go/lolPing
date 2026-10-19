@@ -539,8 +539,19 @@ describe('helpers', () => {
           needvision: 'Look it up', missing: 'Explain', enemyvision: 'Grab',
         },
         disabled: [],
+        onPing: false,
+        click: true,
       },
     });
+  });
+
+  it('asks on the ping wheel only while the teammate is on and shares the ping key', () => {
+    const same = { askTrigger: 'same', askClick: false };
+    expect(overlaySettings(normalizeSettings({ teammate: same })).ask).toMatchObject({ onPing: false, click: false });
+    const on = normalizeSettings({ features: { teammate: true }, teammate: same });
+    expect(overlaySettings(on).ask.onPing).toBe(true);
+    const own = normalizeSettings({ features: { teammate: true }, teammate: { askTrigger: 'win' } });
+    expect(overlaySettings(own).ask.onPing).toBe(false);
   });
 
   it('labels the ask wheel in the app language and lists the switched-off intents', () => {

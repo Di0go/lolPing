@@ -58,6 +58,8 @@ interface HarnessOptions {
   skewAfterCapture?: number;
   captureThrows?: boolean;
   noDisplay?: boolean;
+  /** Sees the key each adapter is made with. */
+  onAdapter?: (key: string) => void;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -101,8 +103,9 @@ function harness(opts: HarnessOptions = {}) {
         };
       },
     },
-    adapter: (p) => {
+    adapter: (p, key) => {
       adapters.push(p.id);
+      opts.onAdapter?.(key);
       return {
         turn: (req, h, signal) => {
           requests.push(req);
@@ -515,6 +518,37 @@ describe('AskController', () => {
     expect(h.appends.map((a) => a.threadId)).toEqual(['old']);
     expect(h.of('cardHidden')).toHaveLength(hidden); // the card stays and fills in
     expect(h.cards().at(-1)?.entries.map((e) => e.markdown)).toEqual(['', 'Long ago.', 'and now?', 'Still there.']);
+  });
+
+  it('asks a local server with no key', async () => {
+    const local: BuiltinProfile = { ...profile('fast'), provider: 'ollama', baseUrl: 'http://localhost:11434/v1' };
+    const keys: string[] = [];
+    const h = harness({
+      key: null, teammate: { profiles: [local] }, steps: [answers([call('say', { text: 'Local answer.' })])],
+      onAdapter: (key) => keys.push(key),
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(keys).toEqual(['']);
+    expect(h.bubbles().map((b) => b.line)).toEqual(['Local answer.']);
+  });
+
+  it('starts a new thread after History forgets the one it held', async () => {
+    // History off: the controller alone holds the thread, as it does in the app once History has been cleared.
+    const h = harness({
+      historyOff: true,
+      steps: [answers([call('say', { text: 'First.' })]), answers([call('say', { text: 'Second.' })])],
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    const held = h.ctl.currentThread()?.id;
+    expect(held).toBeDefined();
+    h.ctl.forgetThread('another-id');
+    expect(h.ctl.currentThread()?.id).toBe(held);
+    h.ctl.forgetThread(); // History was cleared
+    h.ctl.ask(spot('push'));
+    await flush();
+    expect(h.appends.map((a) => a.threadId)).toEqual([null, null]);
   });
 
   it('stops after 6 rounds and never captures for a look on the last one', async () => {

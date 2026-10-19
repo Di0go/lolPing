@@ -9,6 +9,7 @@ import { overviewToPhysical, receiptPoint, type Shot } from '../../shared/teamma
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, splitLine } from '../../shared/teammate/line';
+import { needsKey } from '../../shared/teammate/providers';
 import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import { applyLimits, parseToolCall, toolDefs, type Target, type ToolCall } from '../../shared/teammate/tools';
@@ -209,6 +210,12 @@ export class AskController extends EventEmitter {
     return this.thread ?? this.deps.history.current();
   }
 
+  /** History dropped a thread (`id`), or every thread (no id): asks no longer continue it. */
+  forgetThread(id?: string): void {
+    if (id === undefined || this.thread?.id === id) this.thread = null;
+    if (id === undefined || this.viewed?.id === id) this.viewed = null;
+  }
+
   /** History's Continue: the next push, reply or words go into this thread. */
   continueThread(record: ThreadRecord): void {
     this.thread = record;
@@ -297,8 +304,9 @@ export class AskController extends EventEmitter {
     const { deps } = this;
     const t = deps.settings().teammate;
     const profile = route(t, run.intent.def.deep);
-    const key = profile && deps.secrets.available() ? deps.secrets.key(profile.id) : null;
-    if (!profile || !key) return this.fail(run, 'noProfile');
+    const stored = profile && deps.secrets.available() ? deps.secrets.key(profile.id) : null;
+    const key = stored ?? (profile && !needsKey(profile) ? '' : null);
+    if (!profile || key === null) return this.fail(run, 'noProfile');
     if (!run.display) return this.fail(run, 'capture');
     run.profile = profile;
     run.machine.startGathering();

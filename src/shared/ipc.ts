@@ -192,6 +192,10 @@ export interface UsageMonth {
   output: number;
 }
 export type TeammateHistoryOp = 'open' | 'pause' | 'resume' | 'clear';
+/** false: the system can't encrypt, so keys can't be saved and history is off. */
+export interface TeammateStatus {
+  secretsAvailable: boolean;
+}
 export const TEAMMATE_HISTORY_OPS: readonly TeammateHistoryOp[] = ['open', 'pause', 'resume', 'clear'];
 
 // SETTINGS_CH lives in its own module so the settings preload can import it without sharing a chunk
@@ -256,5 +260,7 @@ export interface SettingsApi {
   /** Your instructions: the user's own text, so this window may read it back. */
   getTeammateInstructions(): Promise<string>;
   getTeammateUsage(): Promise<UsageMonth>;
-  teammateHistory(op: TeammateHistoryOp): Promise<void>;
+  /** Resolves true when it was carried out (Clear can fail). */
+  teammateHistory(op: TeammateHistoryOp): Promise<boolean>;
+  getTeammateStatus(): Promise<TeammateStatus>;
 }

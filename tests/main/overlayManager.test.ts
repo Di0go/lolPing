@@ -209,6 +209,57 @@ describe('OverlayManager ask wheel', () => {
     expect(asked).toHaveBeenCalledExactlyOnceWith({ displayId: 1, x: 500, y: 500, phys: { x: 500, y: 500 }, id: 'omw' });
   });
 
+  describe('on the ping key', () => {
+    const sameKey = (o: { intents?: object; askClick?: boolean } = {}) => mgr.updateSettings(overlaySettings({
+      ...DEFAULT_SETTINGS, features: { ...DEFAULT_SETTINGS.features, teammate: true },
+      teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'same', intents: o.intents ?? {}, askClick: o.askClick ?? true },
+    }));
+
+    it('asks with a ping-wheel release and shares nothing with the room', () => {
+      sameKey();
+      const shared = vi.fn();
+      const asked = vi.fn();
+      mgr.on('shared', shared);
+      mgr.on('askRelease', asked);
+      mgr.handle({ type: 'wheelOpen', x: 500, y: 500, wheel: 'ping' });
+      mgr.handle({ type: 'wheelRelease', x: 500, y: 360, wheel: 'ping' });
+      expect(sent(0)).toEqual([
+        ['wheel:open', { x: 500, y: 500, wheel: 'ask' }],
+        ['wheel:release', { x: 500, y: 360, wheel: 'ask' }],
+      ]);
+      expect(asked).toHaveBeenCalledExactlyOnceWith({ displayId: 1, x: 500, y: 500, phys: { x: 500, y: 500 }, id: 'danger' });
+      expect(shared).not.toHaveBeenCalled();
+    });
+
+    it('keeps a switched-off intent a normal ping for the room', () => {
+      sameKey({ intents: { danger: { enabled: false } } });
+      const shared = vi.fn();
+      const asked = vi.fn();
+      mgr.on('shared', shared);
+      mgr.on('askRelease', asked);
+      mgr.handle({ type: 'wheelOpen', x: 500, y: 500, wheel: 'ping' });
+      mgr.handle({ type: 'wheelRelease', x: 500, y: 360, wheel: 'ping' });
+      expect(asked).not.toHaveBeenCalled();
+      expect(sent(0).at(-1)).toEqual(['ping:spawn', { id: 'danger', x: 500, y: 500 }]);
+      expect(shared).toHaveBeenCalledExactlyOnceWith({ id: 'danger', displayId: 1, x: 500, y: 500 });
+    });
+
+    it('opens the words box for a ping click while ask with words is on, and pings otherwise', () => {
+      sameKey();
+      const shared = vi.fn();
+      const clicked = vi.fn();
+      mgr.on('shared', shared);
+      mgr.on('askClick', clicked);
+      mgr.handle({ type: 'click', x: 30, y: 40, wheel: 'ping' });
+      expect(clicked).toHaveBeenCalledExactlyOnceWith({ displayId: 1, x: 30, y: 40, phys: { x: 30, y: 40 } });
+      expect(shared).not.toHaveBeenCalled();
+      sameKey({ askClick: false });
+      mgr.handle({ type: 'click', x: 30, y: 40, wheel: 'ping' });
+      expect(clicked).toHaveBeenCalledOnce();
+      expect(shared).toHaveBeenCalledOnce();
+    });
+  });
+
   it('reports an ask click without sharing it or drawing a ping', () => {
     askOn();
     const shared = vi.fn();

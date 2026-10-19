@@ -268,6 +268,7 @@ describe('teammate IPC', () => {
   let secrets: SecretStore | null;
   let listModels: (key: string) => Promise<string[]>;
   let historyOps: string[];
+  let clearFails = false;
 
   function registerTeammate(): void {
     h.handlers.clear();
@@ -278,7 +279,10 @@ describe('teammate IPC', () => {
         secrets: () => secrets,
         adapter: (_p: BuiltinProfile, key: string) => ({ listModels: () => listModels(key) }),
         usage: () => ({ month: '2026-10', input: 10, output: 2 }),
-        history: (op: string) => void historyOps.push(op),
+        history: async (op: string) => {
+          historyOps.push(op);
+          return op !== 'clear' || !clearFails;
+        },
       },
     } as unknown as SettingsIpcDeps);
   }
@@ -286,6 +290,7 @@ describe('teammate IPC', () => {
   beforeEach(() => {
     secrets = new SecretStore(join(mkdtempSync(join(tmpdir(), 'lolping-ipc-secrets-')), 'secrets'), crypto);
     listModels = async () => ['gpt-4o', 'gpt-4o-mini'];
+    clearFails = false;
     store.update({
       features: { ...store.get().features, teammate: true }, teammate: { ...store.get().teammate, profiles: [PROFILE] },
     });
@@ -330,12 +335,50 @@ describe('teammate IPC', () => {
     expect(await call(SETTINGS_CH.teammateInstructions)).toBe('Call me Sam.');
     for (const op of ['format', null, { op: 'clear' }]) await call(SETTINGS_CH.teammateHistory, op);
     expect(historyOps).toEqual([]);
-    await call(SETTINGS_CH.teammateHistory, 'clear');
+    expect(await call(SETTINGS_CH.teammateHistory, 'clear')).toBe(true);
     expect(historyOps).toEqual(['clear']);
+    clearFails = true;
+    expect(await call(SETTINGS_CH.teammateHistory, 'clear')).toBe(false);
+    expect(await call(SETTINGS_CH.teammateHistory, 'format')).toBe(false);
 
     secrets = null; // the feature is off: nothing is stored
     expect(await call(SETTINGS_CH.teammateSetKey, 'p1', KEY)).toEqual({ ok: false, error: 'unavailable' });
     expect(await call(SETTINGS_CH.teammateHasKey, 'p1')).toBe(false);
     expect(await call(SETTINGS_CH.teammateInstructions)).toBe('');
+  });
+});
+
+describe('teammate IPC without keys', () => {
+  it('checks a local server with no key, and says whether keys and history can be encrypted', async () => {
+    const keys: string[] = [];
+    const local: BuiltinProfile = {
+      id: 'local', kind: 'builtin', name: 'Ollama', tagColor: 3, tagColorCustom: null, provider: 'ollama',
+      protocol: 'openai', baseUrl: 'http://localhost:11434/v1', model: '', vision: 'auto',
+    };
+    let available = true;
+    const secrets = {
+      available: () => available, key: () => null, hasKey: () => false,
+      setKey: async () => undefined, instructions: () => '', setInstructions: async () => undefined,
+    };
+    let on = true;
+    store.update({ teammate: { ...store.get().teammate, profiles: [local] } });
+    h.handlers.clear();
+    registerSettingsIpc({
+      store, library, text: () => strings('en'), platform: 'win', room: {},
+      teammate: {
+        secrets: () => (on ? secrets : null),
+        adapter: (_p: BuiltinProfile, key: string) => ({ listModels: async () => (keys.push(key), ['llama3.2']) }),
+        usage: () => ({ month: '2026-10', input: 0, output: 0 }),
+        history: async () => true,
+      },
+    } as unknown as SettingsIpcDeps);
+    expect(await call(SETTINGS_CH.teammateCheckKey, 'local')).toEqual({ ok: true, models: ['llama3.2'] });
+    expect(keys).toEqual(['']);
+
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: true });
+    available = false;
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false });
+    on = false;
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false });
   });
 });

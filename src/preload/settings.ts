@@ -51,6 +51,7 @@ const api: SettingsApi = {
   getTeammateInstructions: () => ipcRenderer.invoke(SETTINGS_CH.teammateInstructions),
   getTeammateUsage: () => ipcRenderer.invoke(SETTINGS_CH.teammateUsage),
   teammateHistory: (op) => ipcRenderer.invoke(SETTINGS_CH.teammateHistory, op),
+  getTeammateStatus: () => ipcRenderer.invoke(SETTINGS_CH.teammateStatus),
 };
 
 contextBridge.exposeInMainWorld('settingsApi', api);

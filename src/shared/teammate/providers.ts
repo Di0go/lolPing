@@ -41,6 +41,19 @@ export const PROVIDERS: readonly ProviderPreset[] = [
   { id: 'custom', name: 'Custom', group: 'cloud', protocol: 'openai', baseUrl: '' },
 ];
 
+const LOCAL_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
+
+/** Local servers take no key: Ollama and LM Studio always, and a Custom profile pointed at this computer. */
+export function needsKey(p: { provider: ProviderId; baseUrl: string }): boolean {
+  if (p.provider === 'ollama' || p.provider === 'lmstudio') return false;
+  if (p.provider !== 'custom') return true;
+  try {
+    return !LOCAL_HOSTS.includes(new URL(p.baseUrl).hostname);
+  } catch {
+    return true;
+  }
+}
+
 // First match wins, so the vision variants come before the text-only names they contain. A "no" is only for models
 // known to refuse images; anything unsure stays unknown (null), because a wrong no silently drops the screenshot.
 const VISION_PATTERNS: readonly [RegExp, boolean][] = [

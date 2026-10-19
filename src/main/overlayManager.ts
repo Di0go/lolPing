@@ -138,9 +138,10 @@ export class OverlayManager extends EventEmitter {
         const p = physicalToLocal(ev.x, ev.y, this.maps);
         if (!p) return;
         this.wheelDisplay = p.displayId;
-        this.wheelKind = ev.wheel;
+        // With the ask key on the ping key, the ping wheel is the ask wheel.
+        this.wheelKind = ev.wheel === 'ping' && this.settings.ask.onPing ? 'ask' : ev.wheel;
         this.wheelAt = { local: p, phys: { x: ev.x, y: ev.y } };
-        this.send(p.displayId, 'wheel:open', { x: p.x, y: p.y, wheel: ev.wheel });
+        this.send(p.displayId, 'wheel:open', { x: p.x, y: p.y, wheel: this.wheelKind });
         break;
       }
       case 'wheelMove':
@@ -159,7 +160,8 @@ export class OverlayManager extends EventEmitter {
       case 'click': {
         const p = physicalToLocal(ev.x, ev.y, this.maps);
         if (!p) break;
-        if (ev.wheel === 'ask') {
+        const ask = ev.wheel === 'ask' || (ev.wheel === 'ping' && this.settings.ask.onPing && this.settings.ask.click);
+        if (ask) {
           this.emit('askClick', { displayId: p.displayId, x: p.x, y: p.y, phys: { x: ev.x, y: ev.y } } satisfies AskClick);
           break;
         }
@@ -170,10 +172,7 @@ export class OverlayManager extends EventEmitter {
           this.emit('sharedEmote', { ref, displayId: p.displayId, x: p.x, y: p.y } satisfies SharedEmote);
           break;
         }
-        const keep = this.settings.keepLastPing ? { keep: true } : {};
-        this.send(p.displayId, 'ping:spawn', { id: this.settings.clickPingId, x: p.x, y: p.y, ...keep });
-        this.unkeepElsewhere(p.displayId);
-        this.emit('shared', { id: this.settings.clickPingId, displayId: p.displayId, x: p.x, y: p.y } satisfies SharedPing);
+        this.placeOwnPing(this.settings.clickPingId, p);
         break;
       }
       case 'cancel':
@@ -308,13 +307,26 @@ export class OverlayManager extends EventEmitter {
     this.wheelAt = null;
   }
 
+  /** Our own ping placed from here, kept if that setting is on, and shared with the room. */
+  private placeOwnPing(id: PingId, p: LocalPoint): void {
+    const keep = this.settings.keepLastPing ? { keep: true } : {};
+    this.send(p.displayId, 'ping:spawn', { id, x: p.x, y: p.y, ...keep });
+    this.unkeepElsewhere(p.displayId);
+    this.emit('shared', { id, displayId: p.displayId, x: p.x, y: p.y } satisfies SharedPing);
+  }
+
   /** The slice is worked out here from the same geometry the wheel draws, so the overlay has nothing to report. */
   private askReleased(at: LocalPoint): void {
     const open = this.wheelAt;
     if (!open || open.local.displayId !== at.displayId) return;
     const slice = pickSlice(at.x - open.local.x, at.y - open.local.y, (WHEEL.innerR * this.settings.wheelSizePx) / WHEEL.size);
     const id = slice >= 0 ? this.settings.wheel[slice] : undefined;
-    if (id === undefined || this.settings.ask.disabled.includes(id)) return;
+    if (id === undefined) return;
+    if (this.settings.ask.disabled.includes(id)) {
+      // On the ping key a switched-off intent is just a ping, as it was before the teammate.
+      if (this.settings.ask.onPing) this.placeOwnPing(id, open.local);
+      return;
+    }
     const { displayId, x, y } = open.local;
     this.emit('askRelease', { displayId, x, y, phys: open.phys, id } satisfies AskRelease);
   }

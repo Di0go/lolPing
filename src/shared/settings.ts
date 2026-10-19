@@ -3,7 +3,7 @@ import {
   CUSTOM_NAME_MAX, MAX_CUSTOM_EMOTES, customHash, isCustomRef, isEmoteFx, normalizeClickEmote, normalizeEmoteWheel,
   type CustomEmote, type EmoteRef,
 } from './emotes';
-import { DEFAULT_FEATURES, normalizeFeatures, type Features } from './features';
+import { DEFAULT_FEATURES, featureOn, normalizeFeatures, type Features } from './features';
 import { WHEEL } from './geometry';
 import { LANGUAGE_PREFS, strings, type Lang, type LanguagePref } from './i18n';
 import { HOTKEY_PRIMARY_MODS, MOD, type Hotkey, vkLabel } from './keys';
@@ -385,7 +385,12 @@ export type OverlaySettings = Pick<
   | 'emoteWheel' | 'clickEmoteId' | 'emoteSizePx' | 'emoteSound' | 'customEmotes'
 > & {
   /** The ask wheel: the teammate's name tag, each slice's intent label, and the slices whose intent is off. */
-  ask: { tag: PingTag; labels: Partial<Record<PingId, string>>; disabled: PingId[] };
+  ask: {
+    tag: PingTag; labels: Partial<Record<PingId, string>>; disabled: PingId[];
+    /** The ask key is the ping key: the ping wheel asks, and a ping click opens the words box while `click` is on. */
+    onPing: boolean;
+    click: boolean;
+  };
 };
 
 /** How loud lolPing's sounds play, 0 to 1: the volume setting, or 0 when muted. */
@@ -409,5 +414,8 @@ function askWheel(s: Settings, lang: Lang): OverlaySettings['ask'] {
     labels[id] = intent.label;
     if (!intent.enabled) disabled.push(id);
   }
-  return { tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled };
+  return {
+    tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled,
+    onPing: featureOn(s, 'teammate') && t.askTrigger === 'same', click: t.askClick,
+  };
 }

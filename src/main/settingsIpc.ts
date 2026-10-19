@@ -3,13 +3,14 @@ import { isCustomRef, isEmoteFx, isEmoteRefShape, type CustomEmote, type EmoteRe
 import type { Strings } from '../shared/i18n';
 import {
   SETTINGS_CH, TEAMMATE_HISTORY_OPS, type About, type AppStatus, type CheckKeyResult, type SecretResult,
-  type SetSettingsResult, type TeammateHistoryOp, type UsageMonth,
+  type SetSettingsResult, type TeammateHistoryOp, type TeammateStatus, type UsageMonth,
 } from '../shared/ipc';
 import { hotkeyLabel, hotkeyToAccelerator, type Hotkey } from '../shared/keys';
 import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
 import { panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
+import { needsKey } from '../shared/teammate/providers';
 import type { BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
 import { emoteFileFrom, type EmoteLibrary } from './emoteLibrary';
@@ -61,7 +62,8 @@ export interface SettingsIpcDeps {
     secrets(): Pick<SecretStore, 'available' | 'key' | 'hasKey' | 'setKey' | 'instructions' | 'setInstructions'> | null;
     adapter(p: BuiltinProfile, key: string): Pick<ProviderAdapter, 'listModels'>;
     usage(): UsageMonth;
-    history(op: TeammateHistoryOp): void | Promise<void>;
+    /** Resolves true when the operation was carried out. */
+    history(op: TeammateHistoryOp): Promise<boolean>;
   };
 }
 
@@ -223,8 +225,8 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
     const t = d.text().teammate.settings;
     const profile = profileOf(id);
     if (!profile) return { ok: false, error: 'other', message: t.checkNoProfile };
-    const key = d.teammate.secrets()?.key(profile.id) ?? null;
-    if (!key) return { ok: false, error: 'auth', message: t.checkNoKey };
+    const key = d.teammate.secrets()?.key(profile.id) ?? (needsKey(profile) ? null : '');
+    if (key === null) return { ok: false, error: 'auth', message: t.checkNoKey };
     try {
       const models = await d.teammate.adapter(profile, key).listModels(AbortSignal.timeout(CHECK_KEY_MS));
       return { ok: true, models };
@@ -232,7 +234,7 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
       const kind = err instanceof ProviderError ? err.kind : 'other';
       const error = kind === 'auth' || kind === 'network' ? kind : 'other';
       // Some providers repeat the refused key in their message.
-      const message = err instanceof Error ? err.message.split(key).join('…') : '';
+      const message = err instanceof Error ? (key ? err.message.split(key).join('…') : err.message) : '';
       return { ok: false, error, message };
     }
   });
@@ -244,10 +246,13 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
   });
   ipcMain.handle(SETTINGS_CH.teammateInstructions, (): string => d.teammate.secrets()?.instructions() ?? '');
   ipcMain.handle(SETTINGS_CH.teammateUsage, (): UsageMonth => d.teammate.usage());
-  ipcMain.handle(SETTINGS_CH.teammateHistory, async (_e, op: unknown) => {
+  ipcMain.handle(SETTINGS_CH.teammateHistory, async (_e, op: unknown): Promise<boolean> => {
     const known = TEAMMATE_HISTORY_OPS.find((o) => o === op);
-    if (known) await d.teammate.history(known);
+    return known ? d.teammate.history(known).catch(() => false) : false;
   });
+  ipcMain.handle(SETTINGS_CH.teammateStatus, (): TeammateStatus => ({
+    secretsAvailable: d.teammate.secrets()?.available() ?? false,
+  }));
 }
 
 function isWebUrl(url: string): boolean {
