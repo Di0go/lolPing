@@ -168,4 +168,16 @@ describe('HistoryStore', () => {
     writeFileSync(join(d, t.id + '.thread'), crypto.encryptString(JSON.stringify(bad)));
     expect(await new HistoryStore(d, crypto, () => 1000).list()).toEqual([]);
   });
+
+  it('has the record ready from current() once setCurrent resolves', async () => {
+    const d = join(root(), 'history');
+    const seed = new HistoryStore(d, fakeCrypto(), () => 1000);
+    const t = await seed.append(null, entry('hello'), meta);
+    const store = new HistoryStore(d, fakeCrypto(), () => 1000);
+    expect(store.current()).toBeNull();
+    await store.setCurrent(t.id);
+    expect(store.current()?.entries[0].line).toBe('hello');
+    await store.setCurrent(null);
+    expect(store.current()).toBeNull();
+  });
 });

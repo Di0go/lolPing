@@ -116,15 +116,16 @@ export class HistoryStore {
     return this.currentRecord !== null && this.currentRecord.id === this.currentId ? this.currentRecord : null;
   }
 
-  setCurrent(id: string | null): void {
+  /** Resolves once the thread is loaded (or cleared), so current() is right after the await. */
+  async setCurrent(id: string | null): Promise<void> {
     this.currentId = id !== null && ID_RE.test(id) ? id : null;
     this.currentRecord = null;
-    if (this.currentId === null) return;
     const wanted = this.currentId;
-    void this.enqueue(async () => {
+    if (wanted === null) return;
+    await this.enqueue(async () => {
       const t = await this.read(wanted);
       if (this.currentId === wanted) this.currentRecord = t;
-    }).catch(() => undefined);
+    });
   }
 
   append(
