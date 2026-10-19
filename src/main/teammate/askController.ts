@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { readFile, rm } from 'node:fs/promises';
 import { strings, type Lang } from '../../shared/i18n';
@@ -33,7 +34,7 @@ export interface AskDeps {
   adapter: (p: BuiltinProfile, key: string) => ProviderAdapter;
   overlay: Pick<OverlayManager,
     'spawnMate' | 'spawnMateEmote' | 'mateSaid' | 'clearMate' | 'fadeMate' | 'setMateTicket' | 'setCaptureExcluded'
-    | 'displayAt' | 'toLocal' | 'toDip'>;
+    | 'displayAt' | 'toLocal' | 'toDip' | 'primaryDip'>;
   windows: Pick<MateWindows,
     'showBubble' | 'updateBubble' | 'hideBubble' | 'showCard' | 'updateCard' | 'hideCard' | 'setCaptureExcluded'>;
   history: Pick<HistoryStore, 'append' | 'current'>;
@@ -137,6 +138,8 @@ export class AskController extends EventEmitter {
   private readonly pingTimers = new Set<Timer>();
   private nextPingAt = 0;
   private excluded = 0;
+  /** The thread asks continue: kept here so it works with history off or paused, and across a pause. */
+  private thread: ThreadRecord | null = null;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -162,7 +165,7 @@ export class AskController extends EventEmitter {
     this.clearTimer('fade');
     this.deps.overlay.setMateTicket(machine.id);
 
-    const current = this.deps.history.current();
+    const current = this.currentThread();
     const onTeammate = prev !== null && near(spot.phys, prev.marks);
     const thread = threadAction(spot.intent, current, { onTeammate, newThread: words?.newThread }) === 'continue'
       ? current : null;
@@ -185,7 +188,17 @@ export class AskController extends EventEmitter {
     this.bubbleEndsAt = 0;
     this.emit('state', true);
     if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, true));
-    void this.go(run);
+    this.go(run).catch((err: unknown) => console.warn('[teammate] ask failed:', err));
+  }
+
+  /** The thread the next ask continues: the last answer's, or one History made current. */
+  currentThread(): ThreadRecord | null {
+    return this.thread ?? this.deps.history.current();
+  }
+
+  /** History's Continue: the next push, reply or words go into this thread. */
+  continueThread(record: ThreadRecord): void {
+    this.thread = record;
   }
 
   /** What the bubble and card ask for; the rest (copy, link, history) is the app's to handle. */
@@ -283,7 +296,8 @@ export class AskController extends EventEmitter {
       run.machine.answering();
       run.text += result.text;
       turns.push({ role: 'assistant', text: result.text, calls: result.calls });
-      const step = await this.play(run, result.calls, new Set(tools.map((d) => d.name)));
+      const last = round === MAX_ROUNDS - 1;
+      const step = await this.play(run, result.calls, new Set(tools.map((d) => d.name)), last);
       if (!this.alive(run)) return;
       if (!step.again) break;
       turns.push({ role: 'tool', results: step.results });
@@ -305,36 +319,55 @@ export class AskController extends EventEmitter {
     };
   }
 
+  /**
+   * Each deadline fails with its own reason when it fires. Timers run on libuv's cached loop time, which can be a few ms
+   * behind now(), so re-checking the clock here (machine.tick) could find the deadline not yet due and never fire.
+   */
   private startDeadlines(run: Run): void {
-    for (const ms of [RECEIVE_MS, TOTAL_MS]) {
-      run.deadlines.push(setTimeout(() => {
-        if (!this.alive(run)) return;
-        const reason = run.machine.tick();
-        if (reason) this.fail(run, reason);
-      }, ms));
+    run.deadlines.push(
+      this.timer(RECEIVE_MS, () => {
+        if (this.alive(run) && run.machine.phase === 'sent') this.fail(run, 'notReceived');
+      }),
+      this.timer(TOTAL_MS, () => {
+        if (this.alive(run)) this.fail(run, 'timeout');
+      }),
+    );
+  }
+
+  /** A timer whose callback can't throw into the main process. */
+  private timer(ms: number, fn: () => void): Timer {
+    return setTimeout(() => {
+      try {
+        fn();
+      } catch (err) {
+        console.warn('[teammate]', err);
+      }
+    }, ms);
+  }
+
+  private exclude(on: boolean): void {
+    for (const target of [this.deps.overlay, this.deps.windows]) {
+      try {
+        target.setCaptureExcluded(on);
+      } catch (err) {
+        console.warn('[teammate] capture exclusion:', err);
+      }
     }
   }
 
   /** Overlays and teammate windows stay out of the grab; a count, so an older ask's capture can't let them back in. */
   private async capture(run: Run, spots: Point[]): Promise<Capture> {
-    const { overlay, windows, context } = this.deps;
     const rect = run.display?.rect;
     if (!rect) throw new ContextError('capture', 'no display under the spot');
-    this.excluded += 1;
-    if (this.excluded === 1) {
-      overlay.setCaptureExcluded(true);
-      windows.setCaptureExcluded(true);
-    }
     try {
-      const cap = await context.capture({ display: rect, spots, dir: this.deps.tempDir() }, run.abort.signal);
+      this.excluded += 1;
+      if (this.excluded === 1) this.exclude(true);
+      const cap = await this.deps.context.capture({ display: rect, spots, dir: this.deps.tempDir() }, run.abort.signal);
       run.files.push(cap.overviewPath, ...cap.zooms.map((z) => z.path));
       return cap;
     } finally {
       this.excluded -= 1;
-      if (this.excluded === 0) {
-        overlay.setCaptureExcluded(false);
-        windows.setCaptureExcluded(false);
-      }
+      if (this.excluded === 0) this.exclude(false);
     }
   }
 
@@ -357,6 +390,7 @@ export class AskController extends EventEmitter {
     run: Run,
     raws: RawCall[],
     offered: ReadonlySet<string>,
+    lastRound: boolean,
   ): Promise<{ again: boolean; results: { id: string; content: Part[] }[] }> {
     const parsed = raws.map((raw) => ({ raw, call: parseToolCall(raw.name, raw.args) }));
     for (const p of parsed) if (p.call) run.calls.push(p.call);
@@ -387,6 +421,11 @@ export class AskController extends EventEmitter {
     for (const { call } of valid) if (call.tool === 'emote') this.placeEmote(run, call);
     for (const { raw, call } of valid) {
       if (call.tool !== 'look') continue;
+      // No round follows the last one to read a look, so don't capture for it.
+      if (lastRound) {
+        results.set(raw, NOT_AVAILABLE);
+        continue;
+      }
       again = true;
       results.set(raw, await this.look(run, call));
       if (!this.alive(run)) break;
@@ -443,10 +482,10 @@ export class AskController extends EventEmitter {
       show();
       return;
     }
-    const timer = setTimeout(() => {
+    const timer = this.timer(when - now, () => {
       this.pingTimers.delete(timer);
       show();
-    }, when - now);
+    });
     this.pingTimers.add(timer);
   }
 
@@ -507,7 +546,15 @@ export class AskController extends EventEmitter {
       title: (run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
       profile: run.profile?.name ?? '',
     };
-    await this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => undefined);
+    // The thread is kept here first, so it continues even when history is off and append saves nothing.
+    const now = this.deps.now();
+    const local: ThreadRecord = run.thread
+      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry] }
+      : { id: randomUUID(), ...meta, started: now, lastActivity: now, entries: [entry] };
+    this.thread = local;
+    const saved = await this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => null);
+    // A saved record replaces ours only when it is the same thread: with history off, append makes a new one each time.
+    if (saved && this.thread === local && (run.thread === null || saved.id === run.thread.id)) this.thread = saved;
   }
 
   private fail(run: Run, reason: AskFailure): void {
@@ -543,10 +590,10 @@ export class AskController extends EventEmitter {
     this.clearTimer('bubble');
     const ms = bubbleMs(line);
     this.bubbleEndsAt = this.deps.now() + ms;
-    this.bubbleTimer = setTimeout(() => {
+    this.bubbleTimer = this.timer(ms, () => {
       this.bubbleTimer = null;
       this.hideBubble();
-    }, ms);
+    });
   }
 
   private bubbleState(run: Run, line: string): BubbleState {
@@ -583,8 +630,8 @@ export class AskController extends EventEmitter {
   }
 
   private popupAt(run: Run): Point {
-    const dip = this.deps.overlay.toDip(run.receipt) ?? { x: 0, y: 0 };
-    return { x: dip.x + BUBBLE_OFFSET.x, y: dip.y + BUBBLE_OFFSET.y };
+    const dip = this.deps.overlay.toDip(run.receipt);
+    return dip ? { x: dip.x + BUBBLE_OFFSET.x, y: dip.y + BUBBLE_OFFSET.y } : this.deps.overlay.primaryDip();
   }
 
   /** The receipt fades with the bubble, once the answer's pings have played out too. */
@@ -593,12 +640,12 @@ export class AskController extends EventEmitter {
     const pingMs = this.deps.settings().pingDurationS * 1000;
     const pingsEnd = this.nextPingAt > 0 ? this.nextPingAt - PING_GAP_MS + pingMs : 0;
     this.clearTimer('fade');
-    this.fadeTimer = setTimeout(() => {
+    this.fadeTimer = this.timer(Math.max(0, this.bubbleEndsAt - now, pingsEnd - now), () => {
       this.fadeTimer = null;
       if (!this.marksShown) return;
       this.deps.overlay.fadeMate();
       this.marksShown = false;
-    }, Math.max(0, this.bubbleEndsAt - now, pingsEnd - now));
+    });
   }
 
   private clearMarks(): void {

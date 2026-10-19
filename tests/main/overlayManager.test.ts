@@ -270,6 +270,10 @@ describe('OverlayManager ask wheel', () => {
     expect(mgr.toDip({ x: 1920 + 100, y: 60 })).toEqual({ x: 1920 + 50, y: 30 });
   });
 
+  it('falls back to the middle of the main display for the teammate\'s windows', () => {
+    expect(mgr.primaryDip()).toEqual({ x: 960, y: 540 });
+  });
+
   it('finds the display under a physical point and maps it into that overlay', () => {
     expect(mgr.displayAt({ x: 1920 + 10, y: 10 })).toEqual({ id: 2, rect: { x: 1920, y: 0, w: 1280, h: 1024 } });
     expect(mgr.toLocal({ x: 1920 + 10, y: 30 })).toEqual({ displayId: 2, x: 10, y: 30 });

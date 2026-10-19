@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AskController, type AskDeps } from '../../../src/main/teammate/askController';
+import { ContextError } from '../../../src/main/teammate/contextClient';
 import type { RawCall, StreamHandlers, Turn, TurnResult } from '../../../src/main/teammate/providers/types';
 import { strings } from '../../../src/shared/i18n';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
@@ -14,6 +15,7 @@ import type { BubbleState, CardState } from '../../../src/shared/teammateIpc';
 /** One physical display at 200 %: overlay CSS px and DIPs are half the physical px; the overview is half too. */
 const DISPLAY = { x: 0, y: 0, w: 3200, h: 2000 };
 const TAG = { name: 'AI', color: 3, rgb: null };
+const PRIMARY = { x: 960, y: 540 };
 const t = strings('en').teammate;
 
 const profile = (id: string): BuiltinProfile => ({
@@ -46,7 +48,19 @@ const hangs = (opts: { accept: boolean }): Step => (_req, h, signal) => {
 type Entry = [string, unknown];
 type DrawnPing = { id: string; x: number; y: number; silent?: boolean };
 
-function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | null; steps?: Step[] } = {}) {
+interface HarnessOptions {
+  teammate?: Partial<TeammateSettings>;
+  key?: string | null;
+  steps?: Step[];
+  /** History is off: append returns a fresh unsaved record each time and nothing becomes current (HistoryStore). */
+  historyOff?: boolean;
+  /** now() runs this far ahead of the timers from the capture until the request goes out (libuv's cached time). */
+  skewAfterCapture?: number;
+  captureThrows?: boolean;
+  noDisplay?: boolean;
+}
+
+function harness(opts: HarnessOptions = {}) {
   const log: Entry[] = [];
   const steps = [...(opts.steps ?? [])];
   const requests: Req[] = [];
@@ -57,6 +71,8 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
   const states: boolean[] = [];
   let current: ThreadRecord | null = null;
   let captures = 0;
+  let skew = 0;
+  const popupsAt: Array<{ x: number; y: number }> = [];
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -76,6 +92,8 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
       capture: async (req) => {
         captures += 1;
         log.push(['capture', req.spots]);
+        if (opts.captureThrows) throw new ContextError('capture', 'no screen');
+        skew = opts.skewAfterCapture ?? 0;
         return {
           overviewPath: `ov${captures}.jpg`,
           overview: { w: 1600, h: 1000 },
@@ -88,6 +106,7 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
       return {
         turn: (req, h, signal) => {
           requests.push(req);
+          skew = 0; // sentAt was read ahead of the timers' clock
           signals.push(signal);
           const step = steps.shift();
           return step ? step(req, h, signal) : Promise.resolve({ text: '', calls: [] });
@@ -103,12 +122,16 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
       fadeMate: () => log.push(['fade', null]),
       setMateTicket: (id) => tickets.push(id),
       setCaptureExcluded: (on) => log.push(['overlaysExcluded', on]),
-      displayAt: () => ({ id: 1, rect: DISPLAY }),
-      toLocal: (p) => ({ displayId: 1, x: p.x / 2, y: p.y / 2 }),
-      toDip: (p) => ({ x: p.x / 2, y: p.y / 2 }),
+      displayAt: () => (opts.noDisplay ? null : { id: 1, rect: DISPLAY }),
+      toLocal: (p) => (opts.noDisplay ? null : { displayId: 1, x: p.x / 2, y: p.y / 2 }),
+      toDip: (p) => (opts.noDisplay ? null : { x: p.x / 2, y: p.y / 2 }),
+      primaryDip: () => PRIMARY,
     },
     windows: {
-      showBubble: (_at, s) => log.push(['bubble', s]),
+      showBubble: (at, s) => {
+        popupsAt.push(at);
+        log.push(['bubble', s]);
+      },
       updateBubble: (s) => log.push(['bubble', s]),
       hideBubble: () => log.push(['bubbleHidden', null]),
       showCard: (_at, s) => log.push(['card', s]),
@@ -120,6 +143,9 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
       current: () => current,
       append: async (threadId, entry, meta) => {
         appends.push({ threadId, line: entry.line, markdown: entry.markdown });
+        if (opts.historyOff) {
+          return { id: `unsaved${appends.length}`, ...meta, started: 0, lastActivity: 0, entries: [entry] };
+        }
         current = threadId !== null && current?.id === threadId
           ? { ...current, entries: [...current.entries, entry] }
           : { id: `t${appends.length}`, ...meta, started: 0, lastActivity: 0, entries: [entry] };
@@ -128,7 +154,7 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
     },
     tempDir: () => 'tmp',
     thumbnail: () => 'thumb',
-    now: () => Date.now(),
+    now: () => Date.now() + skew,
     usage: () => undefined,
     files: { read: async (p) => Buffer.from(p), remove: async () => undefined },
   };
@@ -137,7 +163,7 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
 
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
-    ctl, log, requests, signals, adapters, tickets, appends, states, of,
+    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -146,7 +172,7 @@ function harness(opts: { teammate?: Partial<TeammateSettings>; key?: string | nu
 
 /** Lets every pending promise in the ask settle, without moving the clock. */
 async function flush(): Promise<void> {
-  for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  for (let i = 0; i < 200; i += 1) await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -416,6 +442,81 @@ describe('AskController', () => {
     const card = h.cards().at(-1);
     expect(card?.entries.map((e) => e.markdown)).toEqual(['', long, 'And B9?', 'B9 is 8.2.']);
     expect(card?.streaming).toBe(false);
+  });
+
+  it('fails a provider that never answers even when the clock runs a few ms behind the timers', async () => {
+    for (const accept of [false, true]) {
+      const h = harness({ skewAfterCapture: 5, steps: [hangs({ accept })] });
+      h.ctl.ask(spot('danger'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(accept ? 60_000 : 10_000);
+      expect(h.signals[0].aborted).toBe(true);
+      expect(h.bubbles().map((b) => b.line)).toEqual([accept ? t.ask.failed.timeout : t.ask.failed.notReceived]);
+      expect(h.ctl.running).toBe(false);
+    }
+  });
+
+  it('continues the thread with push while history is off, and labels the bubble', async () => {
+    const h = harness({
+      historyOff: true,
+      steps: [
+        answers([call('say', { text: 'First answer.' })]),
+        answers([call('say', { text: 'More detail.' })]),
+        answers([call('say', { text: 'Even more.' })]),
+      ],
+    });
+    h.ctl.ask(spot('missing'));
+    await flush();
+    h.ctl.ask(spot('push', 1010, 805));
+    await flush();
+    h.ctl.cancel('pause'); // a pause clears the screen but not the thread
+    h.ctl.ask(spot('push', 1500, 900));
+    await flush();
+    expect(h.bubbles().map((b) => b.thread)).toEqual([null, 'First answer.', 'First answer.']);
+    const turn = h.requests[2].turns[0];
+    const earlier = turn.role === 'user' ? turn.parts.flatMap((p) => ('text' in p ? [p.text] : [])) : [];
+    expect(earlier.filter((s) => s.startsWith('Earlier ask'))).toHaveLength(2);
+    expect(h.ctl.currentThread()?.entries.map((e) => e.line)).toEqual(['First answer.', 'More detail.', 'Even more.']);
+  });
+
+  it('continues a thread picked in History', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Back to it.' })])] });
+    const picked: ThreadRecord = {
+      id: 'old', title: 'Old thread', started: 0, lastActivity: 0, app: '', windowTitle: '', profile: 'fast',
+      entries: [{ at: 0, intent: 'missing', words: null, line: 'Long ago.', markdown: '', thumb: '' }],
+    };
+    h.ctl.continueThread(picked);
+    h.ctl.ask(spot('push'));
+    await flush();
+    expect(h.bubbles().map((b) => b.thread)).toEqual(['Old thread']);
+    expect(h.appends.map((a) => a.threadId)).toEqual(['old']);
+  });
+
+  it('stops after 6 rounds and never captures for a look on the last one', async () => {
+    const look = (n: number) => answers([call('look', { x: 500, y: 300, w: 200, h: 150 }, `l${n}`)]);
+    const h = harness({ steps: [1, 2, 3, 4, 5, 6, 7].map(look) });
+    h.ctl.ask(spot('needvision'));
+    await flush();
+    expect(h.requests).toHaveLength(6);
+    expect(h.of('capture')).toHaveLength(6); // the ask's own capture and the looks of rounds 1 to 5
+    expect(h.ctl.running).toBe(false);
+  });
+
+  it('lets the overlays and windows back into captures when a capture throws', async () => {
+    const h = harness({ captureThrows: true });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.of('overlaysExcluded')).toEqual([true, false]);
+    expect(h.of('windowsExcluded')).toEqual([true, false]);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.capture]);
+  });
+
+  it('shows the line on the primary display when no display is under the spot', async () => {
+    const h = harness({ noDisplay: true });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.capture]);
+    expect(h.popupsAt).toEqual([PRIMARY]);
   });
 
   it('reports a provider that refuses images as a failure line', async () => {

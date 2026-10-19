@@ -252,6 +252,12 @@ export class OverlayManager extends EventEmitter {
     return p ? { x: p.x, y: p.y } : null;
   }
 
+  /** The middle of the main display in DIPs: where the teammate's windows go when no display is under a spot. */
+  primaryDip(): { x: number; y: number } {
+    const b = screen.getPrimaryDisplay().bounds;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  }
+
   /** Shows an emote in the middle of the main display, without sharing it (the settings page's preview). */
   previewEmote(ref: EmoteRef): void {
     const d = screen.getPrimaryDisplay();
