@@ -42,7 +42,7 @@ Slot is the default layout (`DEFAULT_WHEEL`); the user can rearrange it.
 |---|---|---|---|---|---|
 | `danger` | N | `pingwheel_retreatrender.png` | `pingwheel_retreatrender.png` | `SRP_12.wav` | `#ff3b55` |
 | `push` | NE | `pingwheel_pushrender.png` | `pingwheel_pushrender.png` | `SRP_9.wav` | `#35d27a` |
-| `omw` | E | `omw.png` | `omw.png` (upright icon in the colourblind blue: League has no upright one in its normal cyan, and the flat `pingwheel_omw` ground render looks wrong) | `OnMyWay.wav` | `#2e8bff` |
+| `omw` | E | `pingwheel_omw.png` | `pingwheel_omw.png` (League's flat ground render: its only On My Way in normal cyan; the upright `omw` is colourblind blue) | `OnMyWay.wav` | `#2e8bff` |
 | `allin` | SE | `png_all_in.png` | `pingwheel_allin_render_01.png` + `_02.png` (two halves that clash together) | `SRP_4.wav` | `#f2b320` |
 | `assist` | S | `png_assist_me_128x128.png` | `png_assist_me_128x128.png` | `ComeHere.wav` | `#35d27a` |
 | `needvision` | SW | `mt11_18_vision.png` | `mt11_18_vision.png` | `SRP_7.wav` | `#35d27a` |
@@ -54,9 +54,9 @@ Slot is the default layout (`DEFAULT_WHEEL`); the user can rearrange it.
 | `missingflip` | — | `enemy_missing_flipped.png` | `enemy_missing_flipped.png` (`png_enemymissing_128x128` turned 180°, made by `--derived`; not a League ping) | `MIA.wav` | `#f2c518` |
 | wheel tick | — | — | — | `button.wav` | — |
 
-The 128 px icons from League's `PingUpdate/Need/` folder are the colourblind set: lime instead of teal, lemon instead of gold, blue instead of cyan, pink instead of red (#83). The wheel uses the `pingwheel_*` renders where League has them, and the same icons in normal colours from `PNG/` and `MT11-18/` otherwise. Only On My Way keeps a `Need/` icon. `generic_ping.png` stays as lolPing's own logo (tray, toasts, settings, site).
+The 128 px icons from League's `PingUpdate/Need/` folder are the colourblind set: lime instead of teal, lemon instead of gold, blue instead of cyan, pink instead of red (#83). The wheel uses the `pingwheel_*` renders where League has them, and the same icons in normal colours from `PNG/` and `MT11-18/` otherwise. `generic_ping.png` stays as lolPing's own logo (tray, toasts, settings, site).
 
-Unused extracted files stay in `assets/` but are never referenced: the `_cb` textures and the other `Need/` icons (`all_in`, `assist_me`, `need_vision`, `enemy_missing`, `enemy_vision`, `push`, `vision_cleared`, `caution`, `hold_ig`, `target`), the `pingwheel_*` renders not listed above, and the other sounds (`SRP_13.wav` is the structure-defend ping).
+Unused extracted files stay in `assets/` but are never referenced: the `_cb` textures and the other `Need/` icons (`all_in`, `assist_me`, `need_vision`, `enemy_missing`, `enemy_vision`, `omw`, `push`, `vision_cleared`, `caution`, `hold_ig`, `target`), the `pingwheel_*` renders not listed above, and the other sounds (`SRP_13.wav` is the structure-defend ping).
 
 ### 3.2 Asset pipeline (already run; kept reproducible)
 

@@ -114,6 +114,7 @@ NAME_OVERRIDES: dict[str, tuple[str, str]] = {
 # output png name -> League .tex in Global.wad.client (the other textures came from Obsidian DDS exports, see README)
 WAD_TEXTURES = {
     'pingwheel_baitrender': 'ASSETS/Shared/Particles/PingUpdate/PingWheel_Bait.tex',
+    'pingwheel_omw': 'ASSETS/Shared/Particles/PingUpdate/PingWheel_OMW.tex',
     'vision_cleared': 'ASSETS/Shared/Particles/PingUpdate/Need/Vision_Cleared.tex',
     'pingwheel_visionclearedrender': 'ASSETS/Shared/Particles/PingUpdate/Need/PingWheel_VisionClearedRender.tex',
     # The 128 px icons in PingUpdate/Need/ are the colourblind set (#83). These are the same icons in League's

@@ -55,9 +55,9 @@ describe('ping table', () => {
 
   it('never draws a ping with a colourblind texture', () => {
     // League's PingUpdate/Need/ icons at 128 px are the colourblind set: lime instead of teal, lemon instead of gold,
-    // blue instead of cyan, pink instead of red. Only On My Way has no upright icon outside it.
+    // blue instead of cyan, pink instead of red.
     const colourblind = ['all_in', 'assist_me', 'caution', 'enemy_missing', 'enemy_vision', 'generic_ping', 'hold_ig',
-      'need_vision', 'push', 'target', 'vision_cleared'];
+      'need_vision', 'omw', 'push', 'target', 'vision_cleared'];
     for (const name of [...ALL_PINGS.flatMap((p) => [p.icon, ...p.art]), FALLBACK_TEXTURE]) {
       expect(name).not.toMatch(/_cb/);
       expect(colourblind, name).not.toContain(name);
