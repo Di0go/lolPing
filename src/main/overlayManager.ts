@@ -80,6 +80,7 @@ export class OverlayManager extends EventEmitter {
   /** Where the open wheel was opened, in its overlay and in physical px: an ask release reports the centre. */
   private wheelAt: { local: LocalPoint; phys: { x: number; y: number } } | null = null;
   private mateTicket: string | null = null;
+  private captureExcluded = false;
 
   /** `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here. */
   constructor(private settings: OverlaySettings, private readonly resolveArt: (ref: EmoteRef, remote: boolean) => EmoteArt) {
@@ -117,6 +118,16 @@ export class OverlayManager extends EventEmitter {
   updateSettings(s: OverlaySettings): void {
     this.settings = s;
     for (const id of this.windows.keys()) this.send(id, 'overlay:settings', s);
+  }
+
+  /**
+   * Keeps the overlays out of screen captures (WDA_EXCLUDEFROMCAPTURE) while the teammate grabs the screen, so its
+   * image shows no lolPing pings or wheels. Windows only: the macOS capture leaves lolPing's windows out by itself.
+   */
+  setCaptureExcluded(on: boolean): void {
+    if (IS_MAC || IS_LINUX) return;
+    this.captureExcluded = on;
+    for (const w of this.windows.values()) if (!w.isDestroyed()) w.setContentProtection(on);
   }
 
   handle(ev: HelperEvent): void {
@@ -370,6 +381,7 @@ export class OverlayManager extends EventEmitter {
     });
     win.setIgnoreMouseEvents(true);
     win.setAlwaysOnTop(true, 'screen-saver');
+    if (this.captureExcluded) win.setContentProtection(true);
     if (IS_LINUX) win.setVisibleOnAllWorkspaces(true);
     if (IS_MAC) {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });

@@ -19,6 +19,7 @@ const h = vi.hoisted(() => {
       webContents: { send: ReturnType<typeof vi.fn> };
       onTop: string[];
       hiddenInMissionControl: boolean;
+      contentProtection: boolean[];
     }>,
     handlers: new Map<string, (event: unknown, raw: unknown) => void>(),
     isMac: false,
@@ -61,6 +62,11 @@ vi.mock('electron', async () => {
     hiddenInMissionControl = false;
     setHiddenInMissionControl(hidden: boolean): void {
       this.hiddenInMissionControl = hidden;
+    }
+    /** Every setContentProtection call, in order. */
+    contentProtection: boolean[] = [];
+    setContentProtection(on: boolean): void {
+      this.contentProtection.push(on);
     }
     setBounds(r: Rect): void {
       this.bounds = r;
@@ -502,5 +508,36 @@ describe('OverlayManager z-order', () => {
     mac.handle({ type: 'wheelOpen', x: 100, y: 200, wheel: 'ping' });
     mac.previewPing('danger');
     expect(raised()).toEqual([[], []]);
+  });
+});
+
+describe('OverlayManager capture exclusion', () => {
+  it('keeps every overlay out of a capture on Windows and lets them back in after', () => {
+    mgr.setCaptureExcluded(true);
+    expect(h.windows.map((w) => w.contentProtection)).toEqual([[true], [true]]);
+    mgr.setCaptureExcluded(false);
+    expect(h.windows.map((w) => w.contentProtection)).toEqual([[true, false], [true, false]]);
+  });
+
+  it('excludes an overlay built for a display that appears mid-capture', () => {
+    mgr.setCaptureExcluded(true);
+    h.displays.push({ id: 3, bounds: { x: 3200, y: 0, width: 800, height: 600 }, scaleFactor: 1 });
+    mgr.handle({ type: 'wheelOpen', x: 10, y: 10, wheel: 'ping' }); // the next gesture finds the new display
+    expect(h.windows).toHaveLength(3);
+    expect(h.windows[2].contentProtection).toEqual([true]);
+  });
+
+  it('leaves the overlays alone on macOS and Linux, whose capture leaves lolPing out by itself', async () => {
+    for (const platform of ['mac', 'linux'] as const) {
+      h.windows.length = 0;
+      h.isMac = platform === 'mac';
+      h.isLinux = platform === 'linux';
+      vi.resetModules();
+      const { OverlayManager } = await import('../../src/main/overlayManager');
+      const other = new OverlayManager(overlaySettings(DEFAULT_SETTINGS), resolveArt);
+      other.start();
+      other.setCaptureExcluded(true);
+      expect(h.windows.map((w) => w.contentProtection)).toEqual([[], []]);
+    }
   });
 });
