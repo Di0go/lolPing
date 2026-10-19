@@ -97,6 +97,8 @@ The extraction scripts live in `tools/extract-assets/`, together with a README. 
 - Windows silently removes a low-level hook that responds slowly, so it can't live on Electron's busy main thread.
 - A tiny dedicated process responds in microseconds and is isolated from renderer and GC pauses.
 
+The helper looks up `SetProcessDpiAwarenessContext` at run time and falls back to per-monitor v1 (`SetProcessDpiAwareness`) when it is missing. Windows 10 before 1703 doesn't have it, and a direct import kept the helper from starting there at all (#66). Every other function it imports exists since Windows 7.
+
 ### 4.1 Repository layout
 
 ```
