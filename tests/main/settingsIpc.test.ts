@@ -349,7 +349,7 @@ describe('teammate IPC', () => {
 });
 
 describe('teammate IPC without keys', () => {
-  it('checks a local server with no key, and says whether keys and history can be encrypted', async () => {
+  it('checks a local server with no key, and says whether keys, history and screen capture are available', async () => {
     const keys: string[] = [];
     const local: BuiltinProfile = {
       id: 'local', kind: 'builtin', name: 'Ollama', tagColor: 3, tagColorCustom: null, provider: 'ollama',
@@ -361,6 +361,8 @@ describe('teammate IPC without keys', () => {
       setKey: async () => undefined, instructions: () => '', setInstructions: async () => undefined,
     };
     let on = true;
+    let screen: boolean | null = null;
+    let opened = 0;
     store.update({ teammate: { ...store.get().teammate, profiles: [local] } });
     h.handlers.clear();
     registerSettingsIpc({
@@ -370,15 +372,22 @@ describe('teammate IPC without keys', () => {
         adapter: (_p: BuiltinProfile, key: string) => ({ listModels: async () => (keys.push(key), ['llama3.2']) }),
         usage: () => ({ month: '2026-10', input: 0, output: 0 }),
         history: async () => true,
+        screenAccess: () => screen,
+        openScreenRecording: () => { opened += 1; },
       },
     } as unknown as SettingsIpcDeps);
     expect(await call(SETTINGS_CH.teammateCheckKey, 'local')).toEqual({ ok: true, models: ['llama3.2'] });
     expect(keys).toEqual(['']);
 
-    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: true });
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: true, screenAccess: null });
     available = false;
-    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false });
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false, screenAccess: null });
     on = false;
-    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false });
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false, screenAccess: null });
+
+    screen = false; // macOS without Screen Recording
+    expect(await call(SETTINGS_CH.teammateStatus)).toMatchObject({ screenAccess: false });
+    await call(SETTINGS_CH.teammateOpenScreen);
+    expect(opened).toBe(1);
   });
 });

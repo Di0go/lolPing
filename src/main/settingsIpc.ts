@@ -64,6 +64,9 @@ export interface SettingsIpcDeps {
     usage(): UsageMonth;
     /** Resolves true when the operation was carried out. */
     history(op: TeammateHistoryOp): Promise<boolean>;
+    /** macOS: whether Screen Recording is allowed; null on other systems, which need no permission. */
+    screenAccess(): boolean | null;
+    openScreenRecording(): void;
   };
 }
 
@@ -252,7 +255,9 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
   });
   ipcMain.handle(SETTINGS_CH.teammateStatus, (): TeammateStatus => ({
     secretsAvailable: d.teammate.secrets()?.available() ?? false,
+    screenAccess: d.teammate.screenAccess(),
   }));
+  ipcMain.handle(SETTINGS_CH.teammateOpenScreen, () => d.teammate.openScreenRecording());
 }
 
 function isWebUrl(url: string): boolean {

@@ -41,4 +41,5 @@ export const SETTINGS_CH = {
   teammateUsage: 'teammate:usage',
   teammateHistory: 'teammate:history',
   teammateStatus: 'teammate:status',
+  teammateOpenScreen: 'teammate:openScreen',
 } as const;

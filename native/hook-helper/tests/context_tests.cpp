@@ -199,8 +199,10 @@ static void test_capture_scales_spots_to_a_larger_image() {
   };
   const std::string reply = handleCommand(parseCommand(captureLine()), p);
   CHECK(fields(reply).at("type") == "captured");
-  // The zoom crop is taken at full resolution, then brought back to the zoom size.
+  // The zoom is 1000 x 750 pixels of the capture, not points: half that area in points, at full detail.
+  CHECK(fields(reply).at("zoomRects") == "-1920,13,500,375;-670,705,500,375");
   CHECK(fake.written[1].second.w == 1000 && fake.written[1].second.h == 750);
+  CHECK(fake.written[2].second.w == 1000 && fake.written[2].second.h == 750);
 }
 
 static void test_capture_failure_is_an_error_reply() {

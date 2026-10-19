@@ -79,6 +79,10 @@ Creating an active tap needs Accessibility. If `CGEventTapCreate` returns `NULL`
 - `triggerLabel`, `hotkeyParts`, `hotkeyLabel` take the platform: Mac shows ⌥ Option / ⌃ Control / ⇧ Shift / ⌘ Command and hotkeys as `⌃⌥P`.
 - `strings(lang, platform)` overlays Mac wording in English and Chinese (Open at login, Follow macOS, menu bar instead of tray, Mac limitations, "Add ⌃, ⌥ or ⌘").
 - Key capture rejects Caps Lock on Mac, including the custom-key and shortcut paths. `normalizeSettings(raw, platform)` repairs both named and custom Caps Lock triggers to Option (ping) or Control (emote).
+- The teammate's ask key is the `win` trigger (⌘). `hooks_mac.cpp` turns menu-key masking off, so ⌘ is never masked.
+- The Teammate section shows a Screen Recording card while `getMediaAccessStatus('screen')` is not `granted`. It is read again when the window regains focus. The card opens the Screen Recording pane of System Settings.
+- `context-helper` grabs the display with ScreenCaptureKit on macOS 14+ and with `CGWindowListCreateImageFromArray` (lolPing's own windows left out) on macOS 13. Both grabs share one 2.6 s deadline, inside the 3 s request timeout. Without Screen Recording the reply is the `permission` error.
+- The teammate's zoom is 1000 x 750 pixels of the capture, so on a Retina display it covers 500 x 375 points.
 
 ## 5. Packaging, CI, release
 

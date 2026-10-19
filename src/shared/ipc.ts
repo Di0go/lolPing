@@ -195,6 +195,8 @@ export type TeammateHistoryOp = 'open' | 'pause' | 'resume' | 'clear';
 /** false: the system can't encrypt, so keys can't be saved and history is off. */
 export interface TeammateStatus {
   secretsAvailable: boolean;
+  /** macOS only: whether Screen Recording is allowed. null where no such permission exists. */
+  screenAccess: boolean | null;
 }
 export const TEAMMATE_HISTORY_OPS: readonly TeammateHistoryOp[] = ['open', 'pause', 'resume', 'clear'];
 
@@ -263,4 +265,6 @@ export interface SettingsApi {
   /** Resolves true when it was carried out (Clear can fail). */
   teammateHistory(op: TeammateHistoryOp): Promise<boolean>;
   getTeammateStatus(): Promise<TeammateStatus>;
+  /** macOS: asks for Screen Recording access and opens that page of System Settings. */
+  openScreenRecording(): Promise<void>;
 }

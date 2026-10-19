@@ -63,6 +63,7 @@ import { Updater } from './updater';
 import { setLinuxAutostart } from './linuxAutostart';
 
 const ACCESSIBILITY_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
 
 // X11 uses root-window pixels. Keep Electron in the same coordinate space on every monitor.
 if (IS_LINUX) {
@@ -890,6 +891,10 @@ function start(): void {
       secrets: () => mate?.secrets ?? null,
       adapter: (p, key) => createAdapter(p, key),
       usage: () => mate?.usage.month() ?? { month: '', input: 0, output: 0 },
+      screenAccess: () => (IS_MAC ? systemPreferences.getMediaAccessStatus('screen') === 'granted' : null),
+      openScreenRecording: () => {
+        if (IS_MAC) void shell.openExternal(SCREEN_RECORDING_PANE);
+      },
       history: async (op: TeammateHistoryOp) => {
         if (op === 'open') {
           await openHistory();

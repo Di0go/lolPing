@@ -1,7 +1,8 @@
 import { Button, Combobox, Dropdown, Input, Option, OptionGroup, Switch, Textarea } from '@fluentui/react-components';
 import {
   Bot24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, Emoji24Regular, History24Regular,
-  Keyboard24Regular, MusicNote224Regular, Person24Regular, Sparkle24Regular, TextEditStyle24Regular,
+  Keyboard24Regular, MusicNote224Regular, Person24Regular, ShieldKeyhole24Regular, Sparkle24Regular,
+  TextEditStyle24Regular,
 } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
@@ -293,6 +294,27 @@ function HistoryRows({ s, patch, secrets }: { s: TeammateSettings; patch: Patch;
   );
 }
 
+/** macOS only: shown while Screen Recording is off. Same shape as the Accessibility card. */
+function ScreenAccessCard() {
+  const t = useText();
+  const m = t.teammate.settings;
+  return (
+    <div className="card permission">
+      <span className="icon"><ShieldKeyhole24Regular /></span>
+      <div className="lbl">
+        <b>{m.screenTitle}</b>
+        <span className="desc">{m.screenWhy}</span>
+        <ol className="desc">
+          {m.screenSteps.map((step) => <li key={step}>{step}</li>)}
+        </ol>
+        <div className="actions">
+          <Button appearance="primary" onClick={() => void api.openScreenRecording()}>{m.screenOpen}</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Settings → Teammate: profiles and keys, the ask key, intents, Your instructions, history and usage. */
 export function TeammateSection({ settings: s, update }: { settings: Settings; update: Update }) {
   const t = useText();
@@ -304,8 +326,16 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
   const ownAskKey = ASK_KEYS.find((k) => !sameTrigger(k, s.trigger) && !sameTrigger(k, s.emoteTrigger)) ?? 'win';
   const profileName = (id: string | null) => mate.profiles.find((p) => p.id === id)?.name ?? m.noProfile;
   const [secrets, setSecrets] = useState(true);
+  const [screenAccess, setScreenAccess] = useState<boolean | null>(null);
   useEffect(() => {
-    void api.getTeammateStatus().then((st) => setSecrets(st.secretsAvailable));
+    // Read again when the window regains focus: the user comes back from System Settings.
+    const load = () => void api.getTeammateStatus().then((st) => {
+      setSecrets(st.secretsAvailable);
+      setScreenAccess(st.screenAccess);
+    });
+    load();
+    window.addEventListener('focus', load);
+    return () => window.removeEventListener('focus', load);
   }, []);
 
   const addProfile = (id: ProviderId) => {
@@ -337,6 +367,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
 
   return (
     <>
+      {screenAccess === false ? <ScreenAccessCard /> : null}
       <div className="card mate">
         <div className="mateHead">
           <span className="icon"><Bot24Regular /></span>

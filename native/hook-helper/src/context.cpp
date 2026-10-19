@@ -232,18 +232,14 @@ std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
   const double sy = static_cast<double>(full.h) / r.display.h;
   std::string zooms, zoomRects;
   for (size_t i = 0; i < r.spots.size(); ++i) {
-    const Rect z = zoomRectAround(r.display, r.spots[i], r.zoomW, r.zoomH);
-    // The crop at the capture's full resolution, then brought to the zoom size (a Retina capture is larger).
+    // The zoom is zoomW x zoomH pixels of the capture, so on a Retina display it covers fewer points.
+    const Rect z = zoomRectAround(r.display, r.spots[i], std::max(1, static_cast<int>(std::lround(r.zoomW / sx))),
+                                  std::max(1, static_cast<int>(std::lround(r.zoomH / sy))));
     const int px = clampInt(static_cast<int>(std::lround((z.x - r.display.x) * sx)), 0, full.w - 1);
     const int py = clampInt(static_cast<int>(std::lround((z.y - r.display.y) * sy)), 0, full.h - 1);
     const int pw = clampInt(static_cast<int>(std::lround(z.w * sx)), 1, full.w - px);
     const int ph = clampInt(static_cast<int>(std::lround(z.h * sy)), 1, full.h - py);
     Image zoom = crop(full, px, py, pw, ph);
-    if (pw != z.w || ph != z.h) {
-      Image scaled;
-      if (!platform.resize(zoom, z.w, z.h, scaled)) return formatError(cmd.id, "capture", "could not resize");
-      zoom = std::move(scaled);
-    }
     drawSpots(zoom, r.spots, z);
     const std::string path = joinPath(r.dir, "zoom-" + cmd.id + "-" + std::to_string(i + 1) + ".jpg");
     if (!platform.writeJpeg(zoom, r.quality, path, fail)) return formatError(cmd.id, fail.code, fail.message);
