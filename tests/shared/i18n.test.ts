@@ -34,6 +34,16 @@ describe('language', () => {
     expect(zh.limitations).toHaveLength(en.limitations.length);
   });
 
+  it('has every teammate window word in both languages', () => {
+    const en = strings('en').teammate.ui;
+    const zh = strings('zh-CN').teammate.ui;
+    expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
+    for (const [key, value] of Object.entries(zh)) {
+      const text = typeof value === 'function' ? value(1200) : value;
+      expect(text.trim(), key).not.toBe('');
+    }
+  });
+
   it('has a teammate label and instruction for every ping in both languages', () => {
     for (const lang of ['en', 'zh-CN'] as const) {
       const t = strings(lang).teammate.intent;

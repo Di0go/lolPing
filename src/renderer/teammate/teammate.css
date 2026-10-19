@@ -1,0 +1,115 @@
+html,
+body {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+html[data-view='history'],
+html[data-view='history'] body {
+  height: 100%;
+  overflow: auto;
+}
+
+/* Markdown from the model, already sanitised: text, lists, code and tables. */
+.mate-md {
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  overflow-wrap: anywhere;
+}
+
+.mate-md > :first-child {
+  margin-top: 0;
+}
+
+.mate-md > :last-child {
+  margin-bottom: 0;
+}
+
+.mate-md h1,
+.mate-md h2,
+.mate-md h3,
+.mate-md h4 {
+  font-size: var(--fontSizeBase400);
+  margin: 12px 0 4px;
+}
+
+.mate-md p,
+.mate-md ul,
+.mate-md ol,
+.mate-md blockquote {
+  margin: 6px 0;
+}
+
+.mate-md ul,
+.mate-md ol {
+  padding-left: 20px;
+}
+
+.mate-md blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--colorNeutralStroke1);
+  color: var(--colorNeutralForeground2);
+}
+
+.mate-md code {
+  font-family: var(--fontFamilyMonospace);
+  font-size: var(--fontSizeBase200);
+  background: var(--colorNeutralBackground3);
+  border-radius: var(--borderRadiusSmall);
+  padding: 1px 4px;
+}
+
+.mate-md pre {
+  position: relative;
+  background: var(--colorNeutralBackground3);
+  border-radius: var(--borderRadiusMedium);
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+.mate-md pre code {
+  padding: 0;
+  background: none;
+}
+
+.mate-md table {
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+
+.mate-md th,
+.mate-md td {
+  border: 1px solid var(--colorNeutralStroke2);
+  padding: 2px 6px;
+}
+
+.mate-md [data-link] {
+  color: var(--colorBrandForegroundLink);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.mate-copy-code {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font: inherit;
+  font-size: var(--fontSizeBase100);
+  color: var(--colorNeutralForeground2);
+  background: var(--colorNeutralBackground1);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--borderRadiusSmall);
+  padding: 0 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.mate-md pre:hover .mate-copy-code,
+.mate-copy-code:focus-visible {
+  opacity: 1;
+}
+
+html[data-view='history'] #root {
+  height: 100%;
+}

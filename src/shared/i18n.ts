@@ -15,6 +15,37 @@ export function resolveLang(pref: LanguagePref, locale: string): Lang {
   return /^zh/i.test(locale) ? 'zh-CN' : 'en';
 }
 
+/** The teammate's windows: bubble, card, words box and History. */
+const enMateUi = {
+  more: 'More',
+  dismiss: 'Close',
+  thinking: 'Thinking',
+  copy: 'Copy',
+  copied: 'Copied',
+  copyCode: 'Copy',
+  wholePicture: 'Whole picture',
+  history: 'History',
+  close: 'Close',
+  reply: 'Reply',
+  send: 'Send',
+  you: 'You',
+  tokens: (n: number) => `${n.toLocaleString('en')} tokens`,
+  used: 'Used',
+  ask: 'Ask about this spot',
+  newThread: 'New thread',
+  historyTitle: 'Teammate history',
+  search: 'Search',
+  open: 'Open',
+  continueThread: 'Continue',
+  delete: 'Delete',
+  today: 'Today',
+  yesterday: 'Yesterday',
+  noThreads: 'No threads yet. Your asks and answers show up here.',
+  noMatch: 'No thread matches.',
+  historyDisabled: 'History is off. Turn it on in Settings → Teammate.',
+  historyUnavailable: 'History is off because this system can’t encrypt it.',
+};
+
 const en = {
   lang: 'en' as Lang,
   on: 'On',
@@ -287,7 +318,8 @@ const en = {
         instruction: 'Save the spot to history with a short title, a summary and a link or file name. Say only that it is saved.',
       },
     },
-  } as { intent: Record<PingId, { label: string; instruction: string }> },
+    ui: enMateUi,
+  } as { intent: Record<PingId, { label: string; instruction: string }>; ui: typeof enMateUi },
 
   // main process
   limitations: [
@@ -681,6 +713,35 @@ const zh: Strings = {
         label: '稍后看',
         instruction: '把这个位置存入历史，附上简短标题、摘要和链接或文件名。只需说明已保存。',
       },
+    },
+    ui: {
+      more: '更多',
+      dismiss: '关闭',
+      thinking: '思考中',
+      copy: '复制',
+      copied: '已复制',
+      copyCode: '复制',
+      wholePicture: '全局',
+      history: '历史',
+      close: '关闭',
+      reply: '回复',
+      send: '发送',
+      you: '你',
+      tokens: (n: number) => `${n.toLocaleString('zh-CN')} 个词元`,
+      used: '用到',
+      ask: '问问这个位置',
+      newThread: '新对话',
+      historyTitle: '队友历史',
+      search: '搜索',
+      open: '打开',
+      continueThread: '继续',
+      delete: '删除',
+      today: '今天',
+      yesterday: '昨天',
+      noThreads: '还没有对话。你的提问和回答会显示在这里。',
+      noMatch: '没有匹配的对话。',
+      historyDisabled: '历史已关闭。可在“设置 → 队友”中打开。',
+      historyUnavailable: '这个系统无法加密历史，所以历史已关闭。',
     },
   },
 
