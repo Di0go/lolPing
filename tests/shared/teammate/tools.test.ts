@@ -49,6 +49,7 @@ describe('tools', () => {
 
   it('drops omw and over-limit pings', () => {
     expect(parseToolCall('ping', { type: 'omw', x: 1, y: 1 })).toBeNull();
+    expect(parseToolCall('ping', { type: 'missingflip', x: 1, y: 1 })).toBeNull();
     const slug = EMOTE_CATALOG[0].slug;
     const calls: ToolCall[] = [
       ...Array.from({ length: 9 }, (_, i) => ping(i)),
@@ -69,5 +70,6 @@ describe('tools', () => {
     expect(on.map((t) => t.name)).toContain('emote');
     const params = on.find((t) => t.name === 'ping')?.parameters as { properties: { type: { enum: string[] } } };
     expect(params.properties.type.enum).not.toContain('omw');
+    expect(params.properties.type.enum).not.toContain('missingflip');
   });
 });

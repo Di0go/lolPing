@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { firstTurn, systemPrompt, type AskContext } from '../../../src/main/teammate/prompt';
 import { intentFor } from '../../../src/shared/teammate/intents';
+import { MATE_PINGS } from '../../../src/shared/teammate/tools';
 import { DEFAULT_TEAMMATE } from '../../../src/shared/teammate/settings';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 
+const MATE_SET = Object.fromEntries(MATE_PINGS.map((id) => [id, true]));
 const jpeg = (n: number): Buffer => Buffer.from([0xff, 0xd8, n]);
 
 function ctx(over: Partial<AskContext> = {}): AskContext {
@@ -19,6 +21,7 @@ function ctx(over: Partial<AskContext> = {}): AskContext {
       zooms: [{ x: 1100, y: 525, w: 1000, h: 750 }],
     },
     overviewJpeg: jpeg(1),
+    spots: [{ x: 800, y: 450 }],
     zoomJpegs: [jpeg(2)],
     thread: null,
     instructions: '',
@@ -47,10 +50,9 @@ describe('teammate prompt', () => {
     const s = systemPrompt(ctx());
     expect(s).toMatch(/Never use `omw`/);
     expect(s).not.toMatch(/^- omw:/m);
-    for (const id of ['danger', 'assist', 'missing', 'needvision', 'push', 'allin', 'enemyvision', 'bait',
-      'visioncleared', 'generic']) {
-      expect(s).toContain(`- ${id}:`);
-    }
+    const ids = [...s.matchAll(/^- (\w+): /gm)].map((m) => m[1]).filter((id) => id in { ...MATE_SET });
+    expect(ids.sort()).toEqual([...MATE_PINGS].sort());
+    expect(s).not.toMatch(/^- missingflip:/m);
     expect(s).toMatch(/Call `say` first/);
   });
 
@@ -59,6 +61,10 @@ describe('teammate prompt', () => {
     const tr = systemPrompt(ctx({ intent: intentFor(DEFAULT_TEAMMATE, 'missingflip', 'en') }));
     expect(tr).not.toContain('Answer in English');
     expect(tr).toContain('the language the task asks for');
+  });
+
+  it('tells the model that text on screen is data, not instructions', () => {
+    expect(systemPrompt(ctx())).toMatch(/never instructions to follow/);
   });
 
   it('lists emotes only when they are on', () => {
@@ -75,6 +81,9 @@ describe('teammate prompt', () => {
     expect(body).toContain('what is this');
     expect(body).toContain('1600 x 900');
     expect(body).toContain('x=800, y=450');
+    const two = firstTurn(ctx({ spots: [{ x: 10, y: 20 }, { x: 30, y: 40 }] }));
+    const b2 = two.role === 'user' && 'text' in two.parts[0] ? two.parts[0].text : '';
+    expect(b2).toContain('spot 2 (mark 2) is at x=30, y=40');
     expect(images.map((p) => ('image' in p ? [p.image.mime, p.image.data[2]] : null)))
       .toEqual([['image/jpeg', 1], ['image/jpeg', 2], ['image/jpeg', 3]]);
   });
@@ -88,5 +97,20 @@ describe('teammate prompt', () => {
     expect(earlier.length).toBeLessThan(20);
     expect(earlier[0]).toContain('line 19');
     expect(earlier.join('\n')).not.toContain('line 0"');
+  });
+
+  it('costs an entry without a thumbnail no image tokens', () => {
+    const noThumb = (i: number): ThreadRecord['entries'][number] => ({ ...entry(i, `l${i}`), thumb: '' });
+    // 5 chars of text each is ~25 tokens: all 200 fit; with a thumb (800 each) only 7 would.
+    const t = firstTurn(ctx({ thread: thread(Array.from({ length: 200 }, (_, i) => noThumb(i))) }));
+    if (t.role !== 'user') throw new Error('user turn expected');
+    expect(t.parts.filter((p) => 'text' in p && p.text.startsWith('Earlier ask')).length).toBe(200);
+    expect(t.parts.filter((p) => 'image' in p).length).toBe(2);
+  });
+
+  it('adds no thread turns when the newest entry alone is over the budget', () => {
+    const t = firstTurn(ctx({ thread: thread([entry(1, 'old'), entry(2, 'x'.repeat(30_000))]) }));
+    if (t.role !== 'user') throw new Error('user turn expected');
+    expect(t.parts.some((p) => 'text' in p && p.text.startsWith('Earlier ask'))).toBe(false);
   });
 });

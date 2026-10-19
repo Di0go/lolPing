@@ -1,4 +1,4 @@
-import { ALL_PINGS, type PingId } from '../pings';
+import type { PingId } from '../pings';
 import { EMOTE_CATALOG } from '../emoteCatalog';
 
 /** A spot the model points at: one of the user's marked spots, or overview pixels. */
@@ -6,7 +6,7 @@ export type Target = { mark: number } | { x: number; y: number };
 
 export type ToolCall =
   | { tool: 'say'; text: string }
-  | { tool: 'ping'; type: Exclude<PingId, 'omw'>; at: Target; label?: string; order?: number }
+  | { tool: 'ping'; type: MatePing; at: Target; label?: string; order?: number }
   | { tool: 'emote'; slug: string; at: Target }
   | { tool: 'answer'; markdown: string }
   | { tool: 'look'; x: number; y: number; w: number; h: number };
@@ -24,8 +24,11 @@ const MAX_SAY = 600;
 const MAX_ANSWER = 20_000;
 const MAX_LABEL = 20;
 
-// On My Way is lolPing's own receipt, so the model never draws it.
-const PING_TYPES: readonly Exclude<PingId, 'omw'>[] = ALL_PINGS.flatMap((p) => (p.id === 'omw' ? [] : [p.id]));
+/** The pings the teammate may place. On My Way is lolPing's own receipt and Translate is not a ping meaning. */
+export const MATE_PINGS = [
+  'danger', 'assist', 'missing', 'needvision', 'push', 'allin', 'enemyvision', 'bait', 'visioncleared', 'generic',
+] as const satisfies readonly PingId[];
+export type MatePing = (typeof MATE_PINGS)[number];
 
 const POINT_PROPS = {
   x: { type: 'number', description: 'Horizontal position in overview image pixels.' },
@@ -47,7 +50,7 @@ export function toolDefs(opts: { emotes: boolean; spots: number }): ToolDef[] {
       parameters: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: PING_TYPES },
+          type: { type: 'string', enum: MATE_PINGS },
           ...POINT_PROPS,
           label: { type: 'string', description: `A short label, at most ${MAX_LABEL} characters.` },
           order: { type: 'integer', description: 'Place pings with a lower order first.' },
@@ -127,7 +130,7 @@ export function parseToolCall(name: string, args: unknown): ToolCall | null {
       return t === null ? null : { tool: 'answer', markdown: t };
     }
     case 'ping': {
-      const type = PING_TYPES.find((id) => id === a.type);
+      const type = MATE_PINGS.find((id) => id === a.type);
       const at = target(a);
       if (!type || !at) return null;
       const label = a.label === undefined ? null : text(a.label, MAX_LABEL);
