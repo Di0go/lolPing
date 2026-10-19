@@ -44,7 +44,10 @@ function parse(text: string): SecretData {
   }
 }
 
-/** Provider keys and "Your instructions", kept in one file encrypted as a whole through the system keychain. */
+/**
+ * Provider keys and "Your instructions", kept in one file encrypted as a whole through the system keychain.
+ * Construct after app.whenReady(): safeStorage availability is only known then.
+ */
 export class SecretStore {
   private data: SecretData = EMPTY();
   private writing: Promise<void> = Promise.resolve();
@@ -101,10 +104,13 @@ export class SecretStore {
 
   private update(change: (d: SecretData) => void): Promise<void> {
     if (!this.available()) return Promise.reject(new SecretsUnavailableError());
-    const next: SecretData = { keys: { ...this.data.keys }, instructions: this.data.instructions };
-    change(next);
-    this.data = next;
-    const run = this.writing.then(() => this.write(next));
+    const run = this.writing.then(async () => {
+      const next: SecretData = { keys: { ...this.data.keys }, instructions: this.data.instructions };
+      change(next);
+      await this.write(next);
+      // Only a persisted value becomes visible, so a failed write can't report a key that is lost on restart.
+      this.data = next;
+    });
     this.writing = run.catch(() => undefined);
     return run;
   }

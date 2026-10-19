@@ -4,11 +4,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SecretStore, SecretsUnavailableError, type Crypto } from '../../../src/main/teammate/secrets';
 
-/** Reversible stand-in for safeStorage: XOR with a byte, and a refusal to decrypt foreign bytes. */
+/** Reversible stand-in for safeStorage: XOR plus a marker, and it throws on bytes it did not produce. */
+const MARK = Buffer.from('FAKE:');
 const fakeCrypto = (available = true): Crypto => ({
   isEncryptionAvailable: () => available,
-  encryptString: (s) => Buffer.from(Buffer.from(s, 'utf8').map((b) => b ^ 0x5a)),
-  decryptString: (b) => Buffer.from(b.map((x) => x ^ 0x5a)).toString('utf8'),
+  encryptString: (s) => Buffer.concat([MARK, Buffer.from(Buffer.from(s, 'utf8').map((b) => b ^ 0x5a))]),
+  decryptString: (b) => {
+    if (!b.subarray(0, MARK.length).equals(MARK)) throw new Error('not encrypted by this keychain');
+    return Buffer.from(b.subarray(MARK.length).map((x) => x ^ 0x5a)).toString('utf8');
+  },
 });
 const file = () => join(mkdtempSync(join(tmpdir(), 'lolping-secrets-')), 'teammate', 'secrets');
 
@@ -44,6 +48,7 @@ describe('SecretStore', () => {
     expect(store.instructions()).toBe('');
     await expect(store.setKey('p1', 'sk-x')).rejects.toBeInstanceOf(SecretsUnavailableError);
     await expect(store.setInstructions('x')).rejects.toBeInstanceOf(SecretsUnavailableError);
+    await expect(store.deleteKey('p1')).rejects.toBeInstanceOf(SecretsUnavailableError);
   });
 
   it('treats a corrupted file as empty', async () => {
@@ -64,5 +69,22 @@ describe('SecretStore', () => {
     await store.setInstructions('a'.repeat(2500));
     expect(store.instructions()).toHaveLength(2000);
     expect(new SecretStore(path, fakeCrypto()).instructions()).toHaveLength(2000);
+  });
+
+  it('keeps the old value when a write fails', async () => {
+    const path = file();
+    const crypto = fakeCrypto();
+    const store = new SecretStore(path, crypto);
+    await store.setKey('p1', 'old');
+    await store.setInstructions('old words');
+    crypto.encryptString = () => {
+      throw new Error('keychain locked');
+    };
+    await expect(store.setKey('p1', 'new')).rejects.toThrow('keychain locked');
+    await expect(store.setInstructions('new words')).rejects.toThrow();
+    await expect(store.deleteKey('p1')).rejects.toThrow();
+    expect(store.key('p1')).toBe('old');
+    expect(store.instructions()).toBe('old words');
+    expect(new SecretStore(path, fakeCrypto()).key('p1')).toBe('old');
   });
 });
