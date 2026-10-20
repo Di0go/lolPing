@@ -25,5 +25,8 @@ bool writeStdout(const std::string& s) {
 
 int main() {
   std::signal(SIGPIPE, SIG_IGN);  // a closed pipe makes write() fail instead of killing the process
-  return lp::ctx::runContextLoop(std::cin, writeStdout, lp::ctx::nativePlatform());
+  const int code = lp::ctx::runContextLoop(std::cin, writeStdout, lp::ctx::nativePlatform());
+  // A slow probe's thread may still be inside an Accessibility call: end without exit-time cleanup running under it.
+  if (code == lp::ctx::kExitNow) _exit(0);
+  return code;
 }

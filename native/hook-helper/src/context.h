@@ -87,6 +87,9 @@ struct SystemText {
   bool focusSecure = false;
 };
 
+// ocr, controls, systemText and fileOf each run on their own fresh thread, which may outlive the command when it runs
+// over budget: they must not keep references to caller-owned state, and on Windows each must CoInitializeEx on its
+// thread.
 struct ContextPlatform {
   /** Grabs the display. The image may be larger than the rect (macOS Retina): spots are scaled to it. */
   std::function<bool(const Rect& display, Image& out, Failure& fail)> grab;
@@ -117,11 +120,15 @@ struct Reply {
   bool exitAfter = false;  // a probe is still running past its budget: the helper exits after this reply
 };
 
-/** How long one OS probe may take before the helper gives up on it. */
+/** How long a command's OS probes may take, together, before the helper gives up on them. */
 constexpr int kProbeBudgetMs = 1500;
 
-/** Runs one command. Not called for Shutdown. */
-Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last);
+/** runContextLoop's result after a reply with exitAfter: the caller ends the process without cleanup. */
+constexpr int kExitNow = 2;
+
+/** Runs one command. Not called for Shutdown. Tests pass a short budget. */
+Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last,
+                    int budgetMs = kProbeBudgetMs);
 
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
 std::string marksFileText(const std::vector<RawMark>& marks);
@@ -129,9 +136,15 @@ std::string marksFileText(const std::vector<RawMark>& marks);
 /** Runs `probe` on its own thread; false when it is still running at the budget, leaving it running detached. */
 bool runWithBudget(const std::function<void()>& probe, int budgetMs);
 
-/** Reads commands until shutdown, end of input or a reply that exits, writing each reply with `write`. */
+/** Runs every probe at once on its own thread against one deadline; false when any is still running at it. */
+bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budgetMs);
+
+/**
+ * Reads commands until shutdown, end of input or a reply that exits, writing each reply with `write`.
+ * Returns kExitNow after a reply with exitAfter (a probe thread is still running), else 0.
+ */
 int runContextLoop(std::istream& in, const std::function<bool(const std::string&)>& write,
-                   const ContextPlatform& platform);
+                   const ContextPlatform& platform, int budgetMs = kProbeBudgetMs);
 
 std::string formatError(const std::string& id, const std::string& code, const std::string& message);
 

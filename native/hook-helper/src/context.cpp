@@ -310,10 +310,10 @@ struct Probe {
   bool ok = false;
 };
 
-// Runs `call` on its own thread; `call` must hold copies of everything it reads. False when over budget.
+// A probe body that fills `job`; `call` must hold copies of everything it reads, as it may outlive the command.
 template <typename Out, typename Call>
-bool runProbe(const std::shared_ptr<Probe<Out>>& job, Call call) {
-  return runWithBudget([job, call] { job->ok = call(job->out, job->fail); }, kProbeBudgetMs);
+std::function<void()> bindProbe(const std::shared_ptr<Probe<Out>>& job, Call call) {
+  return [job, call] { job->ok = call(job->out, job->fail); };
 }
 
 Reply slowReply(const std::string& id) {
@@ -362,7 +362,7 @@ bool writeTextFile(const std::string& path, const std::string& text) {
   return !out.fail();
 }
 
-Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const LastGrab& last) {
+Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const LastGrab& last, int budgetMs) {
   const MarksRequest& r = cmd.marks;
   if (!last.image || last.id != r.of) return Reply{formatError(cmd.id, "bad", "that capture is gone")};
   std::vector<RawMark> marks;
@@ -380,30 +380,30 @@ Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const Las
       marks.push_back(std::move(m));
     }
   };
+  // Both probes run side by side under one deadline, so the command fits the client's timeout.
+  std::vector<std::function<void()>> probes;
+  std::shared_ptr<Probe<std::vector<RawMark>>> ocrJob, controlsJob;
   const Rect area = r.spots.empty() ? Rect{} : ocrArea(r.spots, r.radius, last);
   if (r.ocr && area.w > 0 && area.h > 0) {
-    const auto job = std::make_shared<Probe<std::vector<RawMark>>>();
+    ocrJob = std::make_shared<Probe<std::vector<RawMark>>>();
     const auto ocr = platform.ocr;
     const std::shared_ptr<const Image> image = last.image;
-    if (!runProbe(job, [ocr, image, area](std::vector<RawMark>& out, Failure& f) {
-          return ocr(*image, area, out, f);
-        })) {
-      return slowReply(cmd.id);
-    }
-    keep(*job, true);
+    probes.push_back(bindProbe(ocrJob, [ocr, image, area](std::vector<RawMark>& out, Failure& f) {
+      return ocr(*image, area, out, f);
+    }));
   }
   if (r.controls && !r.spots.empty()) {
-    const auto job = std::make_shared<Probe<std::vector<RawMark>>>();
+    controlsJob = std::make_shared<Probe<std::vector<RawMark>>>();
     const auto controls = platform.controls;
     const std::vector<Point> spots = r.spots;
     const int radius = r.radius;
-    if (!runProbe(job, [controls, spots, radius](std::vector<RawMark>& out, Failure& f) {
-          return controls(spots, radius, out, f);
-        })) {
-      return slowReply(cmd.id);
-    }
-    keep(*job, false);
+    probes.push_back(bindProbe(controlsJob, [controls, spots, radius](std::vector<RawMark>& out, Failure& f) {
+      return controls(spots, radius, out, f);
+    }));
   }
+  if (!probes.empty() && !runAllWithBudget(probes, budgetMs)) return slowReply(cmd.id);
+  if (ocrJob) keep(*ocrJob, true);
+  if (controlsJob) keep(*controlsJob, false);
   // One probe coming up empty-handed leaves its marks out; only nothing at all is an error.
   if (tried && !found) return Reply{formatError(cmd.id, firstFail.code, firstFail.message)};
   const std::string path = joinPath(r.dir, "marks-" + cmd.id + ".tsv");
@@ -414,11 +414,13 @@ Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const Las
                "\",\"count\":" + std::to_string(marks.size()) + "}"};
 }
 
-Reply handleSystemText(const Command& cmd, const ContextPlatform& platform) {
+Reply handleSystemText(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
   const auto job = std::make_shared<Probe<SystemText>>();
   const auto systemText = platform.systemText;
   const std::vector<Point> spots = cmd.spots;
-  if (!runProbe(job, [systemText, spots](SystemText& out, Failure& f) { return systemText(spots, out, f); })) {
+  if (!runWithBudget(bindProbe(job, [systemText, spots](SystemText& out, Failure& f) {
+        return systemText(spots, out, f);
+      }), budgetMs)) {
     return slowReply(cmd.id);
   }
   if (!job->ok) return Reply{formatError(cmd.id, job->fail.code, job->fail.message)};
@@ -443,10 +445,12 @@ struct FileInfo {
   std::string path, address, how = "none";
 };
 
-Reply handleFileOf(const Command& cmd, const ContextPlatform& platform) {
+Reply handleFileOf(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
   const auto job = std::make_shared<Probe<FileInfo>>();
   const auto fileOf = platform.fileOf;
-  if (!runProbe(job, [fileOf](FileInfo& out, Failure& f) { return fileOf(out.path, out.address, out.how, f); })) {
+  if (!runWithBudget(bindProbe(job, [fileOf](FileInfo& out, Failure& f) {
+        return fileOf(out.path, out.address, out.how, f);
+      }), budgetMs)) {
     return slowReply(cmd.id);
   }
   if (!job->ok) return Reply{formatError(cmd.id, job->fail.code, job->fail.message)};
@@ -533,7 +537,7 @@ std::string formatError(const std::string& id, const std::string& code, const st
          jsonEscape(message) + "\"}";
 }
 
-Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last) {
+Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last, int budgetMs) {
   try {
     switch (cmd.kind) {
       case Command::Kind::Bad: return Reply{formatError(cmd.id, "bad", cmd.error)};
@@ -546,9 +550,9 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGra
         return Reply{"{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
                      "\",\"title\":\"" + jsonEscape(title) + "\"}"};
       }
-      case Command::Kind::Marks: return handleMarks(cmd, platform, last);
-      case Command::Kind::SystemText: return handleSystemText(cmd, platform);
-      case Command::Kind::FileOf: return handleFileOf(cmd, platform);
+      case Command::Kind::Marks: return handleMarks(cmd, platform, last, budgetMs);
+      case Command::Kind::SystemText: return handleSystemText(cmd, platform, budgetMs);
+      case Command::Kind::FileOf: return handleFileOf(cmd, platform, budgetMs);
       case Command::Kind::Shutdown: break;
     }
   } catch (const std::exception& e) {  // a huge display can run out of memory; the helper stays up
@@ -574,36 +578,51 @@ std::string marksFileText(const std::vector<RawMark>& marks) {
 }
 
 bool runWithBudget(const std::function<void()>& probe, int budgetMs) {
+  return runAllWithBudget({probe}, budgetMs);
+}
+
+bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budgetMs) {
   struct State {
     std::mutex m;
     std::condition_variable cv;
-    bool done = false;
+    size_t running = 0;
   };
   const auto state = std::make_shared<State>();
-  std::thread worker([state, probe] {
-    try {
-      probe();
-    } catch (...) {  // a throwing probe is a failed one, not a dead helper
+  state->running = probes.size();
+  std::vector<std::thread> workers;
+  try {
+    for (const std::function<void()>& probe : probes) {
+      workers.emplace_back([state, probe] {
+        try {
+          probe();
+        } catch (...) {  // a throwing probe is a failed one, not a dead helper
+        }
+        {
+          const std::lock_guard<std::mutex> lock(state->m);
+          --state->running;
+        }
+        state->cv.notify_all();
+      });
     }
-    {
-      const std::lock_guard<std::mutex> lock(state->m);
-      state->done = true;
-    }
-    state->cv.notify_one();
-  });
+  } catch (...) {  // no thread for one of them: the started ones own their copies
+    for (std::thread& w : workers) w.detach();
+    throw;
+  }
   bool done = false;
   {
     std::unique_lock<std::mutex> lock(state->m);
-    done = state->cv.wait_for(lock, std::chrono::milliseconds(budgetMs), [&state] { return state->done; });
+    done = state->cv.wait_for(lock, std::chrono::milliseconds(budgetMs), [&state] { return state->running == 0; });
   }
   // A slow probe cannot be cancelled; it keeps only its own copies and dies with the process.
-  if (done) worker.join();
-  else worker.detach();
+  for (std::thread& w : workers) {
+    if (done) w.join();
+    else w.detach();
+  }
   return done;
 }
 
 int runContextLoop(std::istream& in, const std::function<bool(const std::string&)>& write,
-                   const ContextPlatform& platform) {
+                   const ContextPlatform& platform, int budgetMs) {
   LastGrab last;
   std::string line;
   while (std::getline(in, line)) {
@@ -611,9 +630,9 @@ int runContextLoop(std::istream& in, const std::function<bool(const std::string&
     if (line.find_first_not_of(" \t") == std::string::npos) continue;
     const Command cmd = parseCommand(line);
     if (cmd.kind == Command::Kind::Shutdown) return 0;
-    const Reply reply = handleCommand(cmd, platform, last);
+    const Reply reply = handleCommand(cmd, platform, last, budgetMs);
     if (!write(reply.line)) return 0;  // lolPing is gone
-    if (reply.exitAfter) return 0;
+    if (reply.exitAfter) return kExitNow;
   }
   return 0;
 }

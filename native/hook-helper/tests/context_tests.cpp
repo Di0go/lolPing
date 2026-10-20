@@ -428,18 +428,52 @@ static void test_slow_probe_replies_slow_and_exits() {
   Fake fake;
   ContextPlatform p = fake.platform();
   p.fileOf = [](std::string&, std::string&, std::string&, Failure&) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(kProbeBudgetMs + 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
     return true;
   };
   LastGrab last;
-  const Reply r = handleCommand(parseCommand(R"({"type":"fileOf","id":"f1"})"), p, last);
+  const Reply r = handleCommand(parseCommand(R"({"type":"fileOf","id":"f1"})"), p, last, 30);
   const auto m = fields(r.line);
   CHECK(m.at("type") == "error" && m.at("id") == "f1" && m.at("code") == "slow");
   CHECK(r.exitAfter);
   std::istringstream in("{\"type\":\"fileOf\",\"id\":\"1\"}\n{\"type\":\"ping\",\"id\":\"2\"}\n");
   std::vector<std::string> out;
-  runContextLoop(in, [&](const std::string& s) { out.push_back(s); return true; }, p);
+  const int code = runContextLoop(in, [&](const std::string& s) { out.push_back(s); return true; }, p, 30);
   CHECK(out.size() == 1);  // the loop stopped after the slow reply
+  CHECK(code == kExitNow);  // so the main ends the process at once
+}
+
+static void test_marks_runs_both_probes_under_one_deadline() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  // Each takes 60% of the budget: one after the other they would run over it, side by side they fit.
+  constexpr int budget = 500;
+  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>& out, Failure&) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(budget * 6 / 10));
+    out.push_back(RawMark{"text", Rect{0, 400, 100, 40}, "Line"});
+    return true;
+  };
+  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>& out, Failure&) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(budget * 6 / 10));
+    out.push_back(RawMark{"button", Rect{-1800, 190, 50, 20}, "OK"});
+    return true;
+  };
+  LastGrab last;
+  handleCommand(parseCommand(captureLine()), p, last, budget);
+  const auto start = std::chrono::steady_clock::now();
+  const Reply r = handleCommand(parseCommand(marksLine("m3", R"("ocr":true,"controls":true)")), p, last, budget);
+  const auto took = std::chrono::steady_clock::now() - start;
+  const auto m = fields(r.line);
+  CHECK(!r.exitAfter);
+  CHECK(m.at("type") == "marks" && m.at("count") == "2");
+  CHECK(took < std::chrono::milliseconds(budget));  // the whole command fits the one budget the client waits for
+  // A probe still running at the shared deadline makes the whole command slow.
+  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure&) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    return true;
+  };
+  const Reply slow = handleCommand(parseCommand(marksLine("m4", R"("controls":true)")), p, last, 30);
+  CHECK(slow.exitAfter && fields(slow.line).at("code") == "slow");
 }
 
 static void test_file_of_reply() {
@@ -480,6 +514,7 @@ int main() {
   test_budget_returns_a_fast_probe();
   test_secure_focus_sends_no_value();
   test_slow_probe_replies_slow_and_exits();
+  test_marks_runs_both_probes_under_one_deadline();
   test_file_of_reply();
   std::printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;

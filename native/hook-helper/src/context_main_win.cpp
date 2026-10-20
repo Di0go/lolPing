@@ -46,6 +46,8 @@ int wmain() {
   _setmode(_fileno(stdin), _O_BINARY);  // UTF-8 bytes as they are; a 0x1A byte is not end of input
   if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return 1;
   const int code = lp::ctx::runContextLoop(std::cin, writeStdout, lp::ctx::nativePlatform());
+  // A slow probe's thread may still be inside COM or UI Automation: end without cleanup running under it.
+  if (code == lp::ctx::kExitNow) TerminateProcess(GetCurrentProcess(), 0);
   CoUninitialize();
   return code;
 }
