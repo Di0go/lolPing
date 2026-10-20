@@ -36,7 +36,7 @@ export function intentFor(
   s: TeammateSettings,
   id: PingId,
   lang: Lang,
-): { def: IntentDef; enabled: boolean; label: string; instruction: string } {
+): { def: IntentDef; enabled: boolean; label: string; instruction: string; custom: string } {
   const o = s.intents[id];
   const text = strings(lang).teammate.intent[id];
   return {
@@ -44,5 +44,7 @@ export function intentFor(
     enabled: o?.enabled ?? true,
     label: o?.label || text.label,
     instruction: o?.instruction || text.instruction,
+    /** The user's own instruction; '' when they kept the default. */
+    custom: o?.instruction ?? '',
   };
 }

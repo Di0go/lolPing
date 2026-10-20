@@ -61,7 +61,7 @@ describe('language', () => {
       }
     }
     expect(strings('en').teammate.intent.danger.label).toBe("What's wrong");
-    expect(strings('zh-CN').teammate.intent.omw.label).toBe('交给我');
+    expect(strings('zh-CN').teammate.intent.omw.label).toBe('帮我做');
   });
 
   it('has the same Mac wording in both languages', () => {

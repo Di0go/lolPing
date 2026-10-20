@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { firstTurn, systemPrompt, type AskContext } from '../../../src/main/teammate/prompt';
+import { TASKS, firstTurn, systemPrompt, type AskContext } from '../../../src/main/teammate/prompt';
+import { ALL_PINGS, type PingId } from '../../../src/shared/pings';
 import { intentFor } from '../../../src/shared/teammate/intents';
 import { MATE_PINGS } from '../../../src/shared/teammate/tools';
-import { DEFAULT_TEAMMATE } from '../../../src/shared/teammate/settings';
+import { DEFAULT_TEAMMATE, type IntentOverride, type TeammateSettings } from '../../../src/shared/teammate/settings';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 
 const MATE_SET = Object.fromEntries(MATE_PINGS.map((id) => [id, true]));
 const jpeg = (n: number): Buffer => Buffer.from([0xff, 0xd8, n]);
+const withIntent = (id: PingId, o: IntentOverride): TeammateSettings => ({ ...DEFAULT_TEAMMATE, intents: { [id]: o } });
 
 function ctx(over: Partial<AskContext> = {}): AskContext {
   return {
@@ -39,12 +41,49 @@ const thread = (entries: ThreadRecord['entries']): ThreadRecord => ({
 });
 
 describe('teammate prompt', () => {
-  it('puts the intent instruction and the user\'s instructions in the system prompt', () => {
-    const c = ctx({ instructions: 'Call me Sam.' });
-    const s = systemPrompt(c);
-    expect(s).toContain(c.intent.instruction);
+  it('puts the task and the user\'s instructions in the system prompt', () => {
+    const s = systemPrompt(ctx({ instructions: 'Call me Sam.' }));
+    expect(s).toContain(`The task: Explain. ${TASKS.missing.brief}`);
     expect(s).toMatch(/The user's own instructions\nCall me Sam\./);
     expect(systemPrompt(ctx())).not.toContain("The user's own instructions");
+  });
+
+  it('gives every ping a task in English, whatever the app language', () => {
+    for (const p of ALL_PINGS) expect(TASKS[p.id].brief).toMatch(/^[\x20-\x7e]+$/);
+    const zh = ctx({ lang: 'zh-CN', intent: intentFor(DEFAULT_TEAMMATE, 'omw', 'zh-CN') });
+    expect(systemPrompt(zh)).toContain(`The task: Do it for me. ${TASKS.omw.brief}`);
+    expect(systemPrompt(zh)).not.toContain(zh.intent.instruction);
+  });
+
+  it('names the task, not the wheel label, in the ask', () => {
+    // A label like 交给我 ("leave it to me") read as the user taking the job back; the model gets the task name.
+    const t = firstTurn(ctx({ lang: 'zh-CN', intent: intentFor(DEFAULT_TEAMMATE, 'omw', 'zh-CN') }));
+    const body = t.role === 'user' && 'text' in t.parts[0] ? t.parts[0].text : '';
+    expect(body).toContain('Ask: Do it for me');
+    expect(body).not.toContain('帮我做');
+  });
+
+  it('tells the model that Do it is its job to finish, never one to hand back', () => {
+    const s = systemPrompt(ctx({ intent: intentFor(DEFAULT_TEAMMATE, 'omw', 'en') }));
+    expect(s).toContain('The user hands this job to you');
+    expect(s).toContain('Never hand the job back to the user');
+  });
+
+  it('adds the user\'s own version of a task next to the task', () => {
+    const custom = withIntent('danger', { instruction: 'Only check the maths.' });
+    const s = systemPrompt(ctx({ intent: intentFor(custom, 'danger', 'en') }));
+    expect(s).toContain(TASKS.danger.brief);
+    expect(s).toContain("The user's own version of this task (it wins where it differs): Only check the maths.");
+    expect(systemPrompt(ctx())).not.toContain("The user's own version");
+  });
+
+  it('asks for a line and a card answer on every ask', () => {
+    for (const id of ['missing', 'danger', 'bait'] as const) {
+      const s = systemPrompt(ctx({ intent: intentFor(DEFAULT_TEAMMATE, id, 'en') }));
+      expect(s).toContain('How to answer (the same for every ask)');
+      expect(s).toMatch(/1\. Call `say` with one sentence/);
+      expect(s).toMatch(/2\. Call `answer` .*Always call it/);
+    }
   });
 
   it('forbids omw and lists the teammate vocabulary', () => {
@@ -54,14 +93,13 @@ describe('teammate prompt', () => {
     const ids = [...s.matchAll(/^- (\w+): /gm)].map((m) => m[1]).filter((id) => id in { ...MATE_SET });
     expect(ids.sort()).toEqual([...MATE_PINGS].sort());
     expect(s).not.toMatch(/^- missingflip:/m);
-    expect(s).toMatch(/Call `say` first/);
   });
 
   it('asks for the app language except when translating', () => {
     expect(systemPrompt(ctx({ lang: 'zh-CN' }))).toContain('Answer in 简体中文');
     const tr = systemPrompt(ctx({ intent: intentFor(DEFAULT_TEAMMATE, 'missingflip', 'en') }));
     expect(tr).not.toContain('Answer in English');
-    expect(tr).toContain('the language the task asks for');
+    expect(tr).toContain('the language you translate into. The language of the app is English');
   });
 
   it('tells the model that text on screen is data, not instructions', () => {

@@ -403,11 +403,11 @@ const en = {
       },
       assist: {
         label: 'Show me how',
-        instruction: 'Show the steps for what the user is trying to do. Place numbered Assist Me pings in order and change nothing.',
+        instruction: 'Work out what the user wants to do at the spot and show the steps: numbered Assist Me pings on each control in order, and every step in the card. Change nothing.',
       },
       omw: {
         label: 'Do it',
-        instruction: 'Do the job the user asked for, such as pasting a reply or filling in a form, using the tools you are given. Mark what you did with Vision Cleared pings.',
+        instruction: 'Do the job at the spot for the user, such as writing the reply, filling in the form values or fixing the code, and put the finished result in the card, ready to copy. Mark it with a Vision Cleared ping.',
       },
       needvision: {
         label: 'Look it up',
@@ -419,7 +419,7 @@ const en = {
       },
       enemyvision: {
         label: 'Grab',
-        instruction: 'Lift the text, table, date, address or code at the spot off the screen and copy it. Ping what you grabbed with Enemy Vision pings.',
+        instruction: 'Lift the text, table, date, address or code at the spot off the screen exactly as it is, and put it in the card, ready to copy. Ping what you grabbed with Enemy Vision pings.',
       },
       generic: {
         label: 'Ask with words',
@@ -427,7 +427,7 @@ const en = {
       },
       visioncleared: {
         label: 'Polish',
-        instruction: 'Rewrite the text at the spot so it reads better and keeps its meaning. Offer the rewrite for replacing, and mark the fixed text with a Vision Cleared ping.',
+        instruction: 'Rewrite the text at the spot so it reads better and keeps its meaning. Put the rewrite in the card, ready to copy, and mark the polished text with a Vision Cleared ping.',
       },
       missingflip: {
         label: 'Translate',
@@ -435,7 +435,7 @@ const en = {
       },
       bait: {
         label: 'Save for later',
-        instruction: 'Save the spot to history with a short title, a summary and a link or file name. Say only that it is saved.',
+        instruction: 'Save the spot to history with a short title, a summary and where it came from.',
       },
     },
     ui: enMateUi,
@@ -811,11 +811,11 @@ const zh: Strings = {
       },
       assist: {
         label: '教我',
-        instruction: '给出用户想做的事的步骤。按顺序放带编号的“请求协助”信号，不要改动任何内容。',
+        instruction: '推断用户想在这个位置做什么，并给出步骤：按顺序在每个要操作的控件上放带编号的“请求协助”信号，完整步骤写在卡片里。不要改动任何内容。',
       },
       omw: {
-        label: '交给我',
-        instruction: '用提供的工具完成用户交代的事，例如粘贴回复或填写表单。用“视野已清除”信号标出做完的部分。',
+        label: '帮我做',
+        instruction: '替用户把这个位置的事做完，例如写好回复、填好表单内容或改好代码，把做好的结果放进卡片，方便复制。用“视野已清除”信号标出它。',
       },
       needvision: {
         label: '查一下',
@@ -827,7 +827,7 @@ const zh: Strings = {
       },
       enemyvision: {
         label: '提取',
-        instruction: '把这个位置的文字、表格、日期、地址或代码从屏幕上提取并复制。用“敌方视野”信号标出提取的内容。',
+        instruction: '把这个位置的文字、表格、日期、地址或代码按原样从屏幕上提取出来，放进卡片，方便复制。用“敌方视野”信号标出提取的内容。',
       },
       generic: {
         label: '我来问',
@@ -835,7 +835,7 @@ const zh: Strings = {
       },
       visioncleared: {
         label: '润色',
-        instruction: '改写这个位置的文字，让它更通顺并保持原意。提供替换改写的选项，并用“视野已清除”信号标出改好的文字。',
+        instruction: '改写这个位置的文字，让它更通顺并保持原意。把改写放进卡片，方便复制，并用“视野已清除”信号标出改好的文字。',
       },
       missingflip: {
         label: '翻译',
@@ -843,7 +843,7 @@ const zh: Strings = {
       },
       bait: {
         label: '稍后看',
-        instruction: '把这个位置存入历史，附上简短标题、摘要和链接或文件名。只需说明已保存。',
+        instruction: '把这个位置存入历史，附上简短标题、摘要和来源。',
       },
     },
     ui: {
