@@ -81,12 +81,12 @@ function applySettings(s: OverlaySettings): void {
 applySettings(settings);
 
 function ping(def: PingDef, x: number, y: number, tag?: PingTag, keep = false, mate: MateMark = {}): void {
-  const { owner, label, ring, thinking, tagOnly } = mate;
+  const { owner, label, thinking, tagOnly } = mate;
   // The teammate's kept receipt goes with mate:clear or mate:fade; it never replaces the user's own kept ping.
   const ours = keep && owner !== 'mate';
   if (ours) dropKeptPing();
   const el = spawnPing(pingLayer, def, x, y, {
-    sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep, owner, label, ring, thinking, tagOnly,
+    sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep, owner, label, thinking, tagOnly,
   });
   if (ours) keptPing = el;
   if (!mate.silent) sounds.play(def.sound, volume());

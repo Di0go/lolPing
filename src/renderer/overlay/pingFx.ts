@@ -16,8 +16,6 @@ export interface PingFxOptions {
   owner?: 'mate';
   /** The teammate's words for this spot, next to the ping. */
   label?: string;
-  /** An area ring on the ground instead of the icon's precise anchor. */
-  ring?: boolean;
   /** Animated dots on the tag: the teammate is still thinking. */
   thinking?: boolean;
   /** Only the tag (and label): no ground, rings or art. */
@@ -51,7 +49,7 @@ export function spawnPing(layer: HTMLElement, def: PingDef, x: number, y: number
   root.style.setProperty('--dur', `${opts.durationS}s`);
   if (opts.owner) root.dataset.owner = opts.owner;
   if (!opts.tagOnly) {
-    root.append(div(opts.ring ? 'area' : 'ground'), div('ring'), div('ring r2'), div('ring r3'));
+    root.append(div('ground'), div('ring'), div('ring r2'), div('ring r3'));
     const art = div('art');
     if (def.art.length === 2) {
       const clash = div('clash');

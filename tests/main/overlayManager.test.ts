@@ -276,12 +276,12 @@ describe('OverlayManager ask wheel', () => {
 
   it('draws the teammate\'s pings and emotes with its tag, and clears or fades them everywhere', () => {
     const tag = { name: 'AI', color: 3 };
-    mgr.spawnMate({ displayId: 2, x: 10, y: 20, id: 'danger', label: 'typo', ring: true, silent: true, tag });
+    mgr.spawnMate({ displayId: 2, x: 10, y: 20, id: 'danger', label: 'typo', silent: true, tag });
     mgr.spawnMateEmote({ displayId: 1, x: 5, y: 6, slug: 'okay', tag });
     mgr.clearMate();
     mgr.fadeMate();
     expect(sent(1)).toEqual([
-      ['ping:spawn', { id: 'danger', x: 10, y: 20, owner: 'mate', label: 'typo', ring: true, silent: true, tag }],
+      ['ping:spawn', { id: 'danger', x: 10, y: 20, owner: 'mate', label: 'typo', silent: true, tag }],
       ['emote:clear', { owner: 'mate' }],
       ['mate:clear', null],
       ['mate:fade', null],

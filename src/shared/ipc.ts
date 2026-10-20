@@ -56,8 +56,6 @@ export interface MateMark {
   owner?: 'mate';
   /** Shown next to the ping, at most 20 characters. */
   label?: string;
-  /** An area ring instead of the icon's precise anchor. */
-  ring?: boolean;
   /** Animated dots on the tag until the teammate says something. */
   thinking?: boolean;
   /** No sound: every ping of a set but the first, and the receipt when its sound is off. */

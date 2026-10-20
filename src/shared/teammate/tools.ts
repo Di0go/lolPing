@@ -1,15 +1,16 @@
 import type { PingId } from '../pings';
 import { EMOTE_CATALOG } from '../emoteCatalog';
 
-/** A spot the model points at: one of the user's marked spots, or overview pixels. */
-export type Target = { mark: number } | { x: number; y: number };
+/** Where the model points: one of the user's spots (numbered from 1), or overview pixels that lolPing snaps. */
+export type Target = { spot: number } | { x: number; y: number };
 
 export type ToolCall =
   | { tool: 'say'; text: string }
   | { tool: 'ping'; type: MatePing; at: Target; label?: string; order?: number }
   | { tool: 'emote'; slug: string; at: Target }
   | { tool: 'answer'; markdown: string }
-  | { tool: 'look'; x: number; y: number; w: number; h: number };
+  | { tool: 'look'; x: number; y: number; w: number; h: number }
+  | { tool: 'read_file'; pages?: { from: number; to: number }; search?: string };
 
 export interface ToolDef {
   name: string;
@@ -23,6 +24,7 @@ export const MAX_EMOTES = 1;
 const MAX_SAY = 600;
 const MAX_ANSWER = 20_000;
 const MAX_LABEL = 20;
+const MAX_SEARCH = 200;
 
 /** The pings the teammate may place. On My Way is lolPing's own receipt and Translate is not a ping meaning. */
 export const MATE_PINGS = [
@@ -31,12 +33,12 @@ export const MATE_PINGS = [
 export type MatePing = (typeof MATE_PINGS)[number];
 
 const POINT_PROPS = {
-  x: { type: 'number', description: 'Horizontal position in overview image pixels.' },
-  y: { type: 'number', description: 'Vertical position in overview image pixels.' },
-  mark: { type: 'integer', description: "Number of one of the user's marked spots, instead of x and y." },
+  x: { type: 'number', description: 'Horizontal position in overview image pixels, on the exact element you mean.' },
+  y: { type: 'number', description: 'Vertical position in overview image pixels, on the exact element you mean.' },
+  spot: { type: 'integer', description: "Number of one of the user's spots, instead of x and y." },
 };
 
-export function toolDefs(opts: { emotes: boolean; spots: number }): ToolDef[] {
+export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean }): ToolDef[] {
   const spotNote = opts.spots > 0 ? ` The user marked ${opts.spots} spot${opts.spots === 1 ? '' : 's'}.` : '';
   const defs: ToolDef[] = [
     {
@@ -91,6 +93,19 @@ export function toolDefs(opts: { emotes: boolean; spots: number }): ToolDef[] {
       },
     },
   );
+  if (opts.file) {
+    defs.push({
+      name: 'read_file',
+      description: 'Read more of the open file: some pages, or the passages that match a search. Give one of the two.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pages: { type: 'string', description: 'Pages to read, 1-based: "3" or "3-5".' },
+          search: { type: 'string', description: `Words to look for in the file, at most ${MAX_SEARCH} characters.` },
+        },
+      },
+    });
+  }
   return defs;
 }
 
@@ -104,13 +119,20 @@ function text(v: unknown, max: number): string | null {
 }
 
 function target(a: Record<string, unknown>): Target | null {
-  if (a.x !== undefined || a.y !== undefined) {
-    const x = num(a.x);
-    const y = num(a.y);
-    return x === null || y === null ? null : { x, y };
-  }
-  const mark = num(a.mark);
-  return mark !== null && Number.isInteger(mark) && mark >= 0 ? { mark } : null;
+  const x = num(a.x);
+  const y = num(a.y);
+  if (x !== null && y !== null) return { x, y };
+  // `mark` is what an earlier version called a spot; a model may copy it from a turn it has already seen.
+  const spot = num(a.spot ?? a.mark);
+  return spot !== null && Number.isInteger(spot) && spot >= 1 ? { spot } : null;
+}
+
+function pageRange(v: unknown): { from: number; to: number } | null {
+  const m = typeof v === 'string' ? /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/.exec(v) : null;
+  if (!m) return null;
+  const from = Number(m[1]);
+  const to = m[2] === undefined ? from : Number(m[2]);
+  return from >= 1 && from <= to ? { from, to } : null;
 }
 
 /** Turns one model tool call into a ToolCall; anything malformed is null. */
@@ -153,6 +175,12 @@ export function parseToolCall(name: string, args: unknown): ToolCall | null {
       const h = num(a.h);
       if (x === null || y === null || w === null || h === null || w <= 0 || h <= 0) return null;
       return { tool: 'look', x, y, w, h };
+    }
+    case 'read_file': {
+      const pages = pageRange(a.pages);
+      const search = text(a.search, MAX_SEARCH);
+      if (!pages && search === null) return null;
+      return { tool: 'read_file', ...(pages ? { pages } : {}), ...(search !== null ? { search } : {}) };
     }
     default:
       return null;

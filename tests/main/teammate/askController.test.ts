@@ -228,7 +228,7 @@ describe('AskController', () => {
     expect(drawn[1]).toEqual(['bubble', expect.objectContaining({
       line: 'Line 3 divides by zero.', thinking: false, thread: null,
     })]);
-    expect(drawn[2]).toEqual(['ping', { displayId: 1, x: 600, y: 400, id: 'danger', ring: true, tag: TAG }]);
+    expect(drawn[2]).toEqual(['ping', { displayId: 1, x: 600, y: 400, id: 'danger', tag: TAG }]);
 
     // Overlays and teammate windows are out of the capture only while it runs.
     const kinds = h.log.map((e) => `${e[0]}:${String(e[1] === null || typeof e[1] === 'boolean' ? e[1] : '')}`);
@@ -260,7 +260,7 @@ describe('AskController', () => {
   it('asks once for the card answer when the model gives only a line, so More is always there', async () => {
     const h = harness({
       steps: [
-        answers([call('say', { text: 'Line 3 divides by zero.' }), call('ping', { type: 'danger', mark: 1 }, 'p')]),
+        answers([call('say', { text: 'Line 3 divides by zero.' }), call('ping', { type: 'danger', spot: 1 }, 'p')]),
         answers([call('answer', { markdown: 'B3 is 0, so =A3/B3 fails.' })]),
       ],
     });
@@ -510,11 +510,11 @@ describe('AskController', () => {
     expect(h.pings('assist')).toHaveLength(2);
   });
 
-  it('points at the user\'s spot for mark 1 and drops unknown marks', async () => {
+  it('points at the user\'s spot for spot 1 and drops unknown spots', async () => {
     const h = harness({
       steps: [answers([
-        call('ping', { type: 'generic', mark: 1 }, 'a'),
-        call('ping', { type: 'generic', mark: 2 }, 'b'),
+        call('ping', { type: 'generic', spot: 1 }, 'a'),
+        call('ping', { type: 'generic', spot: 2 }, 'b'),
         call('ping', { type: 'generic', x: 5000, y: 5 }, 'c'),
         call('say', { text: 'Here.' }),
       ])],

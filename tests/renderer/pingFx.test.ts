@@ -65,15 +65,14 @@ describe('spawnPing', () => {
 describe('spawnPing for the teammate', () => {
   const classes = (el: FakeElement): string[] => el.children.map((c) => c.className);
 
-  it('draws a teammate ping with its label and an area ring', () => {
+  it('draws a teammate ping with its label', () => {
     const layer = new FakeElement();
     spawnPing(layer as unknown as HTMLElement, danger, 10, 20, {
-      sizePx: 110, durationS: 3, owner: 'mate', label: 'typo here', ring: true, tag: { name: 'AI', color: 3 },
+      sizePx: 110, durationS: 3, owner: 'mate', label: 'typo here', tag: { name: 'AI', color: 3 },
     });
     const root = layer.children[0];
     expect(root.dataset.owner).toBe('mate');
-    expect(classes(root)).toContain('area');
-    expect(classes(root)).not.toContain('ground');
+    expect(classes(root)).toContain('ground');
     expect(root.children.find((c) => c.className === 'label')?.textContent).toBe('typo here');
     expect(root.children.find((c) => c.className === 'tag')?.textContent).toBe('AI');
   });

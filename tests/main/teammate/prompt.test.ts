@@ -121,7 +121,7 @@ describe('teammate prompt', () => {
     expect(body).toContain('x=800, y=450');
     const two = firstTurn(ctx({ spots: [{ x: 10, y: 20 }, { x: 30, y: 40 }] }));
     const b2 = two.role === 'user' && 'text' in two.parts[0] ? two.parts[0].text : '';
-    expect(b2).toContain('spot 2 (mark 2) is at x=30, y=40');
+    expect(b2).toContain('spot 2 is at x=30, y=40');
     expect(images.map((p) => ('image' in p ? [p.image.mime, p.image.data[2]] : null)))
       .toEqual([['image/jpeg', 1], ['image/jpeg', 2], ['image/jpeg', 3]]);
   });

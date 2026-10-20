@@ -204,7 +204,7 @@ export class OverlayManager extends EventEmitter {
    * `keep`: stays until clearMate or fadeMate (the receipt). It never touches the user's own kept ping.
    */
   spawnMate(p: {
-    displayId: number; x: number; y: number; id: PingId; label?: string; ring?: boolean; thinking?: boolean;
+    displayId: number; x: number; y: number; id: PingId; label?: string; thinking?: boolean;
     silent?: boolean; keep?: boolean; tagOnly?: boolean; tag: PingTag;
   }): void {
     const { displayId, ...ping } = p;

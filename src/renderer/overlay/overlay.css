@@ -60,12 +60,7 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
   font: 600 13px/18px "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif; letter-spacing: .2px;
   text-shadow: 0 1px 2px #000; animation: tagIn .25s ease-out both, life var(--dur) linear forwards;
 }
-/* The teammate's marks: an area ring around a spot, its words above the ping, and dots on its tag while it thinks. */
-.ping .area {
-  position: absolute; left: -32px; top: -32px; width: 64px; height: 64px; box-sizing: border-box; border-radius: 50%;
-  border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); box-shadow: 0 0 10px var(--c);
-  opacity: 0; animation: ground var(--dur) ease-out forwards;
-}
+/* The teammate's marks: its words above the ping, and dots on its tag while it thinks. */
 .ping .label {
   position: absolute; left: 0; top: calc(var(--size) * -0.73 - 24px); transform: translateX(-50%); white-space: nowrap;
   padding: 1px 7px; border-radius: 4px; background: rgba(8, 12, 16, .72); color: #f0e6d2;
@@ -80,7 +75,6 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 [data-owner="mate"].mate-fade { opacity: 0; scale: .92; }
 /* A kept ping skips the fade at the end of its life: its art stays, still bobbing, until it is removed. */
 .ping.kept .art, .ping.kept .tag, .ping.kept .label { animation-name: none; }
-.ping.kept .area { animation: none; opacity: .75; }
 /* The receipt for a Do it ask is the teammate's tag alone, centred where the ping would be. */
 .ping.tag-only .tag { top: -10px; }
 @keyframes tagIn { from { transform: translate(-50%, 4px) } }

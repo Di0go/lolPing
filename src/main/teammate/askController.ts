@@ -10,6 +10,7 @@ import { overviewToPhysical, receiptPoint, type Shot } from '../../shared/teamma
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, splitLine } from '../../shared/teammate/line';
+import { resolveTarget } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
 import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
@@ -357,7 +358,7 @@ export class AskController extends EventEmitter {
     };
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
-    const tools = toolDefs({ emotes: run.emotes, spots: 1 });
+    const tools = toolDefs({ emotes: run.emotes, spots: 1, file: false });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
     this.startDeadlines(run);
@@ -548,21 +549,18 @@ export class AskController extends EventEmitter {
     }
   }
 
-  private target(run: Run, at: Target): { phys: Point; ring: boolean } | null {
-    // The model numbers the user's spots from 1; an {x, y} guess is drawn as an area, not a precise point.
-    if ('mark' in at) return at.mark === 1 ? { phys: run.spot.phys, ring: false } : null;
-    const phys = run.shot ? overviewToPhysical(run.shot, at) : null;
-    return phys ? { phys, ring: true } : null;
+  private target(run: Run, at: Target): Point | null {
+    // The model numbers the user's spots from 1. Real marks to snap onto come with the context helper's marks.
+    return run.shot ? resolveTarget(at, { spots: [run.spot.phys], marks: [], shot: run.shot }) : null;
   }
 
   private placePing(run: Run, c: Extract<ToolCall, { tool: 'ping' }>): void {
     const point = this.target(run, c.at);
-    const at = point ? this.deps.overlay.toLocal(point.phys) : null;
+    const at = point ? this.deps.overlay.toLocal(point) : null;
     if (!point || !at) return;
-    run.marks.push(point.phys);
+    run.marks.push(point);
     const ping = {
       ...at, id: c.type, tag: run.tag,
-      ...(point.ring ? { ring: true } : {}),
       ...(c.label ? { label: c.label } : {}),
       ...(run.pings > 0 ? { silent: true } : {}), // one sound for the whole set
     };
@@ -587,9 +585,9 @@ export class AskController extends EventEmitter {
 
   private placeEmote(run: Run, c: Extract<ToolCall, { tool: 'emote' }>): void {
     const point = this.target(run, c.at);
-    const at = point ? this.deps.overlay.toLocal(point.phys) : null;
+    const at = point ? this.deps.overlay.toLocal(point) : null;
     if (!point || !at) return;
-    run.marks.push(point.phys);
+    run.marks.push(point);
     this.deps.overlay.spawnMateEmote({ ...at, slug: c.slug, tag: run.tag });
     this.marksShown = true;
   }
