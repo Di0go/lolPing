@@ -106,6 +106,19 @@ describe('commands', () => {
       .toMatchObject({ trigger: 'alt', askTrigger: 'off', askTriggerVk: 0, askClick: false });
   });
 
+  it('reports ping-key clicks for the words box when the ask key is the ping key, and only then', () => {
+    const on = { ...DEFAULT_FEATURES, teammate: true };
+    const same = { ...DEFAULT_SETTINGS.teammate, askTrigger: 'same' as const, askClick: true };
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: same, features: on }, true))
+      .toMatchObject({ clickPing: true });
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: { ...same, askClick: false }, features: on }, true))
+      .toMatchObject({ clickPing: false });
+    // With the teammate off the helper gets the user's own click setting, as before.
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: same }, true)).toMatchObject({ clickPing: false });
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: { ...same, askTrigger: 'win' }, features: on }, true))
+      .toMatchObject({ clickPing: false });
+  });
+
   it('keeps the emote key while only rooms are off', () => {
     const c = configCommand({ ...DEFAULT_SETTINGS, features: { ...DEFAULT_FEATURES, rooms: false } }, true);
     expect(c).toMatchObject({ emoteTrigger: 'ctrl' });

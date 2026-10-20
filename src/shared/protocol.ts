@@ -117,11 +117,13 @@ export function configCommand(
   const e = featureOn(s, 'emotes') ? s.emoteTrigger : 'off';
   // 'same' asks on the ping wheel, so the helper gets no ask key and reports ping gestures as usual.
   const a = featureOn(s, 'teammate') && s.teammate.askTrigger !== 'same' ? s.teammate.askTrigger : 'off';
+  // ...and a ping-key click opens the words box, so the helper reports clicks even with click to ping off.
+  const sameWords = featureOn(s, 'teammate') && s.teammate.askTrigger === 'same' && s.teammate.askClick;
   return {
     type: 'config',
     trigger: typeof t === 'object' ? 'vk' : t,
     triggerVk: typeof t === 'object' ? t.vk : 0,
-    clickPing: s.clickPing,
+    clickPing: s.clickPing || sameWords,
     gameCheck: s.gameCheck,
     emoteTrigger: typeof e === 'object' ? 'vk' : e,
     emoteTriggerVk: typeof e === 'object' ? e.vk : 0,
