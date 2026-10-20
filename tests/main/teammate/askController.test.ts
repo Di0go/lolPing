@@ -57,6 +57,8 @@ interface HarnessOptions {
   /** now() runs this far ahead of the timers from the capture until the request goes out (libuv's cached time). */
   skewAfterCapture?: number;
   captureThrows?: boolean;
+  /** The capture writes its overview into the run's folder, then waits until the ask is aborted. */
+  captureHangs?: boolean;
   noDisplay?: boolean;
   /** Sees the key each adapter is made with. */
   onAdapter?: (key: string) => void;
@@ -75,6 +77,9 @@ function harness(opts: HarnessOptions = {}) {
   let captures = 0;
   let skew = 0;
   const popupsAt: Array<{ x: number; y: number }> = [];
+  /** The fake disk: folders and files under the temp folder. */
+  const disk = new Set<string>();
+  const dirs: string[] = [];
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -91,10 +96,17 @@ function harness(opts: HarnessOptions = {}) {
     },
     context: {
       foreground: async () => ({ app: 'notepad.exe', title: 'notes.txt' }),
-      capture: async (req) => {
+      capture: async (req, signal) => {
         captures += 1;
         log.push(['capture', req.spots]);
+        dirs.push(req.dir);
         if (opts.captureThrows) throw new ContextError('capture', 'no screen');
+        if (opts.captureHangs) {
+          disk.add(`${req.dir}/overview.jpg`);
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new ContextError('capture', 'aborted')), { once: true });
+          });
+        }
         skew = opts.skewAfterCapture ?? 0;
         return {
           overviewPath: `ov${captures}.jpg`,
@@ -160,14 +172,20 @@ function harness(opts: HarnessOptions = {}) {
     now: () => Date.now() + skew,
     usage: () => undefined,
     cursor: () => ({ x: 1200, y: 900 }),
-    files: { read: async (p) => Buffer.from(p), remove: async () => undefined },
+    files: {
+      read: async (p) => Buffer.from(p),
+      makeDir: async (d) => void disk.add(d),
+      removeDir: async (d) => {
+        for (const f of [...disk]) if (f === d || f.startsWith(`${d}/`)) disk.delete(f);
+      },
+    },
   };
   const ctl = new AskController(deps);
   ctl.on('state', (running: boolean) => states.push(running));
 
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
-    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt,
+    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -613,5 +631,57 @@ describe('AskController', () => {
     const last = second[second.length - 1];
     expect(last.role === 'tool' && last.results.map((r) => r.id)).toEqual(['p', 'e1', 'e2', 's']);
     expect(last.role === 'tool' && last.results[0].content).toEqual([{ text: 'Not available.' }]);
+  });
+
+  it('removes the run folder even when the ask is cancelled while the capture runs', async () => {
+    const h = harness({ captureHangs: true });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.dirs).toHaveLength(1);
+    expect(h.dirs[0].startsWith('tmp')).toBe(true);
+    expect(h.dirs[0]).not.toBe('tmp'); // a folder of this ask's own
+    expect([...h.disk]).toContain(`${h.dirs[0]}/overview.jpg`);
+    h.ctl.cancel('pause');
+    await flush();
+    expect([...h.disk]).toEqual([]);
+  });
+
+  it('removes the run folder after an answer', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Fine.' })])] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.dirs).toHaveLength(1);
+    expect([...h.disk]).toEqual([]);
+  });
+
+  it('asks a model that cannot see images with text only and pings at the user spot', async () => {
+    for (const p of [{ ...profile('fast'), vision: 'no' as const }, { ...profile('fast'), model: 'deepseek-chat' }]) {
+      const h = harness({
+        teammate: { profiles: [p] },
+        steps: [answers([call('ping', { type: 'danger', x: 600, y: 400 }), call('say', { text: 'Row 3.' })])],
+      });
+      h.ctl.ask(spot('danger'), { text: 'why', newThread: false });
+      await flush();
+      expect(h.of('capture')).toEqual([]);
+      const req = h.requests[0];
+      expect(req.system).toMatch(/can't see the screen/);
+      expect(req.tools.map((d) => d.name)).not.toContain('look');
+      const first = req.turns[0];
+      expect(first.role === 'user' && first.parts.some((part) => 'image' in part)).toBe(false);
+      expect(h.pings('danger')).toEqual([{ displayId: 1, x: 500, y: 400, id: 'danger', tag: TAG }]);
+      expect(h.bubbles().map((b) => b.line)).toEqual(['Row 3.']);
+    }
+  });
+
+  it('sends images when the profile says the model sees them, whatever its name', async () => {
+    const h = harness({
+      teammate: { profiles: [{ ...profile('fast'), model: 'deepseek-chat', vision: 'yes' }] },
+      steps: [answers([call('say', { text: 'Fine.' })])],
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.of('capture')).toHaveLength(1);
+    const first = h.requests[0].turns[0];
+    expect(first.role === 'user' && first.parts.some((part) => 'image' in part)).toBe(true);
   });
 });

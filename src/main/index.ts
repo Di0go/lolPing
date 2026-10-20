@@ -2,7 +2,8 @@ import {
   app, clipboard, dialog, Menu, nativeImage, powerMonitor, safeStorage, screen, shell, systemPreferences,
 } from 'electron';
 import { randomBytes, randomInt } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { resolveLang, strings, type Strings } from '../shared/i18n';
@@ -712,9 +713,12 @@ function start(): void {
     else if (action.t === 'history') void openHistory();
     else m.controller.onTeammateAction(view, action);
   };
+  /** Screen captures live here only during an ask; anything left from a crash or a late write goes at start and stop. */
+  const mateTempDir = (): string => join(app.getPath('temp'), 'lolping-teammate');
   const createMate = (): Mate => {
     const dir = join(settingsDir(), 'teammate');
-    const tempDir = join(app.getPath('temp'), 'lolping-teammate');
+    const tempDir = mateTempDir();
+    rmSync(tempDir, { recursive: true, force: true });
     mkdirSync(tempDir, { recursive: true });
     const secrets = new SecretStore(join(dir, 'secrets'), safeStorage);
     const history = new HistoryStore(join(dir, 'history'), safeStorage, Date.now, {
@@ -755,7 +759,9 @@ function start(): void {
     m.windows.destroy();
     pushMateTray();
     // list() waits for the history queue, so no write of the old store is still running when a new one starts.
-    return Promise.allSettled([m.context.stop(), m.usage.flush(), m.history.list()]);
+    // Once context-helper is gone nothing can still write a capture, so the folder is emptied after it.
+    const captures = m.context.stop().finally(() => rm(mateTempDir(), { recursive: true, force: true }));
+    return Promise.allSettled([captures, m.usage.flush(), m.history.list()]);
   };
   /** A teammate going down: a new one starts only after it, so two stores never write the same files. */
   let mateStopping: Promise<unknown> | null = null;

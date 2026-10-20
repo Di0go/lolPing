@@ -85,3 +85,8 @@ export function visionGuess(model: string): boolean | null {
   for (const [pattern, vision] of VISION_PATTERNS) if (pattern.test(name)) return vision;
   return null;
 }
+
+/** Whether asks with this profile send images: its Sees images setting, or on auto the name guess (unknown is yes). */
+export function profileSees(p: { vision: 'auto' | 'yes' | 'no'; model: string }): boolean {
+  return p.vision === 'auto' ? visionGuess(p.model) ?? true : p.vision === 'yes';
+}

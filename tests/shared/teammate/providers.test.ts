@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { needsKey, PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
+import { needsKey, profileSees, PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
 
 describe('providers', () => {
   it('lists every provider in the spec once', () => {
@@ -55,5 +55,15 @@ describe('needsKey', () => {
       expect(needsKey({ provider: 'custom', baseUrl: url }), url).toBe(true);
     }
     expect(needsKey({ provider: 'openai', baseUrl: 'http://localhost:8080/v1' })).toBe(true);
+  });
+});
+
+describe('profileSees', () => {
+  it('follows the profile setting, and guesses from the model name on auto with unknown names treated as yes', () => {
+    expect(profileSees({ vision: 'yes', model: 'deepseek-chat' })).toBe(true);
+    expect(profileSees({ vision: 'no', model: 'gpt-4o' })).toBe(false);
+    expect(profileSees({ vision: 'auto', model: 'deepseek-chat' })).toBe(false);
+    expect(profileSees({ vision: 'auto', model: 'gpt-4o' })).toBe(true);
+    expect(profileSees({ vision: 'auto', model: 'my-local-model' })).toBe(true);
   });
 });

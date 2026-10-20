@@ -26,6 +26,7 @@ function ctx(over: Partial<AskContext> = {}): AskContext {
     thread: null,
     instructions: '',
     emotes: false,
+    vision: true,
     ...over,
   };
 }
@@ -112,5 +113,23 @@ describe('teammate prompt', () => {
     const t = firstTurn(ctx({ thread: thread([entry(1, 'old'), entry(2, 'x'.repeat(30_000))]) }));
     if (t.role !== 'user') throw new Error('user turn expected');
     expect(t.parts.some((p) => 'text' in p && p.text.startsWith('Earlier ask'))).toBe(false);
+  });
+
+  it('asks a model that cannot see with text only: no images, no overview, no thread thumbnails', () => {
+    const c = ctx({
+      vision: false, shot: null, overviewJpeg: null, zoomJpegs: [], spots: [], words: 'why is it red',
+      thread: thread([entry(1, 'earlier line')]),
+    });
+    expect(systemPrompt(c)).toMatch(/can't see the screen/);
+    expect(systemPrompt(ctx())).not.toMatch(/can't see the screen/);
+    const t = firstTurn(c);
+    if (t.role !== 'user') throw new Error('user turn expected');
+    expect(t.parts.some((p) => 'image' in p)).toBe(false);
+    const body = t.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join(' ');
+    expect(body).toContain('why is it red');
+    expect(body).toContain('App: Notepad');
+    expect(body).toContain('earlier line');
+    expect(body).not.toContain('overview image');
+    expect(body).toContain('mark 1');
   });
 });
