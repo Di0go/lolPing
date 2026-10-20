@@ -14,8 +14,11 @@ describe('normalizeTeammate', () => {
     expect(normalizeTeammate(undefined, { ...win, platform: 'mac' })).toEqual({ ...DEFAULT_TEAMMATE, askClick: false });
   });
 
-  it('turns an ask key equal to the ping key into same', () => {
-    expect(normalizeTeammate({ askTrigger: 'alt' }, win).askTrigger).toBe('same');
+  it('moves an ask key equal to the ping key to Win: only an explicit same shares the ping key', () => {
+    expect(normalizeTeammate({ askTrigger: 'alt' }, win).askTrigger).toBe('win');
+    expect(normalizeTeammate({ askTrigger: 'same' }, win).askTrigger).toBe('same');
+    // Win is the emote key, so the ask has no free key left and shares the ping key.
+    expect(normalizeTeammate({ askTrigger: 'alt' }, { ...win, emoteTrigger: 'win' }).askTrigger).toBe('same');
   });
 
   it('moves an ask key off the emote key', () => {
@@ -25,7 +28,7 @@ describe('normalizeTeammate', () => {
   });
 
   it('treats Caps Lock and its key code as one key', () => {
-    expect(normalizeTeammate({ askTrigger: { vk: 0x14 } }, { ...win, trigger: 'capslock' }).askTrigger).toBe('same');
+    expect(normalizeTeammate({ askTrigger: { vk: 0x14 } }, { ...win, trigger: 'capslock' }).askTrigger).toBe('win');
   });
 
   it('keeps a valid separate ask key and rejects junk', () => {

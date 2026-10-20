@@ -238,6 +238,24 @@ export function patchClashes(current: Settings, patch: Partial<Settings>, platfo
   return panelKeyClashes(current, patch, platform);
 }
 
+/** The teammate's own ask key while the teammate is on; null when it asks on the ping key or is off. */
+export function separateAskKey(s: Pick<Settings, 'features' | 'teammate'>): TriggerKey | null {
+  return featureOn(s, 'teammate') && s.teammate.askTrigger !== 'same' ? s.teammate.askTrigger : null;
+}
+
+/**
+ * Whether `patch` puts the ping trigger or the emote key on the teammate's separate ask key. Saving it would move the
+ * ask key, so it is refused with a reason instead, as the emote key's clash is.
+ */
+export function askKeyClashes(current: Settings, patch: Partial<Settings>, platform: Platform = 'win'): boolean {
+  if (!('trigger' in patch) && !('emoteTrigger' in patch)) return false;
+  const ask = separateAskKey(current);
+  if (ask === null) return false;
+  const ping = trigger(pickKey(current, patch, 'trigger'), platform);
+  const emote = emoteKey(pickKey(current, patch, 'emoteTrigger'), platform);
+  return sameTrigger(ping, ask) || sameTrigger(emote, ask);
+}
+
 function hotkey(raw: unknown, fallback: Hotkey = DEFAULT_SETTINGS.toggleHotkey): Hotkey {
   // Needs Ctrl, Alt or Win: a Shift-only hotkey would swallow ordinary capital letters system-wide.
   if (

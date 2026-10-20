@@ -11,7 +11,7 @@ import type { AppStatus } from '../../shared/ipc';
 import { featureOn, type FeatureId } from '../../shared/features';
 import { hotkeyParts } from '../../shared/keys';
 import { ALL_PINGS, DEFAULT_CLICK_PING, DEFAULT_WHEEL, LOGO_TEXTURE, textureUrl, type PingId } from '../../shared/pings';
-import { triggerLabel, type Settings } from '../../shared/settings';
+import { separateAskKey, triggerLabel, type Settings } from '../../shared/settings';
 import type { WheelPatch } from '../../shared/wheelLayout';
 import { api } from './api';
 import { AboutSection } from './components/AboutSection';
@@ -101,6 +101,7 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
   const trigger = triggerLabel(s.trigger, t.lang, PLATFORM);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [triggerError, setTriggerError] = useState<string | null>(null);
+  const askKey = separateAskKey(s); // the key pickers can't take it; main refuses it too
   const mouseTrigger = s.trigger === 'mouse4' || s.trigger === 'mouse5';
   const customTrigger = typeof s.trigger === 'object';
   const pingPool: PoolItem<PingId>[] = ALL_PINGS.map((p) => ({
@@ -159,7 +160,7 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
               {customTrigger ? <span className="desc">{t.customKeyNote}</span> : null}
             </>
           )}>
-          <TriggerPicker value={s.trigger} blocked={s.emoteTrigger}
+          <TriggerPicker value={s.trigger} blocked={[s.emoteTrigger, ...(askKey ? [askKey] : [])]}
             onChange={(k) => {
               if (k !== 'off') void update({ trigger: k }).then((r) => setTriggerError(r.ok ? null : r.error));
             }} />

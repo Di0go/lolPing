@@ -9,7 +9,7 @@ import {
   type SoundError,
 } from '../../../shared/emotes';
 import type { Strings } from '../../../shared/i18n';
-import { triggerLabel, type Settings } from '../../../shared/settings';
+import { separateAskKey, triggerLabel, type Settings } from '../../../shared/settings';
 import type { WheelPatch } from '../../../shared/wheelLayout';
 import { api } from '../api';
 import { prepareEmote, prepareSound } from '../emoteImport';
@@ -131,6 +131,7 @@ export function EmoteSection({ settings: s, update, lengthUnit }: { settings: Se
   const keys = JSON.stringify([s.trigger, s.emoteTrigger, s.toggleHotkey]);
   useEffect(() => setKeyError(null), [keys]);
   const keyOff = s.emoteTrigger === 'off';
+  const askKey = separateAskKey(s);
   const custom = typeof s.emoteTrigger === 'object';
   // With no key there is nothing to name in the labels, so they fall back to the row's own title.
   const key = s.emoteTrigger === 'off' ? t.emoteKey : triggerLabel(s.emoteTrigger, t.lang, api.platform);
@@ -199,7 +200,7 @@ export function EmoteSection({ settings: s, update, lengthUnit }: { settings: Se
             {custom ? <span className="desc">{t.customKeyNote}</span> : null}
           </>
         )}>
-        <TriggerPicker value={s.emoteTrigger} offOption blocked={s.trigger}
+        <TriggerPicker value={s.emoteTrigger} offOption blocked={[s.trigger, ...(askKey ? [askKey] : [])]}
           onChange={(k) => void update({ emoteTrigger: k }).then((r) => setKeyError(r.ok ? null : r.error))} />
       </SettingRow>
       {keyError ? <div className="rowError" role="alert">{keyError}</div> : null}

@@ -3,8 +3,8 @@ import { DEFAULT_CLICK_EMOTE, DEFAULT_EMOTE_WHEEL } from '../../src/shared/emote
 import { MOD } from '../../src/shared/keys';
 import { formatRoomCode, makeRoomCode } from '../../src/shared/roomCode';
 import {
-  DEFAULT_SETTINGS, keyboardTriggers, mergeSettings, normalizeSettings, overlaySettings, patchClashes, rendererPatch, sameTrigger,
-  soundLevel, triggerLabel, triggersClash,
+  askKeyClashes, DEFAULT_SETTINGS, keyboardTriggers, mergeSettings, normalizeSettings, overlaySettings, patchClashes, rendererPatch,
+  sameTrigger, separateAskKey, soundLevel, triggerLabel, triggersClash,
 } from '../../src/shared/settings';
 
 describe('normalizeSettings', () => {
@@ -466,6 +466,42 @@ describe('emote key clashes', () => {
     // 'meta' is not a trigger, so the emote key would become the default Ctrl, which clashes with a Ctrl ping trigger.
     expect(patchClashes({ ...current, trigger: 'ctrl', emoteTrigger: 'off' }, { emoteTrigger: 'meta' as never })).toBe(true);
     expect(patchClashes(current, { emoteTrigger: 'meta' as never })).toBe(false);
+  });
+});
+
+describe('ask key clashes', () => {
+  const on = { ...DEFAULT_SETTINGS.features, teammate: true };
+  const current = {
+    ...DEFAULT_SETTINGS, trigger: 'alt' as const, emoteTrigger: 'ctrl' as const, features: on,
+    teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'mouse4' as const },
+  };
+
+  it('refuses a ping or emote key on the separate ask key while the teammate is on', () => {
+    expect(askKeyClashes(current, { trigger: 'mouse4' })).toBe(true);
+    expect(askKeyClashes(current, { emoteTrigger: 'mouse4' })).toBe(true);
+    const caps = { ...current, teammate: { ...current.teammate, askTrigger: { vk: 0x14 } } };
+    expect(askKeyClashes(caps, { trigger: 'capslock' })).toBe(true);
+    expect(askKeyClashes(current, { trigger: 'shift' })).toBe(false);
+    expect(askKeyClashes(current, { emoteTrigger: 'off' })).toBe(false);
+    expect(askKeyClashes(current, { volume: 3 })).toBe(false);
+  });
+
+  it('has nothing to refuse when the ask key is the ping key or the teammate is off', () => {
+    const same = { ...current, teammate: { ...current.teammate, askTrigger: 'same' as const } };
+    expect(askKeyClashes(same, { trigger: 'mouse4' })).toBe(false);
+    expect(askKeyClashes({ ...current, features: DEFAULT_SETTINGS.features }, { trigger: 'mouse4' })).toBe(false);
+  });
+
+  it('names the separate ask key only while the teammate is on', () => {
+    expect(separateAskKey(current)).toBe('mouse4');
+    expect(separateAskKey({ ...current, teammate: { ...current.teammate, askTrigger: 'same' } })).toBeNull();
+    expect(separateAskKey({ ...current, features: DEFAULT_SETTINGS.features })).toBeNull();
+  });
+
+  it('moves a separate ask key off a new ping key instead of making it share the ping key', () => {
+    const off = { ...current, features: DEFAULT_SETTINGS.features };
+    expect(mergeSettings(off, { trigger: 'mouse4' }).teammate.askTrigger).toBe('win');
+    expect(mergeSettings(off, { emoteTrigger: 'mouse4' }).teammate.askTrigger).toBe('win');
   });
 });
 

@@ -110,13 +110,16 @@ function sameKey(a: EmoteTriggerKey, b: EmoteTriggerKey): boolean {
   return x !== null && y !== null ? x === y : a === b;
 }
 
-/** A separate ask key never shares the ping key (that is 'same') or the emote key. */
+/**
+ * A separate ask key never shares the ping key or the emote key. One that does moves to Win: only an explicit 'same'
+ * shares the ping key, since that stops the user's pings reaching the room. 'same' is the last resort when Win is taken.
+ */
 function askTrigger(raw: unknown, ctx: { platform: Platform; trigger: TriggerKey; emoteTrigger: EmoteTriggerKey }): AskTrigger {
   if (raw === 'same') return 'same';
+  const taken = (k: TriggerKey): boolean => sameKey(k, ctx.trigger) || sameKey(k, ctx.emoteTrigger);
   const key = askKey(raw, ctx.platform) ?? FALLBACK_ASK;
-  if (sameKey(key, ctx.trigger)) return 'same';
-  if (!sameKey(key, ctx.emoteTrigger)) return key;
-  return sameKey(FALLBACK_ASK, ctx.emoteTrigger) || sameKey(FALLBACK_ASK, ctx.trigger) ? 'same' : FALLBACK_ASK;
+  if (!taken(key)) return key;
+  return taken(FALLBACK_ASK) ? 'same' : FALLBACK_ASK;
 }
 
 function intents(raw: unknown): Partial<Record<IntentId, IntentOverride>> {

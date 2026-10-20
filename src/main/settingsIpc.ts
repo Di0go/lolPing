@@ -9,7 +9,7 @@ import { hotkeyLabel, hotkeyToAccelerator, type Hotkey } from '../shared/keys';
 import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
-import { panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
+import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
 import { needsKey } from '../shared/teammate/providers';
 import type { BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
@@ -107,6 +107,9 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
     }
     if (patchClashes(d.store.get(), patch, d.platform)) {
       return { ok: false, error: d.text().emoteKeyClash, settings: d.store.get() };
+    }
+    if (askKeyClashes(d.store.get(), patch, d.platform)) {
+      return { ok: false, error: d.text().teammate.settings.askKeyClash, settings: d.store.get() };
     }
     if (patch.toggleHotkey) {
       if (sameHotkey(patch.toggleHotkey, patch.textHotkey ?? d.store.get().textHotkey)) {
