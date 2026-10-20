@@ -1,3 +1,4 @@
+import type { Point } from '../ipc';
 import type { Shot } from './coords';
 
 /** The overview's long side, its JPEG quality and the zoom crop size (spec §6.1). */
@@ -12,20 +13,43 @@ export type ContextCommand =
   | {
     type: 'capture'; id: string; display: string; spots: string; overview: number; zoom: string; quality: number; dir: string;
   }
+  | {
+    type: 'marks'; id: string; of: string; spots: string; radius: number; ocr: boolean; controls: boolean; dir: string;
+  }
+  | { type: 'systemText'; id: string; spots: string }
+  | { type: 'fileOf'; id: string }
   | { type: 'foreground'; id: string }
   | { type: 'ping'; id: string }
   | { type: 'shutdown' };
 
-export type ContextErrorCode = 'capture' | 'permission' | 'bad';
+/** `slow`: an OS probe ran over its budget and the helper exits after this reply. */
+export type ContextErrorCode = 'capture' | 'permission' | 'bad' | 'slow';
+
+/** How the helper found the file behind the window. */
+export type FileHow = 'office' | 'address' | 'title' | 'none';
+
+/** What the system says is selected, under the spots and in focus. A secure field's value is always ''. */
+export interface SystemTextLayer {
+  selection: string;
+  spotTexts: string[];
+  focus: { kind: string; label: string; value: string; secure: boolean } | null;
+  address: string;
+}
 
 /** Lines context-helper writes to stdout, after validation. */
 export type ContextReply =
   | { type: 'captured'; id: string; overview: string; ow: number; oh: number; zooms: { path: string; rect: Rect }[] }
+  | { type: 'marks'; id: string; path: string; count: number }
+  | { type: 'systemText'; id: string; layer: SystemTextLayer }
+  | { type: 'fileOf'; id: string; path: string; address: string; how: FileHow }
   | { type: 'foreground'; id: string; app: string; title: string }
   | { type: 'pong'; id: string }
   | { type: 'error'; id: string; code: ContextErrorCode; message: string };
 
 const rectText = (r: Rect): string => [r.x, r.y, r.w, r.h].map(Math.round).join(',');
+const spotsText = (spots: readonly Point[]): string => (
+  spots.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join(';')
+);
 
 /** The capture command for one ask: the helper wants whole pixels. */
 export function captureCommand(
@@ -36,7 +60,7 @@ export function captureCommand(
     type: 'capture',
     id,
     display: rectText(req.display),
-    spots: req.spots.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join(';'),
+    spots: spotsText(req.spots),
     overview: OVERVIEW_LONG_SIDE,
     zoom: `${ZOOM_SIZE.w},${ZOOM_SIZE.h}`,
     quality: JPEG_QUALITY,
@@ -44,10 +68,49 @@ export function captureCommand(
   };
 }
 
+/** Reads text and controls near the spots from capture `of`'s grab into a marks file in `dir`. */
+export function marksCommand(
+  id: string,
+  req: { of: string; spots: Point[]; radius: number; ocr: boolean; controls: boolean; dir: string },
+): ContextCommand {
+  return {
+    type: 'marks', id, of: req.of, spots: spotsText(req.spots), radius: Math.round(req.radius), ocr: req.ocr,
+    controls: req.controls, dir: req.dir,
+  };
+}
+
+export const systemTextCommand = (id: string, spots: Point[]): ContextCommand => (
+  { type: 'systemText', id, spots: spotsText(spots) }
+);
+
+export const fileOfCommand = (id: string): ContextCommand => ({ type: 'fileOf', id });
+
 export const serializeContextCommand = (cmd: ContextCommand): string => `${JSON.stringify(cmd)}\n`;
 
 const isPositiveInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
-const isErrorCode = (v: unknown): v is ContextErrorCode => v === 'capture' || v === 'permission' || v === 'bad';
+const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
+const isErrorCode = (v: unknown): v is ContextErrorCode => (
+  v === 'capture' || v === 'permission' || v === 'bad' || v === 'slow'
+);
+const isFileHow = (v: unknown): v is FileHow => v === 'office' || v === 'address' || v === 'title' || v === 'none';
+
+/** Between spot texts in the systemText reply. */
+const RECORD_SEPARATOR = '\u001e';
+
+function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
+  const { selection, spotTexts, focusKind, focusLabel, focusValue, focusSecure, address } = o;
+  if (typeof selection !== 'string' || typeof spotTexts !== 'string' || typeof focusKind !== 'string') return null;
+  if (typeof focusLabel !== 'string' || typeof focusValue !== 'string' || typeof address !== 'string') return null;
+  if (typeof focusSecure !== 'boolean') return null;
+  // The helper already sends no value for a secure field; blanking it here keeps that true whatever arrives.
+  const value = focusSecure ? '' : focusValue;
+  return {
+    selection,
+    spotTexts: spotTexts === '' ? [] : spotTexts.split(RECORD_SEPARATOR),
+    focus: focusKind === '' ? null : { kind: focusKind, label: focusLabel, value, secure: focusSecure },
+    address,
+  };
+}
 
 function parseRect(s: string): Rect | null {
   const parts = s.split(',');
@@ -89,6 +152,16 @@ export function parseContextLine(line: string): ContextReply | null {
       const zooms = parseZooms(o.zooms, o.zoomRects);
       return zooms ? { type: 'captured', id, overview: o.overview, ow: o.ow, oh: o.oh, zooms } : null;
     }
+    case 'marks':
+      if (typeof o.path !== 'string' || o.path === '' || !isCount(o.count)) return null;
+      return { type: 'marks', id, path: o.path, count: o.count };
+    case 'systemText': {
+      const layer = parseSystemText(o);
+      return layer ? { type: 'systemText', id, layer } : null;
+    }
+    case 'fileOf':
+      if (typeof o.path !== 'string' || typeof o.address !== 'string' || !isFileHow(o.how)) return null;
+      return { type: 'fileOf', id, path: o.path, address: o.address, how: o.how };
     case 'foreground':
       if (typeof o.app !== 'string' || typeof o.title !== 'string') return null;
       return { type: 'foreground', id, app: o.app, title: o.title };

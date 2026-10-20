@@ -1,9 +1,15 @@
 // Unit tests for the context helper's platform-free part (no screen capture).
 // Build and run: npm run test:helper
+#include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../src/context.h"
@@ -176,7 +182,8 @@ struct Fake {
 
 static void test_capture_writes_overview_and_one_zoom_per_spot() {
   Fake fake;
-  const std::string reply = handleCommand(parseCommand(captureLine()), fake.platform());
+  LastGrab last;
+  const std::string reply = handleCommand(parseCommand(captureLine()), fake.platform(), last).line;
   const auto m = fields(reply);
   CHECK(m.at("type") == "captured");
   CHECK(m.at("id") == "a1");
@@ -197,7 +204,8 @@ static void test_capture_scales_spots_to_a_larger_image() {
     out = blank(d.w * 2, d.h * 2);
     return true;
   };
-  const std::string reply = handleCommand(parseCommand(captureLine()), p);
+  LastGrab last;
+  const std::string reply = handleCommand(parseCommand(captureLine()), p, last).line;
   CHECK(fields(reply).at("type") == "captured");
   // The zoom is 1000 x 750 pixels of the capture, not points: half that area in points, at full detail.
   CHECK(fields(reply).at("zoomRects") == "-1920,13,500,375;-670,705,500,375");
@@ -213,7 +221,8 @@ static void test_capture_failure_is_an_error_reply() {
     f.message = "Screen Recording is off";
     return false;
   };
-  const auto m = fields(handleCommand(parseCommand(captureLine()), p));
+  LastGrab last;
+  const auto m = fields(handleCommand(parseCommand(captureLine()), p, last).line);
   CHECK(m.at("type") == "error" && m.at("id") == "a1" && m.at("code") == "permission");
   CHECK(m.at("message") == "Screen Recording is off");
   CHECK(fake.written.empty());
@@ -221,12 +230,13 @@ static void test_capture_failure_is_an_error_reply() {
 
 static void test_foreground_and_pong_replies() {
   Fake fake;
-  const auto f = fields(handleCommand(parseCommand(R"({"type":"foreground","id":"f1"})"), fake.platform()));
+  LastGrab last;
+  const auto f = fields(handleCommand(parseCommand(R"({"type":"foreground","id":"f1"})"), fake.platform(), last).line);
   CHECK(f.at("type") == "foreground" && f.at("id") == "f1" && f.at("app") == "notepad");
   CHECK(f.at("title") == "a \"note\".txt");
-  const auto p = fields(handleCommand(parseCommand(R"({"type":"ping","id":"p1"})"), fake.platform()));
+  const auto p = fields(handleCommand(parseCommand(R"({"type":"ping","id":"p1"})"), fake.platform(), last).line);
   CHECK(p.at("type") == "pong" && p.at("id") == "p1");
-  const auto b = fields(handleCommand(parseCommand(R"({"type":"capture","id":"b1"})"), fake.platform()));
+  const auto b = fields(handleCommand(parseCommand(R"({"type":"capture","id":"b1"})"), fake.platform(), last).line);
   CHECK(b.at("type") == "error" && b.at("id") == "b1" && b.at("code") == "bad");
 }
 
@@ -238,6 +248,213 @@ static void test_loop_answers_until_shutdown() {
   CHECK(code == 0);
   CHECK(out.size() == 1);
   CHECK(out.size() == 1 && fields(out[0]).at("id") == "1");
+}
+
+namespace {
+
+std::filesystem::path testDir() {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "lp-context-tests";
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+// A marks command for capture a1 with one spot near the display's left edge; `extra` adds raw JSON fields.
+std::string marksLine(const std::string& id, const std::string& extra) {
+  return R"({"type":"marks","id":")" + id + R"(","of":"a1","spots":"-1820,200",)" + extra + R"(,"dir":")" +
+         lp::jsonEscape(testDir().string()) + R"("})";
+}
+
+std::string readFile(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+}
+
+}  // namespace
+
+static void test_parse_marks_command() {
+  const Command c = parseCommand(
+      R"({"type":"marks","id":"m1","of":"a1","spots":"-1820,200;-420,900","radius":600,"ocr":true,)"
+      R"("controls":false,"dir":"C:\\Temp\\lp"})");
+  CHECK(c.kind == Command::Kind::Marks && c.id == "m1");
+  CHECK(c.marks.of == "a1");
+  CHECK(c.marks.spots.size() == 2 &&c.marks.spots[1].x == -420 && c.marks.spots[1].y == 900);
+  CHECK(c.marks.radius == 600);
+  CHECK(c.marks.ocr && !c.marks.controls);
+  CHECK(c.marks.dir == "C:\\Temp\\lp");
+  CHECK(parseCommand(R"({"type":"marks","id":"m1","of":"../a","dir":"C:\\t"})").kind == Command::Kind::Bad);
+  CHECK(parseCommand(R"({"type":"marks","id":"m1","of":"a1","ocr":"yes","dir":"C:\\t"})").kind == Command::Kind::Bad);
+  CHECK(parseCommand(R"({"type":"marks","id":"m1","of":"a1","radius":-1,"dir":"C:\\t"})").kind == Command::Kind::Bad);
+  CHECK(parseCommand(R"({"type":"marks","id":"m1","of":"a1"})").kind == Command::Kind::Bad);  // no dir
+  const Command t = parseCommand(R"({"type":"systemText","id":"s1","spots":"5,6"})");
+  CHECK(t.kind == Command::Kind::SystemText && t.spots.size() == 1);
+  CHECK(t.spots.size() == 1 && t.spots[0].x == 5 && t.spots[0].y == 6);
+  CHECK(parseCommand(R"({"type":"systemText","id":"s1","spots":"5"})").kind == Command::Kind::Bad);
+  const Command f = parseCommand(R"({"type":"fileOf","id":"f1"})");
+  CHECK(f.kind == Command::Kind::FileOf && f.id == "f1");
+}
+
+static void test_marks_for_a_gone_capture_is_bad() {
+  Fake fake;
+  const ContextPlatform p = fake.platform();
+  LastGrab last;
+  auto m = fields(handleCommand(parseCommand(marksLine("m1", R"("ocr":true)")), p, last).line);
+  CHECK(m.at("type") == "error" && m.at("id") == "m1" && m.at("code") == "bad");
+  CHECK(m.at("message") == "that capture is gone");
+  CHECK(fields(handleCommand(parseCommand(captureLine()), p, last).line).at("type") == "captured");
+  const std::string other = R"({"type":"marks","id":"m2","of":"a0","ocr":true,"dir":"C:\\t"})";
+  m = fields(handleCommand(parseCommand(other), p, last).line);
+  CHECK(m.at("code") == "bad" && m.at("message") == "that capture is gone");
+}
+
+static void test_marks_maps_boxes_to_request_units() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.grab = [](const Rect& d, Image& out, Failure&) {  // Retina: two pixels per point
+    out = blank(d.w * 2, d.h * 2);
+    return true;
+  };
+  Rect ocrArea;
+  p.ocr = [&ocrArea](const Image&, const Rect& area, std::vector<RawMark>& out, Failure&) {
+    ocrArea = area;
+    out.push_back(RawMark{"text", Rect{40, 220, 100, 40}, "Save\tall"});
+    return true;
+  };
+  p.controls = [](const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure&) {
+    if (spots.size() == 1 && spots[0].x == -1820 && radius == 100) {
+      out.push_back(RawMark{"button", Rect{-1800, 190, 50, 20}, "OK"});
+    }
+    return true;
+  };
+  LastGrab last;
+  handleCommand(parseCommand(captureLine()), p, last);
+  const Reply r = handleCommand(parseCommand(marksLine("m1", R"("radius":100,"ocr":true,"controls":true)")), p, last);
+  const auto m = fields(r.line);
+  CHECK(!r.exitAfter);
+  CHECK(m.at("type") == "marks" && m.at("id") == "m1" && m.at("count") == "2");
+  // The spot +/- 100 points, clipped at the display's left edge, in the grab's pixels.
+  CHECK(ocrArea.x == 0 && ocrArea.y == 200 && ocrArea.w == 400 && ocrArea.h == 400);
+  CHECK(m.at("path") == (testDir() / "marks-m1.tsv").string());
+  CHECK(readFile(testDir() / "marks-m1.tsv") ==
+        "text\t-1900\t110\t50\t20\tSave all\nbutton\t-1800\t190\t50\t20\tOK\n");
+}
+
+static void test_marks_keeps_what_one_probe_found() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>&, Failure& f) {
+    f.message = "no OCR language";
+    return false;
+  };
+  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>& out, Failure&) {
+    out.push_back(RawMark{"link", Rect{-1800, 190, 50, 20}, "Home"});
+    return true;
+  };
+  LastGrab last;
+  handleCommand(parseCommand(captureLine()), p, last);
+  const std::string line = marksLine("m2", R"("ocr":true,"controls":true)");
+  CHECK(fields(handleCommand(parseCommand(line), p, last).line).at("count") == "1");
+  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure& f) {
+    f.message = "no UI Automation";
+    return false;
+  };
+  const auto m = fields(handleCommand(parseCommand(line), p, last).line);
+  CHECK(m.at("type") == "error" && m.at("message") == "no OCR language");  // nothing could be read at all
+}
+
+static void test_marks_file_escapes_tabs_and_newlines() {
+  const std::string text =
+      marksFileText({RawMark{"field", Rect{-5, 6, 7, 8}, "a\tb\r\nc\nd"}, RawMark{"tab", Rect{1, 2, 3, 4}, ""}});
+  CHECK(text == "field\t-5\t6\t7\t8\ta b  c d\ntab\t1\t2\t3\t4\t\n");
+}
+
+static void test_marks_file_cuts_on_a_character_boundary() {
+  std::string chinese;
+  for (int i = 0; i < 130; ++i) chinese += "\xe4\xb8\xad";  // U+4E2D, three bytes each
+  const std::string text = marksFileText({RawMark{"text", Rect{0, 0, 10, 10}, chinese}});
+  const std::string prefix = "text\t0\t0\t10\t10\t";
+  CHECK(text.rfind(prefix, 0) == 0);
+  CHECK(text.back() == '\n');
+  CHECK(text.substr(prefix.size()) == chinese.substr(0, 120 * 3) + "\n");
+  // A cut that would land inside a character moves back to its start.
+  const std::string mixed = marksFileText({RawMark{"text", Rect{0, 0, 10, 10}, std::string(119, 'a') + chinese}});
+  CHECK(mixed.substr(prefix.size()) == std::string(119, 'a') + "\xe4\xb8\xad\n");
+}
+
+static void test_budget_gives_up_on_a_slow_probe() {
+  const auto start = std::chrono::steady_clock::now();
+  const bool done = runWithBudget([] { std::this_thread::sleep_for(std::chrono::milliseconds(200)); }, 20);
+  const auto took = std::chrono::steady_clock::now() - start;
+  CHECK(!done);
+  CHECK(took < std::chrono::milliseconds(100));
+}
+
+static void test_budget_returns_a_fast_probe() {
+  const auto ran = std::make_shared<int>(0);
+  CHECK(runWithBudget([ran] { *ran = 7; }, 1000));
+  CHECK(*ran == 7);
+}
+
+static void test_secure_focus_sends_no_value() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.systemText = [](const std::vector<Point>& spots, SystemText& out, Failure&) {
+    out.selection = "picked";
+    for (size_t i = 0; i < spots.size(); ++i) out.spotTexts.push_back("spot " + std::to_string(i + 1));
+    out.focusKind = "field";
+    out.focusLabel = "Password";
+    out.focusValue = "hunter2";
+    out.focusSecure = true;
+    out.address = "https://example.com/login";
+    return true;
+  };
+  LastGrab last;
+  const std::string reply =
+      handleCommand(parseCommand(R"({"type":"systemText","id":"s1","spots":"1,2"})"), p, last).line;
+  CHECK(reply.find(R"("focusValue":"")") != std::string::npos);
+  CHECK(reply.find("hunter2") == std::string::npos);
+  const auto m = fields(reply);
+  CHECK(m.at("type") == "systemText" && m.at("id") == "s1");
+  CHECK(m.at("selection") == "picked" && m.at("focusKind") == "field" && m.at("focusLabel") == "Password");
+  CHECK(m.at("focusSecure") == "true");
+  CHECK(m.at("spotTexts") == "spot 1");
+  CHECK(m.at("address") == "https://example.com/login");
+  // One text per spot, joined with U+001E (the test's flat parser reads no \u escapes, so look at the line).
+  const std::string two =
+      handleCommand(parseCommand(R"({"type":"systemText","id":"s2","spots":"1,2;3,4"})"), p, last).line;
+  CHECK(two.find(R"("spotTexts":"spot 1\u001espot 2")") != std::string::npos);
+}
+
+static void test_slow_probe_replies_slow_and_exits() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.fileOf = [](std::string&, std::string&, std::string&, Failure&) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(kProbeBudgetMs + 1000));
+    return true;
+  };
+  LastGrab last;
+  const Reply r = handleCommand(parseCommand(R"({"type":"fileOf","id":"f1"})"), p, last);
+  const auto m = fields(r.line);
+  CHECK(m.at("type") == "error" && m.at("id") == "f1" && m.at("code") == "slow");
+  CHECK(r.exitAfter);
+  std::istringstream in("{\"type\":\"fileOf\",\"id\":\"1\"}\n{\"type\":\"ping\",\"id\":\"2\"}\n");
+  std::vector<std::string> out;
+  runContextLoop(in, [&](const std::string& s) { out.push_back(s); return true; }, p);
+  CHECK(out.size() == 1);  // the loop stopped after the slow reply
+}
+
+static void test_file_of_reply() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.fileOf = [](std::string& path, std::string& address, std::string& how, Failure&) {
+    path = "C:\\docs\\a.pdf";
+    address.clear();
+    how = "title";
+    return true;
+  };
+  LastGrab last;
+  const auto m = fields(handleCommand(parseCommand(R"({"type":"fileOf","id":"f2"})"), p, last).line);
+  CHECK(m.at("type") == "fileOf" && m.at("id") == "f2");
+  CHECK(m.at("path") == "C:\\docs\\a.pdf" && m.at("address").empty() && m.at("how") == "title");
 }
 
 int main() {
@@ -253,6 +470,17 @@ int main() {
   test_capture_failure_is_an_error_reply();
   test_foreground_and_pong_replies();
   test_loop_answers_until_shutdown();
+  test_parse_marks_command();
+  test_marks_for_a_gone_capture_is_bad();
+  test_marks_maps_boxes_to_request_units();
+  test_marks_keeps_what_one_probe_found();
+  test_marks_file_escapes_tabs_and_newlines();
+  test_marks_file_cuts_on_a_character_boundary();
+  test_budget_gives_up_on_a_slow_probe();
+  test_budget_returns_a_fast_probe();
+  test_secure_focus_sends_no_value();
+  test_slow_probe_replies_slow_and_exits();
+  test_file_of_reply();
   std::printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
 }

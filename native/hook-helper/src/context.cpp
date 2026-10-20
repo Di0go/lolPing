@@ -1,9 +1,16 @@
 #include "context.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 #include "json.h"
 
@@ -79,6 +86,37 @@ bool intField(const Fields& m, const char* key, int lo, int hi, int& out) {
   return true;
 }
 
+// Reads an optional true/false field; false when present but anything else.
+bool boolField(const Fields& m, const char* key, bool& out) {
+  const auto it = m.find(key);
+  if (it == m.end()) return true;
+  if (it->second != "true" && it->second != "false") return false;
+  out = it->second == "true";
+  return true;
+}
+
+// Reads the optional "x,y;x,y" spots field; the error is empty when it was fine.
+std::string spotsField(const Fields& m, std::vector<Point>& out) {
+  const auto spots = m.find("spots");
+  if (spots != m.end() && !spots->second.empty()) {
+    std::vector<int> v;
+    for (const std::string& p : split(spots->second, ';')) {
+      if (!parseInts(p, 2, v)) return "spots must be \"x,y;x,y\"";
+      out.push_back(Point{v[0], v[1]});
+    }
+  }
+  return out.size() > static_cast<size_t>(kMaxSpots) ? "too many spots" : "";
+}
+
+// Reads the required "dir" field; the error is empty when it was fine.
+std::string dirField(const Fields& m, std::string& out) {
+  const auto dir = m.find("dir");
+  if (dir == m.end() || dir->second.empty()) return "dir is missing";
+  if (dir->second.find(';') != std::string::npos) return "dir must not contain ';'";
+  out = dir->second;
+  return "";
+}
+
 Command parseCapture(const Fields& m, const std::string& id) {
   Command c;
   c.kind = Command::Kind::Capture;
@@ -91,14 +129,7 @@ Command parseCapture(const Fields& m, const std::string& id) {
   if (r.display.w < 1 || r.display.h < 1 || r.display.w > 32768 || r.display.h > 32768) {
     return bad(id, "display has no area");
   }
-  const auto spots = m.find("spots");
-  if (spots != m.end() && !spots->second.empty()) {
-    for (const std::string& p : split(spots->second, ';')) {
-      if (!parseInts(p, 2, v)) return bad(id, "spots must be \"x,y;x,y\"");
-      r.spots.push_back(Point{v[0], v[1]});
-    }
-  }
-  if (r.spots.size() > static_cast<size_t>(kMaxSpots)) return bad(id, "too many spots");
+  if (const std::string why = spotsField(m, r.spots); !why.empty()) return bad(id, why);
   if (!intField(m, "overview", 64, 8192, r.overviewLongSide)) return bad(id, "overview out of range");
   if (!intField(m, "quality", 1, 100, r.quality)) return bad(id, "quality out of range");
   const auto zoom = m.find("zoom");
@@ -109,10 +140,24 @@ Command parseCapture(const Fields& m, const std::string& id) {
     r.zoomW = v[0];
     r.zoomH = v[1];
   }
-  const auto dir = m.find("dir");
-  if (dir == m.end() || dir->second.empty()) return bad(id, "dir is missing");
-  if (dir->second.find(';') != std::string::npos) return bad(id, "dir must not contain ';'");
-  r.dir = dir->second;
+  if (const std::string why = dirField(m, r.dir); !why.empty()) return bad(id, why);
+  return c;
+}
+
+Command parseMarks(const Fields& m, const std::string& id) {
+  Command c;
+  c.kind = Command::Kind::Marks;
+  c.id = id;
+  MarksRequest& r = c.marks;
+  const auto of = m.find("of");
+  if (of == m.end() || !validId(of->second)) return bad(id, "of must name a capture");
+  r.of = of->second;
+  if (const std::string why = spotsField(m, r.spots); !why.empty()) return bad(id, why);
+  if (!intField(m, "radius", 0, 32768, r.radius)) return bad(id, "radius out of range");
+  if (!boolField(m, "ocr", r.ocr) || !boolField(m, "controls", r.controls)) {
+    return bad(id, "ocr and controls must be true or false");
+  }
+  if (const std::string why = dirField(m, r.dir); !why.empty()) return bad(id, why);
   return c;
 }
 
@@ -210,7 +255,7 @@ void drawSpots(Image& img, const std::vector<Point>& spots, const Rect& area) {
   }
 }
 
-std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
+std::string handleCapture(const Command& cmd, const ContextPlatform& platform, LastGrab& last) {
   const CaptureRequest& r = cmd.capture;
   Failure fail;
   Image full;
@@ -246,9 +291,168 @@ std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
     zooms += (i == 0 ? "" : ";") + path;
     zoomRects += (i == 0 ? "" : ";") + rectText(z);
   }
+  last.id = cmd.id;
+  last.display = r.display;
+  last.image = std::make_shared<const Image>(std::move(full));
   return "{\"type\":\"captured\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"overview\":\"" + jsonEscape(overviewPath) +
          "\",\"ow\":" + std::to_string(ow) + ",\"oh\":" + std::to_string(oh) + ",\"zooms\":\"" + jsonEscape(zooms) +
          "\",\"zoomRects\":\"" + zoomRects + "\"}";
+}
+
+constexpr size_t kMarkTextMax = 120;  // characters
+constexpr char kRecordSep = '\x1e';    // between spot texts
+
+// What a probe thread fills in, shared with that thread because a slow one outlives its command.
+template <typename Out>
+struct Probe {
+  Out out{};
+  Failure fail{"capture", "not available"};  // kept when the probe is missing or throws
+  bool ok = false;
+};
+
+// Runs `call` on its own thread; `call` must hold copies of everything it reads. False when over budget.
+template <typename Out, typename Call>
+bool runProbe(const std::shared_ptr<Probe<Out>>& job, Call call) {
+  return runWithBudget([job, call] { job->ok = call(job->out, job->fail); }, kProbeBudgetMs);
+}
+
+Reply slowReply(const std::string& id) {
+  return Reply{formatError(id, "slow", "the system took too long to answer"), true};
+}
+
+// The bounding box of the (at least one) spots +/- radius, clipped to the display, in the grab's pixels.
+Rect ocrArea(const std::vector<Point>& spots, int radius, const LastGrab& grab) {
+  const Rect& d = grab.display;
+  int x0 = spots[0].x - radius, y0 = spots[0].y - radius, x1 = spots[0].x + radius, y1 = spots[0].y + radius;
+  for (const Point& p : spots) {
+    x0 = std::min(x0, p.x - radius);
+    y0 = std::min(y0, p.y - radius);
+    x1 = std::max(x1, p.x + radius);
+    y1 = std::max(y1, p.y + radius);
+  }
+  const double sx = static_cast<double>(grab.image->w) / d.w;
+  const double sy = static_cast<double>(grab.image->h) / d.h;
+  const auto px = [&](int v, int origin, int size, double s, int limit) {
+    return clampInt(static_cast<int>(std::lround((clampInt(v, origin, origin + size) - origin) * s)), 0, limit);
+  };
+  const int left = px(x0, d.x, d.w, sx, grab.image->w), right = px(x1, d.x, d.w, sx, grab.image->w);
+  const int top = px(y0, d.y, d.h, sy, grab.image->h), bottom = px(y1, d.y, d.h, sy, grab.image->h);
+  return Rect{left, top, std::max(0, right - left), std::max(0, bottom - top)};
+}
+
+// A box in the grab's pixels → request units.
+Rect toRequest(const Rect& box, const LastGrab& grab) {
+  const Rect& d = grab.display;
+  const double sx = static_cast<double>(grab.image->w) / d.w;
+  const double sy = static_cast<double>(grab.image->h) / d.h;
+  const int x0 = d.x + static_cast<int>(std::lround(box.x / sx));
+  const int y0 = d.y + static_cast<int>(std::lround(box.y / sy));
+  const int x1 = d.x + static_cast<int>(std::lround((box.x + box.w) / sx));
+  const int y1 = d.y + static_cast<int>(std::lround((box.y + box.h) / sy));
+  return Rect{x0, y0, std::max(1, x1 - x0), std::max(1, y1 - y0)};
+}
+
+// The path is UTF-8; on Windows a narrow path would be read in the ANSI code page instead.
+bool writeTextFile(const std::string& path, const std::string& text) {
+  std::u8string u8;
+  for (const char c : path) u8.push_back(static_cast<char8_t>(c));
+  std::ofstream out(std::filesystem::path(u8), std::ios::binary);
+  out << text;
+  out.close();
+  return !out.fail();
+}
+
+Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const LastGrab& last) {
+  const MarksRequest& r = cmd.marks;
+  if (!last.image || last.id != r.of) return Reply{formatError(cmd.id, "bad", "that capture is gone")};
+  std::vector<RawMark> marks;
+  bool tried = false, found = false;
+  Failure firstFail;
+  const auto keep = [&](const Probe<std::vector<RawMark>>& job, bool scaled) {
+    tried = true;
+    if (!job.ok) {
+      if (firstFail.message.empty()) firstFail = job.fail;
+      return;
+    }
+    found = true;
+    for (RawMark m : job.out) {
+      if (scaled) m.box = toRequest(m.box, last);
+      marks.push_back(std::move(m));
+    }
+  };
+  const Rect area = r.spots.empty() ? Rect{} : ocrArea(r.spots, r.radius, last);
+  if (r.ocr && area.w > 0 && area.h > 0) {
+    const auto job = std::make_shared<Probe<std::vector<RawMark>>>();
+    const auto ocr = platform.ocr;
+    const std::shared_ptr<const Image> image = last.image;
+    if (!runProbe(job, [ocr, image, area](std::vector<RawMark>& out, Failure& f) {
+          return ocr(*image, area, out, f);
+        })) {
+      return slowReply(cmd.id);
+    }
+    keep(*job, true);
+  }
+  if (r.controls && !r.spots.empty()) {
+    const auto job = std::make_shared<Probe<std::vector<RawMark>>>();
+    const auto controls = platform.controls;
+    const std::vector<Point> spots = r.spots;
+    const int radius = r.radius;
+    if (!runProbe(job, [controls, spots, radius](std::vector<RawMark>& out, Failure& f) {
+          return controls(spots, radius, out, f);
+        })) {
+      return slowReply(cmd.id);
+    }
+    keep(*job, false);
+  }
+  // One probe coming up empty-handed leaves its marks out; only nothing at all is an error.
+  if (tried && !found) return Reply{formatError(cmd.id, firstFail.code, firstFail.message)};
+  const std::string path = joinPath(r.dir, "marks-" + cmd.id + ".tsv");
+  if (!writeTextFile(path, marksFileText(marks))) {
+    return Reply{formatError(cmd.id, "capture", "could not write the marks file")};
+  }
+  return Reply{"{\"type\":\"marks\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"path\":\"" + jsonEscape(path) +
+               "\",\"count\":" + std::to_string(marks.size()) + "}"};
+}
+
+Reply handleSystemText(const Command& cmd, const ContextPlatform& platform) {
+  const auto job = std::make_shared<Probe<SystemText>>();
+  const auto systemText = platform.systemText;
+  const std::vector<Point> spots = cmd.spots;
+  if (!runProbe(job, [systemText, spots](SystemText& out, Failure& f) { return systemText(spots, out, f); })) {
+    return slowReply(cmd.id);
+  }
+  if (!job->ok) return Reply{formatError(cmd.id, job->fail.code, job->fail.message)};
+  const SystemText& t = job->out;
+  std::string spotTexts;
+  for (size_t i = 0; i < cmd.spots.size(); ++i) {
+    std::string text = i < t.spotTexts.size() ? t.spotTexts[i] : std::string();
+    std::replace(text.begin(), text.end(), kRecordSep, ' ');
+    if (i > 0) spotTexts += kRecordSep;
+    spotTexts += text;
+  }
+  // A password field's value never leaves the helper, whatever the probe read.
+  const std::string value = t.focusSecure ? std::string() : t.focusValue;
+  return Reply{"{\"type\":\"systemText\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"selection\":\"" +
+               jsonEscape(t.selection) + "\",\"spotTexts\":\"" + jsonEscape(spotTexts) + "\",\"focusKind\":\"" +
+               jsonEscape(t.focusKind) + "\",\"focusLabel\":\"" + jsonEscape(t.focusLabel) + "\",\"focusValue\":\"" +
+               jsonEscape(value) + "\",\"focusSecure\":" + (t.focusSecure ? "true" : "false") + ",\"address\":\"" +
+               jsonEscape(t.address) + "\"}"};
+}
+
+struct FileInfo {
+  std::string path, address, how = "none";
+};
+
+Reply handleFileOf(const Command& cmd, const ContextPlatform& platform) {
+  const auto job = std::make_shared<Probe<FileInfo>>();
+  const auto fileOf = platform.fileOf;
+  if (!runProbe(job, [fileOf](FileInfo& out, Failure& f) { return fileOf(out.path, out.address, out.how, f); })) {
+    return slowReply(cmd.id);
+  }
+  if (!job->ok) return Reply{formatError(cmd.id, job->fail.code, job->fail.message)};
+  const FileInfo& file = job->out;
+  return Reply{"{\"type\":\"fileOf\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"path\":\"" + jsonEscape(file.path) +
+               "\",\"address\":\"" + jsonEscape(file.address) + "\",\"how\":\"" + jsonEscape(file.how) + "\"}"};
 }
 
 }  // namespace
@@ -267,11 +471,16 @@ Command parseCommand(const std::string& line) {
   const std::string id = idIt == m.end() ? std::string() : idIt->second;
   if (!validId(id)) return bad("", "id must be 1 to 64 letters, digits, '-' or '_'");
   if (type->second == "capture") return parseCapture(m, id);
+  if (type->second == "marks") return parseMarks(m, id);
   Command c;
   c.id = id;
   if (type->second == "foreground") c.kind = Command::Kind::Foreground;
   else if (type->second == "ping") c.kind = Command::Kind::Ping;
-  else return bad(id, "unknown type");
+  else if (type->second == "fileOf") c.kind = Command::Kind::FileOf;
+  else if (type->second == "systemText") {
+    c.kind = Command::Kind::SystemText;
+    if (const std::string why = spotsField(m, c.spots); !why.empty()) return bad(id, why);
+  } else return bad(id, "unknown type");
   return c;
 }
 
@@ -324,36 +533,87 @@ std::string formatError(const std::string& id, const std::string& code, const st
          jsonEscape(message) + "\"}";
 }
 
-std::string handleCommand(const Command& cmd, const ContextPlatform& platform) {
+Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last) {
   try {
     switch (cmd.kind) {
-      case Command::Kind::Bad: return formatError(cmd.id, "bad", cmd.error);
-      case Command::Kind::Ping: return "{\"type\":\"pong\",\"id\":\"" + jsonEscape(cmd.id) + "\"}";
-      case Command::Kind::Capture: return handleCapture(cmd, platform);
+      case Command::Kind::Bad: return Reply{formatError(cmd.id, "bad", cmd.error)};
+      case Command::Kind::Ping: return Reply{"{\"type\":\"pong\",\"id\":\"" + jsonEscape(cmd.id) + "\"}"};
+      case Command::Kind::Capture: return Reply{handleCapture(cmd, platform, last)};
       case Command::Kind::Foreground: {
         std::string app, title;
         Failure fail;
-        if (!platform.foreground(app, title, fail)) return formatError(cmd.id, fail.code, fail.message);
-        return "{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
-               "\",\"title\":\"" + jsonEscape(title) + "\"}";
+        if (!platform.foreground(app, title, fail)) return Reply{formatError(cmd.id, fail.code, fail.message)};
+        return Reply{"{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
+                     "\",\"title\":\"" + jsonEscape(title) + "\"}"};
       }
+      case Command::Kind::Marks: return handleMarks(cmd, platform, last);
+      case Command::Kind::SystemText: return handleSystemText(cmd, platform);
+      case Command::Kind::FileOf: return handleFileOf(cmd, platform);
       case Command::Kind::Shutdown: break;
     }
   } catch (const std::exception& e) {  // a huge display can run out of memory; the helper stays up
-    return formatError(cmd.id, "capture", e.what());
+    return Reply{formatError(cmd.id, "capture", e.what())};
   }
-  return formatError(cmd.id, "bad", "nothing to do");
+  return Reply{formatError(cmd.id, "bad", "nothing to do")};
+}
+
+std::string marksFileText(const std::vector<RawMark>& marks) {
+  std::string out;
+  for (const RawMark& m : marks) {
+    out += m.kind + "\t" + std::to_string(m.box.x) + "\t" + std::to_string(m.box.y) + "\t" + std::to_string(m.box.w) +
+           "\t" + std::to_string(m.box.h) + "\t";
+    size_t chars = 0;
+    for (const char c : m.text) {
+      // A byte that is not a continuation byte starts a character, so the cut never splits one.
+      if ((static_cast<unsigned char>(c) & 0xC0) != 0x80 && ++chars > kMarkTextMax) break;
+      out += c == '\t' || c == '\r' || c == '\n' ? ' ' : c;
+    }
+    out += '\n';
+  }
+  return out;
+}
+
+bool runWithBudget(const std::function<void()>& probe, int budgetMs) {
+  struct State {
+    std::mutex m;
+    std::condition_variable cv;
+    bool done = false;
+  };
+  const auto state = std::make_shared<State>();
+  std::thread worker([state, probe] {
+    try {
+      probe();
+    } catch (...) {  // a throwing probe is a failed one, not a dead helper
+    }
+    {
+      const std::lock_guard<std::mutex> lock(state->m);
+      state->done = true;
+    }
+    state->cv.notify_one();
+  });
+  bool done = false;
+  {
+    std::unique_lock<std::mutex> lock(state->m);
+    done = state->cv.wait_for(lock, std::chrono::milliseconds(budgetMs), [&state] { return state->done; });
+  }
+  // A slow probe cannot be cancelled; it keeps only its own copies and dies with the process.
+  if (done) worker.join();
+  else worker.detach();
+  return done;
 }
 
 int runContextLoop(std::istream& in, const std::function<bool(const std::string&)>& write,
                    const ContextPlatform& platform) {
+  LastGrab last;
   std::string line;
   while (std::getline(in, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.find_first_not_of(" \t") == std::string::npos) continue;
     const Command cmd = parseCommand(line);
     if (cmd.kind == Command::Kind::Shutdown) return 0;
-    if (!write(handleCommand(cmd, platform))) return 0;  // lolPing is gone
+    const Reply reply = handleCommand(cmd, platform, last);
+    if (!write(reply.line)) return 0;  // lolPing is gone
+    if (reply.exitAfter) return 0;
   }
   return 0;
 }

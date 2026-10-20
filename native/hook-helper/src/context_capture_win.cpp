@@ -198,6 +198,23 @@ ContextPlatform nativePlatform() {
   p.resize = resize;
   p.writeJpeg = writeJpeg;
   p.foreground = foreground;
+  // Stubs until the text probes land in context_text_win.cpp.
+  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>&, Failure& fail) {
+    fail.message = "not available";
+    return false;
+  };
+  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure& fail) {
+    fail.message = "not available";
+    return false;
+  };
+  p.systemText = [](const std::vector<Point>&, SystemText&, Failure& fail) {
+    fail.message = "not available";
+    return false;
+  };
+  p.fileOf = [](std::string&, std::string&, std::string&, Failure& fail) {
+    fail.message = "not available";
+    return false;
+  };
   return p;
 }
 

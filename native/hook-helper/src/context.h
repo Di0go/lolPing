@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <istream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -32,11 +33,21 @@ struct CaptureRequest {
   std::string dir;            // where the JPEGs go
 };
 
+struct MarksRequest {
+  std::string of;             // the capture whose grab is read
+  std::vector<Point> spots;
+  int radius = 600;           // request units around each spot
+  bool ocr = false, controls = false;
+  std::string dir;            // where the marks file goes
+};
+
 struct Command {
-  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown } kind = Kind::Bad;
+  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown, Marks, SystemText, FileOf } kind = Kind::Bad;
   std::string id;
   std::string error;  // Bad: why
   CaptureRequest capture;
+  MarksRequest marks;
+  std::vector<Point> spots;  // SystemText
 };
 
 constexpr int kMaxSpots = 4;
@@ -62,21 +73,63 @@ struct Failure {
   std::string message;
 };
 
+/** A line of text or a control: kind is one of text, button, link, field, menu, tab, check, item, other. */
+struct RawMark {
+  std::string kind;
+  Rect box;
+  std::string text;
+};
+
+struct SystemText {
+  std::string selection;
+  std::vector<std::string> spotTexts;  // one per spot, in spot order
+  std::string focusKind, focusLabel, focusValue, address;
+  bool focusSecure = false;
+};
+
 struct ContextPlatform {
   /** Grabs the display. The image may be larger than the rect (macOS Retina): spots are scaled to it. */
   std::function<bool(const Rect& display, Image& out, Failure& fail)> grab;
   std::function<bool(const Image& in, int w, int h, Image& out)> resize;
   std::function<bool(const Image& img, int quality, const std::string& path, Failure& fail)> writeJpeg;
   std::function<bool(std::string& app, std::string& title, Failure& fail)> foreground;
+  /** Text lines inside `area` of the grab; the area and the boxes are in the image's pixels. */
+  std::function<bool(const Image& img, const Rect& area, std::vector<RawMark>& out, Failure& fail)> ocr;
+  /** Named controls within `radius` of a spot; spots, radius and boxes are in request (screen) units. */
+  std::function<bool(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail)> controls;
+  std::function<bool(const std::vector<Point>& spots, SystemText& out, Failure& fail)> systemText;
+  /** The file or web address behind the foreground window; `how` is office, address, title or none. */
+  std::function<bool(std::string& path, std::string& address, std::string& how, Failure& fail)> fileOf;
 };
 
 /** This OS's capture, resize, JPEG and foreground calls (context_capture_win.cpp, context_capture_mac.mm). */
 ContextPlatform nativePlatform();
 
-/** Runs one command and returns the reply line (without the newline). Not called for Shutdown. */
-std::string handleCommand(const Command& cmd, const ContextPlatform& platform);
+/** The latest successful capture's full grab, kept for `marks` until the next capture. */
+struct LastGrab {
+  std::string id;
+  Rect display;
+  std::shared_ptr<const Image> image;  // shared so a probe thread that outlives its command can still read it
+};
 
-/** Reads commands until shutdown or end of input, writing each reply with `write`. */
+struct Reply {
+  std::string line;        // without the newline
+  bool exitAfter = false;  // a probe is still running past its budget: the helper exits after this reply
+};
+
+/** How long one OS probe may take before the helper gives up on it. */
+constexpr int kProbeBudgetMs = 1500;
+
+/** Runs one command. Not called for Shutdown. */
+Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last);
+
+/** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
+std::string marksFileText(const std::vector<RawMark>& marks);
+
+/** Runs `probe` on its own thread; false when it is still running at the budget, leaving it running detached. */
+bool runWithBudget(const std::function<void()>& probe, int budgetMs);
+
+/** Reads commands until shutdown, end of input or a reply that exits, writing each reply with `write`. */
 int runContextLoop(std::istream& in, const std::function<bool(const std::string&)>& write,
                    const ContextPlatform& platform);
 
