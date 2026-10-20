@@ -71,6 +71,16 @@ const NOT_AVAILABLE: Part[] = [{ text: 'Not available.' }];
 const INVALID: Part[] = [{ text: 'Ignored: the arguments were not valid.' }];
 const OVER_LIMIT: Part[] = [{ text: 'Ignored: an answer has at most 6 pings and 1 emote.' }];
 
+/** Every ask ends with a line and a card answer, so More is always there; a model that skipped one is asked once. */
+function missingPart(run: Pick<Run, 'line' | 'markdown'>): string | null {
+  const line = run.line !== '';
+  const card = run.markdown.length > 0;
+  if (line && card) return null;
+  if (line) return 'Now call `answer` with the full answer in Markdown. Every ask needs it as well as the line.';
+  if (card) return 'Now call `say` with the one-line answer for the bubble.';
+  return 'Every ask needs both: call `say` with the one-line answer and `answer` with the full answer in Markdown.';
+}
+
 interface Run {
   machine: AskMachine;
   abort: AbortController;
@@ -359,6 +369,7 @@ export class AskController extends EventEmitter {
     run.machine.sent();
     this.startDeadlines(run);
 
+    let nudged = false;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       const result = await adapter.turn({ system, turns, tools, model: profile.model }, this.handlers(run), signal);
       if (!this.alive(run)) return;
@@ -369,8 +380,17 @@ export class AskController extends EventEmitter {
       const last = round === MAX_ROUNDS - 1;
       const step = await this.play(run, result.calls, new Set(tools.map((d) => d.name)), last);
       if (!this.alive(run)) return;
-      if (!step.again) break;
-      turns.push({ role: 'tool', results: step.results });
+      const nudge = step.again || nudged || last ? null : missingPart(run);
+      if (!step.again && nudge === null) break;
+      if (nudge !== null) nudged = true;
+      if (result.calls.length === 0) {
+        turns.push({ role: 'user', parts: [{ text: nudge ?? '' }] });
+        continue;
+      }
+      const results = step.results;
+      const lastResult = results[results.length - 1];
+      if (nudge !== null && lastResult) lastResult.content = [...lastResult.content, { text: nudge }];
+      turns.push({ role: 'tool', results });
     }
     await this.finish(run);
   }

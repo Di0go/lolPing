@@ -37,6 +37,9 @@ const answers = (calls: RawCall[], text = ''): Step => async (_req, h) => {
   return { text, calls };
 };
 
+/** The model answers lolPing's one request for a missing line or card answer with nothing. */
+const ignoresNudge = answers([]);
+
 /** A provider turn that never finishes until the ask is aborted. */
 const hangs = (opts: { accept: boolean }): Step => (_req, h, signal) => {
   if (opts.accept) h.accepted();
@@ -254,6 +257,48 @@ describe('AskController', () => {
     expect(h.pings('missing')).toEqual([]);
   });
 
+  it('asks once for the card answer when the model gives only a line, so More is always there', async () => {
+    const h = harness({
+      steps: [
+        answers([call('say', { text: 'Line 3 divides by zero.' }), call('ping', { type: 'danger', mark: 1 }, 'p')]),
+        answers([call('answer', { markdown: 'B3 is 0, so =A3/B3 fails.' })]),
+      ],
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.requests).toHaveLength(2);
+    // The ask, the model's reply, then the request for what was missing.
+    const asked = h.requests[1].turns[2];
+    const notes = asked?.role === 'tool'
+      ? asked.results.flatMap((r) => r.content.flatMap((c) => ('text' in c ? [c.text] : [])))
+      : [];
+    expect(notes.at(-1)).toMatch(/call `answer`/);
+    expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Line 3 divides by zero.', more: true }));
+    expect(h.appends).toEqual([
+      { threadId: null, line: 'Line 3 divides by zero.', markdown: 'B3 is 0, so =A3/B3 fails.' },
+    ]);
+  });
+
+  it('asks once for the line when the model gives only a card answer, and never asks twice', async () => {
+    const h = harness({
+      steps: [answers([call('answer', { markdown: 'A' })]), answers([call('answer', { markdown: 'B' })])],
+    });
+    h.ctl.ask(spot('allin'));
+    await flush();
+    expect(h.requests).toHaveLength(2);
+    const asked = h.requests[1].turns[2];
+    expect(asked?.role === 'tool' && asked.results[0].content.at(-1))
+      .toEqual({ text: expect.stringMatching(/call `say`/) });
+  });
+
+  it('asks for the line and the card answer with a user turn when the model only wrote text', async () => {
+    const h = harness({ steps: [answers([], 'The sum in B4 counts row 3 twice.')] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.requests).toHaveLength(2);
+    expect(h.requests[1].turns[2]).toEqual({ role: 'user', parts: [{ text: expect.stringMatching(/needs both/) }] });
+  });
+
   it('ignores tool calls that arrive after the ask was cancelled', async () => {
     let finish: (r: TurnResult) => void = () => undefined;
     const first: Step = (_req, h) => {
@@ -339,7 +384,9 @@ describe('AskController', () => {
 
   it('continues the thread with push and labels the bubble', async () => {
     const h = harness({
-      steps: [answers([call('say', { text: 'First answer.' })]), answers([call('say', { text: 'More detail.' })])],
+      steps: [
+        answers([call('say', { text: 'First answer.' })]), ignoresNudge, answers([call('say', { text: 'More detail.' })]),
+      ],
     });
     h.ctl.ask(spot('missing'));
     await flush();
@@ -351,7 +398,7 @@ describe('AskController', () => {
       ['More detail.', 'First answer.'],
     ]);
     expect(h.appends.map((a) => a.threadId)).toEqual([null, 't1']);
-    const firstTurn = h.requests[1].turns[0];
+    const firstTurn = h.requests[2].turns[0];
     const earlier = { text: 'Earlier in this thread, newest first:' };
     expect(firstTurn.role === 'user' && firstTurn.parts).toContainEqual(earlier);
     // Push on the same spot opens the card by itself, with the whole thread in it.
@@ -448,7 +495,7 @@ describe('AskController', () => {
   it('opens the card from More with the rest of a long line, and a reply continues the thread', async () => {
     const long = 'The cell adds row 3 twice. The total should be 41, which also changes the average in B9 below it.';
     const h = harness({
-      steps: [answers([call('say', { text: long })]), answers([call('say', { text: 'B9 is 8.2.' })])],
+      steps: [answers([call('say', { text: long })]), ignoresNudge, answers([call('say', { text: 'B9 is 8.2.' })])],
     });
     h.ctl.ask(spot('danger'));
     await flush();
@@ -483,7 +530,9 @@ describe('AskController', () => {
       historyOff: true,
       steps: [
         answers([call('say', { text: 'First answer.' })]),
+        ignoresNudge,
         answers([call('say', { text: 'More detail.' })]),
+        ignoresNudge,
         answers([call('say', { text: 'Even more.' })]),
       ],
     });
@@ -495,7 +544,7 @@ describe('AskController', () => {
     h.ctl.ask(spot('push', 1500, 900));
     await flush();
     expect(h.bubbles().map((b) => b.thread)).toEqual([null, 'First answer.', 'First answer.']);
-    const turn = h.requests[2].turns[0];
+    const turn = h.requests[4].turns[0];
     const earlier = turn.role === 'user' ? turn.parts.flatMap((p) => ('text' in p ? [p.text] : [])) : [];
     expect(earlier.filter((s) => s.startsWith('Earlier ask'))).toHaveLength(2);
     expect(h.ctl.currentThread()?.entries.map((e) => e.line)).toEqual(['First answer.', 'More detail.', 'Even more.']);
@@ -555,7 +604,7 @@ describe('AskController', () => {
     // History off: the controller alone holds the thread, as it does in the app once History has been cleared.
     const h = harness({
       historyOff: true,
-      steps: [answers([call('say', { text: 'First.' })]), answers([call('say', { text: 'Second.' })])],
+      steps: [answers([call('say', { text: 'First.' })]), ignoresNudge, answers([call('say', { text: 'Second.' })])],
     });
     h.ctl.ask(spot('danger'));
     await flush();
