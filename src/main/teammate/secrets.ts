@@ -27,21 +27,17 @@ interface SecretData {
 
 const EMPTY = (): SecretData => ({ keys: {}, instructions: '' });
 
-/** Parses untrusted decrypted text; anything unexpected becomes an empty store. */
+/** Parses untrusted decrypted text; anything unexpected becomes an empty store. Throws on text that isn't JSON. */
 function parse(text: string): SecretData {
-  try {
-    const raw: unknown = JSON.parse(text);
-    if (typeof raw !== 'object' || raw === null) return EMPTY();
-    const { keys, instructions } = raw as Record<string, unknown>;
-    const out = EMPTY();
-    if (typeof keys === 'object' && keys !== null) {
-      for (const [id, value] of Object.entries(keys)) if (typeof value === 'string' && value) out.keys[id] = value;
-    }
-    if (typeof instructions === 'string') out.instructions = instructions.slice(0, INSTRUCTIONS_MAX_CHARS);
-    return out;
-  } catch {
-    return EMPTY();
+  const raw: unknown = JSON.parse(text);
+  if (typeof raw !== 'object' || raw === null) return EMPTY();
+  const { keys, instructions } = raw as Record<string, unknown>;
+  const out = EMPTY();
+  if (typeof keys === 'object' && keys !== null) {
+    for (const [id, value] of Object.entries(keys)) if (typeof value === 'string' && value) out.keys[id] = value;
   }
+  if (typeof instructions === 'string') out.instructions = instructions.slice(0, INSTRUCTIONS_MAX_CHARS);
+  return out;
 }
 
 /**
@@ -51,8 +47,14 @@ function parse(text: string): SecretData {
 export class SecretStore {
   private data: SecretData = EMPTY();
   private writing: Promise<void> = Promise.resolve();
+  /** The file is there but couldn't be read: a write must not replace it before it is read again or moved aside. */
+  private unread = false;
 
-  constructor(private readonly file: string, private readonly crypto: Crypto) {
+  constructor(
+    private readonly file: string,
+    private readonly crypto: Crypto,
+    private readonly now: () => number = Date.now,
+  ) {
     this.load();
   }
 
@@ -93,18 +95,33 @@ export class SecretStore {
   }
 
   private load(): void {
-    // A missing, undecryptable or malformed file all mean "nothing stored yet"; the next write replaces it.
+    // A missing file means nothing is stored yet. One that can't be decrypted (a keychain prompt the user denied) or
+    // parsed reads as empty, but is kept: see keepUnreadable.
     if (!this.available() || !existsSync(this.file)) return;
     try {
       this.data = parse(this.crypto.decryptString(readFileSync(this.file)));
+      this.unread = false;
     } catch {
       this.data = EMPTY();
+      this.unread = true;
     }
+  }
+
+  /** Before the first write over a file that couldn't be read: read it again, and if that fails too, move it aside. */
+  private async keepUnreadable(): Promise<void> {
+    if (!this.unread) return;
+    this.load();
+    if (!this.unread) return;
+    await renameWithRetry(this.file, `${this.file}.unreadable-${this.now()}`).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    });
+    this.unread = false;
   }
 
   private update(change: (d: SecretData) => void): Promise<void> {
     if (!this.available()) return Promise.reject(new SecretsUnavailableError());
     const run = this.writing.then(async () => {
+      await this.keepUnreadable();
       const next: SecretData = { keys: { ...this.data.keys }, instructions: this.data.instructions };
       change(next);
       await this.write(next);

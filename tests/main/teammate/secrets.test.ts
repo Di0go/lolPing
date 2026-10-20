@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SecretStore, SecretsUnavailableError, type Crypto } from '../../../src/main/teammate/secrets';
 
@@ -86,5 +86,40 @@ describe('SecretStore', () => {
     expect(store.key('p1')).toBe('old');
     expect(store.instructions()).toBe('old words');
     expect(new SecretStore(path, fakeCrypto()).key('p1')).toBe('old');
+  });
+
+  it('moves a file it could not read aside before the first write, so a failed decrypt loses nothing', async () => {
+    const path = file();
+    await new SecretStore(path, fakeCrypto()).setKey('p1', 'sk-abc');
+    const before = readFileSync(path);
+    // A keychain that refuses to decrypt (a denied macOS prompt) on start, and works again later.
+    const crypto = fakeCrypto();
+    const decrypt = crypto.decryptString;
+    crypto.decryptString = () => {
+      throw new Error('denied');
+    };
+    const store = new SecretStore(path, crypto, () => 1234);
+    expect(store.key('p1')).toBeNull();
+    await store.setKey('p2', 'sk-new');
+    expect(readFileSync(`${path}.unreadable-1234`)).toEqual(before);
+    crypto.decryptString = decrypt;
+    expect(new SecretStore(path, fakeCrypto()).key('p2')).toBe('sk-new');
+  });
+
+  it('reads the file again before the first write, keeping its keys when the keychain works by then', async () => {
+    const path = file();
+    await new SecretStore(path, fakeCrypto()).setKey('p1', 'sk-abc');
+    const crypto = fakeCrypto();
+    const decrypt = crypto.decryptString;
+    crypto.decryptString = () => {
+      throw new Error('denied');
+    };
+    const store = new SecretStore(path, crypto);
+    crypto.decryptString = decrypt;
+    await store.setInstructions('words');
+    const again = new SecretStore(path, fakeCrypto());
+    expect(again.key('p1')).toBe('sk-abc');
+    expect(again.instructions()).toBe('words');
+    expect(readdirSync(dirname(path))).toEqual(['secrets']);
   });
 });
