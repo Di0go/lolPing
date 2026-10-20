@@ -266,7 +266,7 @@ describe('teammate IPC', () => {
   const KEY = 'sk-secret-123456';
   const PROFILE: BuiltinProfile = {
     id: 'p1', kind: 'builtin', name: 'GPT', tagColor: 3, tagColorCustom: null, provider: 'openai', protocol: 'openai',
-    baseUrl: 'https://api.openai.com/v1', model: '', vision: 'auto',
+    baseUrl: 'https://api.openai.com/v1', model: '',
   };
   /** A reversible stand-in for safeStorage. */
   const crypto: Crypto = {
@@ -363,7 +363,7 @@ describe('teammate IPC without keys', () => {
     const keys: string[] = [];
     const local: BuiltinProfile = {
       id: 'local', kind: 'builtin', name: 'Ollama', tagColor: 3, tagColorCustom: null, provider: 'ollama',
-      protocol: 'openai', baseUrl: 'http://localhost:11434/v1', model: '', vision: 'auto',
+      protocol: 'openai', baseUrl: 'http://localhost:11434/v1', model: '',
     };
     let available = true;
     const secrets = {

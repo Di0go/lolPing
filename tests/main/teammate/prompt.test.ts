@@ -28,7 +28,6 @@ function ctx(over: Partial<AskContext> = {}): AskContext {
     thread: null,
     instructions: '',
     emotes: false,
-    vision: true,
     ...over,
   };
 }
@@ -153,21 +152,13 @@ describe('teammate prompt', () => {
     expect(t.parts.some((p) => 'text' in p && p.text.startsWith('Earlier ask'))).toBe(false);
   });
 
-  it('asks a model that cannot see with text only: no images, no overview, no thread thumbnails', () => {
-    const c = ctx({
-      vision: false, shot: null, overviewJpeg: null, zoomJpegs: [], spots: [], words: 'why is it red',
-      thread: thread([entry(1, 'earlier line')]),
-    });
-    expect(systemPrompt(c)).toMatch(/can't see the screen/);
-    expect(systemPrompt(ctx())).not.toMatch(/can't see the screen/);
-    const t = firstTurn(c);
+  it('always sends the overview and the zooms', () => {
+    const t = firstTurn(ctx({ words: 'why is it red', thread: thread([entry(1, 'earlier line')]) }));
     if (t.role !== 'user') throw new Error('user turn expected');
-    expect(t.parts.some((p) => 'image' in p)).toBe(false);
     const body = t.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join(' ');
-    expect(body).toContain('why is it red');
-    expect(body).toContain('App: Notepad');
-    expect(body).toContain('earlier line');
-    expect(body).not.toContain('overview image');
-    expect(body).toContain('mark 1');
+    expect(body).toContain('overview image');
+    expect(t.parts.filter((p) => 'image' in p).length).toBe(3); // overview, one zoom, the thread thumbnail
+    expect(systemPrompt(ctx())).toContain('(the first zoom image shows it up close)');
+    expect(systemPrompt(ctx())).not.toMatch(/can't see the screen/);
   });
 });

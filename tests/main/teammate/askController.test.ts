@@ -20,7 +20,7 @@ const t = strings('en').teammate;
 
 const profile = (id: string): BuiltinProfile => ({
   id, kind: 'builtin', name: id, tagColor: 3, tagColorCustom: null, provider: 'openai', protocol: 'openai',
-  baseUrl: 'https://api.example.com/v1', model: `${id}-model`, vision: 'auto',
+  baseUrl: 'https://api.example.com/v1', model: `${id}-model`,
 });
 
 const spot = (intent: Spot['intent'], x = 1000, y = 800): Spot => ({ intent, phys: { x, y }, displayId: 1 });
@@ -689,7 +689,7 @@ describe('AskController', () => {
     expect(h.popupsAt).toEqual([PRIMARY]);
   });
 
-  it('reports a provider that refuses images as a failure line', async () => {
+  it('fails with the images line when the provider refuses images', async () => {
     const { ProviderError } = await import('../../../src/main/teammate/providers/types');
     const h = harness({
       steps: [async () => {
@@ -747,34 +747,17 @@ describe('AskController', () => {
     expect([...h.disk]).toEqual([]);
   });
 
-  it('asks a model that cannot see images with text only and pings at the user spot', async () => {
-    for (const p of [{ ...profile('fast'), vision: 'no' as const }, { ...profile('fast'), model: 'deepseek-chat' }]) {
-      const h = harness({
-        teammate: { profiles: [p] },
-        steps: [answers([call('ping', { type: 'danger', x: 600, y: 400 }), call('say', { text: 'Row 3.' })])],
-      });
-      h.ctl.ask(spot('danger'), { text: 'why', newThread: false });
-      await flush();
-      expect(h.of('capture')).toEqual([]);
-      const req = h.requests[0];
-      expect(req.system).toMatch(/can't see the screen/);
-      expect(req.tools.map((d) => d.name)).not.toContain('look');
-      const first = req.turns[0];
-      expect(first.role === 'user' && first.parts.some((part) => 'image' in part)).toBe(false);
-      expect(h.pings('danger')).toEqual([{ displayId: 1, x: 500, y: 400, id: 'danger', tag: TAG }]);
-      expect(h.bubbles().map((b) => b.line)).toEqual(['Row 3.']);
-    }
-  });
-
-  it('sends images when the profile says the model sees them, whatever its name', async () => {
+  it('captures and sends images for every model, whatever its name', async () => {
     const h = harness({
-      teammate: { profiles: [{ ...profile('fast'), model: 'deepseek-chat', vision: 'yes' }] },
+      teammate: { profiles: [{ ...profile('fast'), model: 'deepseek-chat' }] },
       steps: [answers([call('say', { text: 'Fine.' })])],
     });
     h.ctl.ask(spot('danger'));
     await flush();
     expect(h.of('capture')).toHaveLength(1);
-    const first = h.requests[0].turns[0];
+    const req = h.requests[0];
+    expect(req.tools.map((d) => d.name)).toContain('look');
+    const first = req.turns[0];
     expect(first.role === 'user' && first.parts.some((part) => 'image' in part)).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ afterEach(async () => { await fake.close(); });
 
 const profile = (protocol: 'openai' | 'anthropic', baseUrl: string): BuiltinProfile => ({
   id: 'p1', kind: 'builtin', name: 'Test', tagColor: 0, tagColorCustom: null,
-  provider: protocol === 'openai' ? 'custom' : 'anthropic', protocol, baseUrl, model: 'test-model', vision: 'auto',
+  provider: protocol === 'openai' ? 'custom' : 'anthropic', protocol, baseUrl, model: 'test-model',
 });
 
 const TOOLS: ToolDef[] = [

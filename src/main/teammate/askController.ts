@@ -10,7 +10,7 @@ import { overviewToPhysical, receiptPoint, type Shot } from '../../shared/teamma
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, splitLine } from '../../shared/teammate/line';
-import { needsKey, profileSees } from '../../shared/teammate/providers';
+import { needsKey } from '../../shared/teammate/providers';
 import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import { applyLimits, parseToolCall, toolDefs, type Target, type ToolCall } from '../../shared/teammate/tools';
@@ -118,8 +118,6 @@ interface Run {
   marks: Point[];
   /** This ask's capture folder, removed when the ask ends however it ends. */
   dir: string;
-  /** The profile's model sees images; when it doesn't, nothing is captured and the ask goes as text. */
-  sees: boolean;
 }
 
 /** One ask and its answer as the card shows them. */
@@ -220,7 +218,7 @@ export class AskController extends EventEmitter {
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
       profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
       tokens: null,
-      calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id), sees: true,
+      calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
     };
     this.run = run;
     this.shown = run;
@@ -337,7 +335,6 @@ export class AskController extends EventEmitter {
     if (!profile || key === null) return this.fail(run, 'noProfile');
     if (!run.display) return this.fail(run, 'capture');
     run.profile = profile;
-    run.sees = profileSees(profile);
     run.machine.startGathering();
     const signal = run.abort.signal;
 
@@ -345,28 +342,22 @@ export class AskController extends EventEmitter {
     if (!this.alive(run)) return;
     run.app = fg.app;
     run.title = fg.title;
-    let seen: Pick<AskContext, 'shot' | 'spots' | 'overviewJpeg' | 'zoomJpegs'> = {
-      shot: null, spots: [], overviewJpeg: null, zoomJpegs: [],
-    };
-    if (run.sees) {
-      const cap = await this.capture(run, [run.spot.phys]);
-      if (!this.alive(run)) return;
-      const shot: Shot = { display: run.display.rect, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
-      run.shot = shot;
-      const overviewJpeg = await this.files.read(cap.overviewPath);
-      const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
-      if (!this.alive(run)) return;
-      run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
-      seen = { shot, spots: [toOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs };
-    }
+    const cap = await this.capture(run, [run.spot.phys]);
+    if (!this.alive(run)) return;
+    const shot: Shot = { display: run.display.rect, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
+    run.shot = shot;
+    const overviewJpeg = await this.files.read(cap.overviewPath);
+    const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
+    if (!this.alive(run)) return;
+    run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
     const ctx: AskContext = {
-      lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title, ...seen, thread: run.thread,
-      instructions: deps.secrets.instructions(), emotes: run.emotes, vision: run.sees,
+      lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
+      shot, spots: [toOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
+      instructions: deps.secrets.instructions(), emotes: run.emotes,
     };
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
-    // A model that can't see has nothing to look at closer.
-    const tools = toolDefs({ emotes: run.emotes, spots: 1 }).filter((d) => run.sees || d.name !== 'look');
+    const tools = toolDefs({ emotes: run.emotes, spots: 1 });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
     this.startDeadlines(run);
@@ -560,8 +551,6 @@ export class AskController extends EventEmitter {
   private target(run: Run, at: Target): { phys: Point; ring: boolean } | null {
     // The model numbers the user's spots from 1; an {x, y} guess is drawn as an area, not a precise point.
     if ('mark' in at) return at.mark === 1 ? { phys: run.spot.phys, ring: false } : null;
-    // A model that can't see the screen has no pixels to point at: its pings go on the user's spot.
-    if (!run.sees) return { phys: run.spot.phys, ring: false };
     const phys = run.shot ? overviewToPhysical(run.shot, at) : null;
     return phys ? { phys, ring: true } : null;
   }
@@ -733,7 +722,7 @@ export class AskController extends EventEmitter {
       title: run.thread?.title ?? (run.line || run.intent.label).slice(0, TITLE_MAX),
       footer: {
         profile: run.profile?.name ?? '', model: run.profile?.model ?? '', tokens: run.tokens,
-        used: run.sees ? [t.ask.usedScreen] : [],
+        used: [t.ask.usedScreen],
       },
     };
   }

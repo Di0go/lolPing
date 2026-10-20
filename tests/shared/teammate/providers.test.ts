@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { needsKey, profileSees, PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
+import { needsKey, PROVIDER_IDS, PROVIDERS, visionGuess } from '../../../src/shared/teammate/providers';
 
 describe('providers', () => {
   it('lists every provider in the spec once', () => {
@@ -19,6 +19,13 @@ describe('providers', () => {
     expect(local('lmstudio')).toMatchObject({ group: 'local', baseUrl: 'http://localhost:1234/v1' });
   });
 
+  it('does not call deepseek-chat text-only', () => {
+    // DeepSeek's API models see images, and the same names carry over between versions.
+    for (const m of ['deepseek-chat', 'deepseek-reasoner', 'deepseek-coder', 'deepseek-r1', 'deepseek-v3']) {
+      expect(visionGuess(m), m).toBeNull();
+    }
+  });
+
   it('guesses vision for known model names', () => {
     for (const m of [
       'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-5', 'gpt-5-mini', 'claude-3-5-sonnet-20241022', 'claude-sonnet-4-5',
@@ -29,14 +36,14 @@ describe('providers', () => {
       expect(visionGuess(m), m).toBe(true);
     }
     for (const m of [
-      'deepseek-chat', 'deepseek-reasoner', 'gpt-3.5-turbo', 'o3-mini', 'o1-mini', 'o1-preview', 'claude-2.1', 'qwen-max',
+      'gpt-3.5-turbo', 'o3-mini', 'o1-mini', 'o1-preview', 'claude-2.1', 'qwen-max',
       'qwen-plus', 'glm-4-plus', 'moonshot-v1-8k', 'kimi-k2-0905-preview', 'codestral-latest',
     ]) {
       expect(visionGuess(m), m).toBe(false);
     }
     // Unsure is null, never a wrong no.
     for (const m of [
-      'my-local-model', 'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest', 'kimi-k2.5',
+      'my-local-model', 'deepseek-chat', 'deepseek-reasoner', 'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest', 'kimi-k2.5',
     ]) {
       expect(visionGuess(m), m).toBeNull();
     }
@@ -55,15 +62,5 @@ describe('needsKey', () => {
       expect(needsKey({ provider: 'custom', baseUrl: url }), url).toBe(true);
     }
     expect(needsKey({ provider: 'openai', baseUrl: 'http://localhost:8080/v1' })).toBe(true);
-  });
-});
-
-describe('profileSees', () => {
-  it('follows the profile setting, and guesses from the model name on auto with unknown names treated as yes', () => {
-    expect(profileSees({ vision: 'yes', model: 'deepseek-chat' })).toBe(true);
-    expect(profileSees({ vision: 'no', model: 'gpt-4o' })).toBe(false);
-    expect(profileSees({ vision: 'auto', model: 'deepseek-chat' })).toBe(false);
-    expect(profileSees({ vision: 'auto', model: 'gpt-4o' })).toBe(true);
-    expect(profileSees({ vision: 'auto', model: 'my-local-model' })).toBe(true);
   });
 });

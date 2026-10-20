@@ -27,7 +27,6 @@ export interface BuiltinProfile {
   protocol: 'openai' | 'anthropic';
   baseUrl: string;
   model: string;
-  vision: 'auto' | 'yes' | 'no';
 }
 
 /** Built-in profiles only for now; agent profiles join this union later. */
@@ -145,7 +144,6 @@ function profile(raw: unknown): Profile | null {
     id, kind: 'builtin', name: cut(name.trim(), 60), provider, protocol, baseUrl: cut(baseUrl, FIELD_MAX), model: cut(model, 200),
     tagColor: isTagColor(raw.tagColor) ? raw.tagColor : DEFAULT_TEAMMATE.tagColor,
     tagColorCustom: isTagRgb(raw.tagColorCustom) ? readableTagRgb(raw.tagColorCustom) : null,
-    vision: oneOf(raw.vision, ['auto', 'yes', 'no'] as const) ? raw.vision : 'auto',
   };
 }
 

@@ -69,7 +69,6 @@ const VISION_PATTERNS: readonly [RegExp, boolean][] = [
   [/grok.*vision|grok-4/, true],
   [/llava|pixtral|minicpm-v|llama-?3\.2.*vision|llama-?4|deepseek-vl/, true],
   [/gpt-3\.5|gpt-4(-\d{4}|-32k)?$|claude-(2|instant)/, false],
-  [/deepseek-(chat|reasoner|coder|r1|v2|v3)/, false],
   [/qwen-(max|plus|turbo|long|coder)|qwen3-(max|coder)|qwq/, false],
   [/glm-(4-|4\.[5-7](-|$)|z1)/, false],
   [/moonshot-v1-(\d+k|auto)$|kimi-k2(-|$)/, false],
@@ -84,9 +83,4 @@ export function visionGuess(model: string): boolean | null {
   if (name === '') return null;
   for (const [pattern, vision] of VISION_PATTERNS) if (pattern.test(name)) return vision;
   return null;
-}
-
-/** Whether asks with this profile send images: its Sees images setting, or on auto the name guess (unknown is yes). */
-export function profileSees(p: { vision: 'auto' | 'yes' | 'no'; model: string }): boolean {
-  return p.vision === 'auto' ? visionGuess(p.model) ?? true : p.vision === 'yes';
 }

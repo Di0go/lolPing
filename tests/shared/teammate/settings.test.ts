@@ -5,7 +5,7 @@ const win = { platform: 'win', trigger: 'alt', emoteTrigger: 'ctrl' } as const;
 
 const validProfile = {
   id: 'a', kind: 'builtin', name: 'Main', tagColor: 2, tagColorCustom: null, provider: 'openai', protocol: 'openai',
-  baseUrl: 'https://api.openai.com/v1', model: 'gpt-x', vision: 'auto',
+  baseUrl: 'https://api.openai.com/v1', model: 'gpt-x',
 };
 
 describe('normalizeTeammate', () => {
@@ -45,6 +45,12 @@ describe('normalizeTeammate', () => {
     expect(t.profiles).toEqual([validProfile]);
     expect(t.defaultProfile).toBeNull();
     expect(t.deepProfile).toBe('a');
+  });
+
+  it('drops the old vision key', () => {
+    const t = normalizeTeammate({ profiles: [{ ...validProfile, vision: 'no' }] }, win);
+    expect(t.profiles).toEqual([validProfile]);
+    expect('vision' in (t.profiles[0] ?? {})).toBe(false);
   });
 
   it('drops a profile with an unknown provider or a repeated id', () => {

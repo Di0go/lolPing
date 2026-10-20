@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
 import { TAG_COLORS } from '../../../shared/roomColors';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
-import { needsKey, PROVIDERS, type ProviderId } from '../../../shared/teammate/providers';
+import { needsKey, PROVIDERS, visionGuess, type ProviderId } from '../../../shared/teammate/providers';
 import {
   INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, TAG_NAME_MAX, type BuiltinProfile, type IntentOverride,
   type TeammateSettings,
@@ -95,7 +95,6 @@ function ProfileCard({ p, onChange, onRemove }: {
       setCheck({ ok: false, text: r.message && r.message !== line ? `${line} ${r.message}` : line });
     }
   };
-  const visionLabel = { auto: m.visionAuto, yes: m.visionYes, no: m.visionNo };
   const keyless = !needsKey(p);
 
   return (
@@ -140,16 +139,7 @@ function ProfileCard({ p, onChange, onRemove }: {
           }}>
           {models.map((id) => <Option key={id} value={id}>{id}</Option>)}
         </Combobox>
-        <span>{m.vision}</span>
-        <Dropdown style={{ minWidth: 220 }} value={visionLabel[p.vision]} selectedOptions={[p.vision]}
-          onOptionSelect={(_, d) => {
-            const v = (['auto', 'yes', 'no'] as const).find((x) => x === d.optionValue);
-            if (v) onChange({ vision: v });
-          }}>
-          {(['auto', 'yes', 'no'] as const).map((v) => (
-            <Option key={v} value={v} text={visionLabel[v]}>{visionLabel[v]}</Option>
-          ))}
-        </Dropdown>
+        {visionGuess(p.model) === false ? <><span /><span className="weImportError">{m.modelNoVision}</span></> : null}
       </div>
     </div>
   );
@@ -343,7 +333,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
     if (!preset) return;
     const profile: BuiltinProfile = {
       id: newProfileId(), kind: 'builtin', name: preset.name, tagColor: mate.tagColor, tagColorCustom: null,
-      provider: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, model: '', vision: 'auto',
+      provider: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, model: '',
     };
     patch({ profiles: [...mate.profiles, profile], defaultProfile: mate.defaultProfile ?? profile.id });
   };
