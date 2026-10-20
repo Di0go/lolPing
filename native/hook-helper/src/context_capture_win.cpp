@@ -6,6 +6,7 @@
 #include <wincodec.h>
 
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -192,21 +193,22 @@ bool foreground(std::string& app, std::string& title, Failure&) {
 
 }  // namespace
 
+// The text probes, in context_text_win.cpp.
+bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const Image&, int, int, Image&)>& resize,
+              std::vector<RawMark>& out, Failure& fail);
+bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail);
+
 ContextPlatform nativePlatform() {
   ContextPlatform p;
   p.grab = grab;
   p.resize = resize;
   p.writeJpeg = writeJpeg;
   p.foreground = foreground;
-  // Stubs until the text probes land in context_text_win.cpp.
-  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>&, Failure& fail) {
-    fail.message = "not available";
-    return false;
+  p.ocr = [](const Image& img, const Rect& area, std::vector<RawMark>& out, Failure& fail) {
+    return ocrLines(img, area, resize, out, fail);
   };
-  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure& fail) {
-    fail.message = "not available";
-    return false;
-  };
+  p.controls = nearbyControls;
+  // Stubs until the system text and file probes land in context_text_win.cpp.
   p.systemText = [](const std::vector<Point>&, SystemText&, Failure& fail) {
     fail.message = "not available";
     return false;
