@@ -127,7 +127,7 @@ const entryPair = (
   label: string, words: string | null, line: string, markdown: string, tagName: string,
 ): CardState['entries'] => [
   { kind: 'ask', label, markdown: words ?? '' },
-  { kind: 'answer', label: tagName, markdown: [line, markdown].filter(Boolean).join('\n\n') },
+  { kind: 'answer', label: tagName, line, markdown },
 ];
 
 const near = (p: Point, list: readonly Point[]): boolean =>

@@ -38,7 +38,8 @@ export interface CardState {
   lang: Lang;
   tag: PingTag;
   title: string;
-  entries: { kind: 'ask' | 'answer'; label: string; markdown: string }[];
+  /** An answer's `line` is the bubble's line, shown above its Markdown; an ask's `markdown` is the user's words. */
+  entries: { kind: 'ask' | 'answer'; label: string; markdown: string; line?: string }[];
   streaming: boolean;
   footer: { profile: string; model: string; tokens: number | null; used: string[] };
 }

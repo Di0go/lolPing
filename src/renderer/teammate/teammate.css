@@ -137,7 +137,16 @@ html[data-view='history'] body {
 .mate-md [data-link] {
   color: var(--colorBrandForegroundLink);
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
   cursor: pointer;
+  transition: color var(--durationFaster) var(--curveEasyEase),
+    text-decoration-color var(--durationFaster) var(--curveEasyEase);
+}
+
+.mate-md [data-link]:hover {
+  color: var(--colorBrandForegroundLinkHover);
+  text-decoration-color: currentColor;
 }
 
 .mate-copy-code {
@@ -153,11 +162,27 @@ html[data-view='history'] body {
   padding: 0 6px;
   cursor: pointer;
   opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--durationFast) var(--curveDecelerateMid),
+    transform var(--durationFast) var(--curveDecelerateMid),
+    background-color var(--durationFaster) var(--curveEasyEase);
+}
+
+.mate-copy-code:hover {
+  background: var(--colorNeutralBackground1Hover);
 }
 
 .mate-md pre:hover .mate-copy-code,
 .mate-copy-code:focus-visible {
   opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mate-copy-code,
+  .mate-md [data-link] {
+    transition: none;
+  }
 }
 
 html[data-view='history'] #root {

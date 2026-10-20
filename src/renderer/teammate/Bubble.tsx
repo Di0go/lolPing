@@ -62,9 +62,10 @@ export function Bubble({ s, t, act, leaving }: {
         </div>
         {(s.line || s.more) && (
           <div className={st.body}>
-            <Text className={st.line}>{s.line}</Text>
+            {/* Keyed by the line, so a new line settles in instead of swapping in place. */}
+            <Text key={s.line} className={mergeClasses(st.line, m.rise)}>{s.line}</Text>
             {s.more && (
-              <Button size="small" appearance="primary" onClick={() => act({ t: 'more' })}>
+              <Button className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'more' })}>
                 {t.more}
               </Button>
             )}

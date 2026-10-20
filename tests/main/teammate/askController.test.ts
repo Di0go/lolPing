@@ -445,7 +445,7 @@ describe('AskController', () => {
     expect(firstTurn.role === 'user' && firstTurn.parts).toContainEqual(earlier);
     // Push on the same spot opens the card by itself, with the whole thread in it.
     const card = h.cards().at(-1);
-    const answered = card?.entries.filter((e) => e.kind === 'answer').map((e) => e.markdown);
+    const answered = card?.entries.filter((e) => e.kind === 'answer').map((e) => e.line);
     expect(answered).toEqual(['First answer.', 'More detail.']);
     expect(card?.streaming).toBe(false);
   });
@@ -463,7 +463,7 @@ describe('AskController', () => {
     expect(h.adapters).toEqual(['deep']);
     const card = h.cards().at(-1);
     expect(card?.entries.at(-1)).toEqual({
-      kind: 'answer', label: 'AI', markdown: 'A plan with two risks.\n\n## Risks\n- cost',
+      kind: 'answer', label: 'AI', line: 'A plan with two risks.', markdown: '## Risks\n- cost',
     });
     expect(card?.footer).toEqual({ profile: 'deep', model: 'deep-model', tokens: 120, used: [t.ask.usedScreen] });
     expect(h.requests[0].model).toBe('deep-model');
@@ -545,13 +545,14 @@ describe('AskController', () => {
 
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.of('bubbleHidden')).toHaveLength(1);
-    expect(h.cards().at(-1)?.entries.at(-1)?.markdown).toBe(long);
+    expect(h.cards().at(-1)?.entries.at(-1)?.line).toBe(long);
 
     h.ctl.onTeammateAction('card', { t: 'reply', text: 'And B9?' });
     await flush();
     expect(h.appends.map((a) => a.threadId)).toEqual([null, 't1']);
     const card = h.cards().at(-1);
-    expect(card?.entries.map((e) => e.markdown)).toEqual(['', long, 'And B9?', 'B9 is 8.2.']);
+    // An ask shows the user's words, an answer its line.
+    expect(card?.entries.map((e) => e.line ?? e.markdown)).toEqual(['', long, 'And B9?', 'B9 is 8.2.']);
     expect(card?.streaming).toBe(false);
   });
 
@@ -616,7 +617,7 @@ describe('AskController', () => {
       title: 'Old thread', streaming: false,
       entries: [
         { kind: 'ask', label: t.intent.missing.label, markdown: '' },
-        { kind: 'answer', label: 'AI', markdown: 'Long ago.' },
+        { kind: 'answer', label: 'AI', line: 'Long ago.', markdown: '' },
       ],
     })]);
     expect(h.states).toEqual([]); // nothing is asked by opening it
@@ -626,7 +627,8 @@ describe('AskController', () => {
     expect(h.of('capture')[0]).toEqual([{ x: 1200, y: 900 }]);
     expect(h.appends.map((a) => a.threadId)).toEqual(['old']);
     expect(h.of('cardHidden')).toHaveLength(hidden); // the card stays and fills in
-    expect(h.cards().at(-1)?.entries.map((e) => e.markdown)).toEqual(['', 'Long ago.', 'and now?', 'Still there.']);
+    expect(h.cards().at(-1)?.entries.map((e) => e.line ?? e.markdown))
+      .toEqual(['', 'Long ago.', 'and now?', 'Still there.']);
   });
 
   it('asks a local server with no key', async () => {

@@ -1,9 +1,13 @@
 import type { Strings } from '../../shared/i18n';
 import { MATE_COPY_MAX, type CardState } from '../../shared/teammateIpc';
 
-/** The card's answers for Copy, cut to what the main process accepts, so a Copy is never refused. */
-export function copyAllText(entries: CardState['entries']): string {
-  return entries.filter((e) => e.kind === 'answer').map((e) => e.markdown).join('\n\n').slice(0, MATE_COPY_MAX);
+/**
+ * What Copy takes: the latest answer without its line, so a reply, rewrite or grab pastes as it is; the line when
+ * that is all there is. Cut to what the main process accepts, so a Copy is never refused.
+ */
+export function copyText(entries: CardState['entries']): string {
+  const last = entries.filter((e) => e.kind === 'answer').at(-1);
+  return (last ? last.markdown || last.line || '' : '').slice(0, MATE_COPY_MAX);
 }
 
 /** "profile · model · tokens · Used: a, b", with the language's own separators. */

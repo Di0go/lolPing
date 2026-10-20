@@ -160,8 +160,8 @@ export function systemPrompt(ctx: AskContext): string {
     'How to answer (the same for every ask):',
     '1. Call `say` with one sentence that is the answer or the result itself, shown in a bubble at the spot. No '
     + `preamble, no greeting, no "see below". At most 90 characters in English, 45 in Chinese. ${language}`,
-    '2. Call `answer` with the full answer in Markdown, shown when the user presses More. Lead with the point, then '
-    + 'the detail. Always call it, even when the line says it all: then keep it to a few lines.',
+    '2. Call `answer` with the full answer in Markdown, shown when the user presses More, under your line. Go on from '
+    + 'the line instead of repeating it. Always call it, even when the line says it all: then keep it to a few lines.',
     `3. Call \`ping\` only where it helps, at most ${MAX_PINGS}. Never use \`omw\`: lolPing places that itself.`,
     '',
     'Rules:',
