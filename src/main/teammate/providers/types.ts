@@ -14,6 +14,8 @@ export interface StreamHandlers {
   /** The provider started answering: the first streamed event arrived. */
   accepted(): void;
   text(delta: string): void;
+  /** One tool call finished streaming, before the turn ends; the turn's result has the same call again. */
+  call?(c: RawCall): void;
   usage(u: { input: number; output: number }): void;
 }
 

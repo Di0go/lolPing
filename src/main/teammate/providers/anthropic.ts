@@ -51,6 +51,9 @@ function messages(turns: Turn[]): Message[] {
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 /** Anthropic Messages with streamed tool use. */
+const finished = (c: RawCall, i: number): RawCall =>
+  ({ id: c.id || `toolu_${i}`, name: c.name, args: c.args.trim() || '{}' });
+
 export function anthropicAdapter(p: BuiltinProfile, key: string, fetchImpl: typeof fetch): ProviderAdapter {
   // The documented base has no /v1, but a pasted one may.
   const url = (path: string): string => joinUrl(p.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, ''), `v1/${path}`);
@@ -115,14 +118,14 @@ export function anthropicAdapter(p: BuiltinProfile, key: string, fetchImpl: type
             const call = byIndex.get(e.index);
             if (call) call.args += d.partial_json;
           }
+        } else if (type === 'content_block_stop' && typeof e.index === 'number') {
+          const call = byIndex.get(e.index);
+          if (call) h.call?.(finished(call, calls.indexOf(call)));
         }
       }, signal);
 
       if (sawUsage) h.usage({ input, output });
-      return {
-        text,
-        calls: calls.map((c, i) => ({ id: c.id || `toolu_${i}`, name: c.name, args: c.args.trim() || '{}' })),
-      };
+      return { text, calls: calls.map(finished) };
     },
 
     async listModels(signal) {

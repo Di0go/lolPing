@@ -279,6 +279,48 @@ describe('AskController', () => {
     ]);
   });
 
+  it('shows the line as soon as its say is complete, before the card answer behind it, and only once', async () => {
+    let finish: (r: TurnResult) => void = () => undefined;
+    const say = call('say', { text: 'Line 3 divides by zero.' });
+    const slow: Step = (_req, h) => {
+      h.accepted();
+      h.call?.(say);
+      return new Promise((resolve) => { finish = resolve; });
+    };
+    const h = harness({ steps: [slow] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.ctl.running).toBe(true);
+    expect(h.bubbles().map((b) => b.line)).toEqual(['Line 3 divides by zero.']);
+
+    finish({ text: '', calls: [say, call('answer', { markdown: 'B3 is 0.' })] });
+    await flush();
+    expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Line 3 divides by zero.', more: true }));
+    expect(h.appends).toEqual([{ threadId: null, line: 'Line 3 divides by zero.', markdown: 'B3 is 0.' }]);
+  });
+
+  it('keeps the line up while its answer is still coming, then gives it its full time', async () => {
+    let finish: (r: TurnResult) => void = () => undefined;
+    const say = call('say', { text: 'Short.' });
+    const slow: Step = (_req, h) => {
+      h.accepted();
+      h.call?.(say);
+      return new Promise((resolve) => { finish = resolve; });
+    };
+    const h = harness({ steps: [slow] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    await vi.advanceTimersByTimeAsync(bubbleMs('Short.') + 5_000);
+    expect(h.of('bubbleHidden')).toHaveLength(0);
+
+    finish({ text: '', calls: [say, call('answer', { markdown: 'More.' })] });
+    await flush();
+    await vi.advanceTimersByTimeAsync(bubbleMs('Short.') - 100);
+    expect(h.of('bubbleHidden')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.of('bubbleHidden')).toHaveLength(1);
+  });
+
   it('asks once for the line when the model gives only a card answer, and never asks twice', async () => {
     const h = harness({
       steps: [answers([call('answer', { markdown: 'A' })]), answers([call('answer', { markdown: 'B' })])],

@@ -76,22 +76,36 @@ export function openaiCompatAdapter(p: BuiltinProfile, key: string, fetchImpl: t
       let usage = null as { input: number; output: number } | null;
       const slots: RawCall[] = [];
       const byIndex = new Map<number, RawCall>();
+      const named = (): RawCall[] => slots.filter((s) => s.name !== '');
+      const finished = (s: RawCall, i: number): RawCall =>
+        ({ id: s.id || `call_${i}`, name: s.name, args: s.args.trim() || '{}' });
+      // Calls stream one after another, so a new one starting means the ones before it are complete.
+      const reported = new Set<RawCall>();
+      const reportAll = (): void => {
+        named().forEach((s, i) => {
+          if (reported.has(s)) return;
+          reported.add(s);
+          h.call?.(finished(s, i));
+        });
+      };
+      const start = (id: string): RawCall => {
+        reportAll();
+        const slot = { id, name: '', args: '' };
+        slots.push(slot);
+        return slot;
+      };
       const slotFor = (tc: Record<string, unknown>): RawCall => {
         const id = typeof tc.id === 'string' ? tc.id : '';
         if (typeof tc.index === 'number') {
           const known = byIndex.get(tc.index);
           if (known) return known;
-          const slot = { id, name: '', args: '' };
+          const slot = start(id);
           byIndex.set(tc.index, slot);
-          slots.push(slot);
           return slot;
         }
         // Without an index, a new id starts a call and anything else continues the last one.
         const known = id === '' ? slots[slots.length - 1] : slots.find((s) => s.id === id);
-        if (known) return known;
-        const slot = { id, name: '', args: '' };
-        slots.push(slot);
-        return slot;
+        return known ?? start(id);
       };
 
       const readUsage = (u: unknown): void => {
@@ -128,11 +142,9 @@ export function openaiCompatAdapter(p: BuiltinProfile, key: string, fetchImpl: t
         }
       }, signal);
 
+      reportAll();
       if (usage) h.usage(usage);
-      const calls = slots
-        .filter((s) => s.name !== '')
-        .map((s, i) => ({ id: s.id || `call_${i}`, name: s.name, args: s.args.trim() || '{}' }));
-      return { text, calls };
+      return { text, calls: named().map(finished) };
     },
 
     async listModels(signal) {

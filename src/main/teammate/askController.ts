@@ -111,6 +111,8 @@ interface Run {
   markdown: string[];
   tokens: number | null;
   calls: ToolCall[];
+  /** Says shown while their turn was still streaming: when the turn ends, play() skips each of them once. */
+  early: string[];
   pings: number;
   /** Where its pings and emotes went (physical px): asking on one of them continues the thread. */
   marks: Point[];
@@ -218,7 +220,7 @@ export class AskController extends EventEmitter {
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
       profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
       tokens: null,
-      calls: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id), sees: true,
+      calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id), sees: true,
     };
     this.run = run;
     this.shown = run;
@@ -401,6 +403,15 @@ export class AskController extends EventEmitter {
         if (this.alive(run)) this.received(run);
       },
       text: () => undefined,
+      // The line goes up as soon as its call is complete, not after the whole card answer behind it.
+      call: (raw) => {
+        if (raw.name !== 'say' || !this.alive(run)) return;
+        const c = parseToolCall(raw.name, raw.args);
+        if (c?.tool !== 'say') return;
+        this.received(run);
+        run.early.push(c.text);
+        this.say(run, c.text);
+      },
       usage: (u) => {
         // Tokens are spent even when the ask was cancelled, so they always count.
         this.deps.usage(u);
@@ -502,7 +513,12 @@ export class AskController extends EventEmitter {
     }
 
     // The line comes first whatever order the model used, then the card, then the marks.
-    for (const { call } of valid) if (call.tool === 'say') this.say(run, call.text);
+    for (const { call } of valid) {
+      if (call.tool !== 'say') continue;
+      const shown = run.early.indexOf(call.text);
+      if (shown >= 0) run.early.splice(shown, 1);
+      else this.say(run, call.text);
+    }
     for (const { call } of valid) if (call.tool === 'answer') this.addAnswer(run, call.markdown);
     const pings = valid.flatMap(({ call }) => (call.tool === 'ping' ? [call] : []));
     pings.sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
@@ -626,6 +642,8 @@ export class AskController extends EventEmitter {
     }
     run.machine.done();
     this.stopRun();
+    // A line whose time ran out while the answer was still coming gets its time again from now.
+    if (this.bubbleShown && this.bubbleTimer === null) this.armBubble(run, run.line);
     if (run.autoCard && !this.cardShown) this.openCard(run);
     else if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, false));
     this.scheduleFade();
@@ -678,12 +696,17 @@ export class AskController extends EventEmitter {
     if (this.bubbleShown) this.deps.windows.updateBubble(state);
     else this.deps.windows.showBubble(this.popupAt(run), state);
     this.bubbleShown = true;
+    this.armBubble(run, line);
+  }
+
+  /** The line's time on screen. While its answer is still coming the line stays, and finish() starts its time again. */
+  private armBubble(run: Run, line: string): void {
     this.clearTimer('bubble');
     const ms = bubbleMs(line);
     this.bubbleEndsAt = this.deps.now() + ms;
     this.bubbleTimer = this.timer(ms, () => {
       this.bubbleTimer = null;
-      this.hideBubble();
+      if (!this.alive(run)) this.hideBubble();
     });
   }
 

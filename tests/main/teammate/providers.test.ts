@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAdapter } from '../../../src/main/teammate/providers';
 import { readSse } from '../../../src/main/teammate/providers/sse';
-import { ProviderError, type StreamHandlers, type Turn } from '../../../src/main/teammate/providers/types';
+import { ProviderError, type RawCall, type StreamHandlers, type Turn } from '../../../src/main/teammate/providers/types';
 import type { BuiltinProfile } from '../../../src/shared/teammate/settings';
 import { parseToolCall, type ToolDef } from '../../../src/shared/teammate/tools';
 import { startFakeProvider } from '../fixtures/fakeProvider';
@@ -21,18 +21,23 @@ const TOOLS: ToolDef[] = [
 ];
 const ASK: Turn[] = [{ role: 'user', parts: [{ text: 'hello' }] }];
 
-type Recorder = StreamHandlers & { texts: string[]; usages: { input: number; output: number }[]; log: string[] };
+type Recorder = StreamHandlers & {
+  texts: string[]; usages: { input: number; output: number }[]; calls: RawCall[]; log: string[];
+};
 
 function recorder(onText?: () => void): Recorder & { accepted: ReturnType<typeof vi.fn<() => void>> } {
   const texts: string[] = [];
   const usages: { input: number; output: number }[] = [];
+  const calls: RawCall[] = [];
   const log: string[] = [];
   return {
     accepted: vi.fn<() => void>(() => { log.push('accepted'); }),
     text: (d) => { texts.push(d); log.push('text'); onText?.(); },
     usage: (u) => { usages.push(u); },
+    call: (c) => { calls.push(c); log.push('call'); },
     texts,
     usages,
+    calls,
     log,
   };
 }
@@ -186,6 +191,37 @@ describe('provider adapters', () => {
       messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
       tools: [{ name: 'say', description: 'Say a line.', input_schema: TOOLS[0].parameters }],
     });
+  });
+
+  it('reports each tool call as it completes, the same as the turn returns it', async () => {
+    for (const [protocol, sse, base] of [
+      ['openai', OPENAI_STREAM, `${fake.url}/v1`], ['anthropic', ANTHROPIC_STREAM, fake.url],
+    ] as const) {
+      fake.reply({ sse });
+      const h = recorder();
+      const out = await createAdapter(profile(protocol, base), 'k')
+        .turn({ system: '', turns: ASK, tools: TOOLS, model: 'm' }, h, new AbortController().signal);
+      expect(h.calls, protocol).toEqual(out.calls);
+    }
+  });
+
+  it('reports a finished say while the rest of the answer is still streaming', async () => {
+    const openaiHead = OPENAI_STREAM.slice(0, OPENAI_STREAM.findIndex((c) => c.includes('"ping"')) + 1);
+    const anthropicHead = ANTHROPIC_STREAM.slice(0, ANTHROPIC_STREAM.findIndex((c) => c.includes('"ping"')));
+    for (const [protocol, sse, base] of [
+      ['openai', openaiHead, `${fake.url}/v1`], ['anthropic', anthropicHead, fake.url],
+    ] as const) {
+      fake.reply({ sse, hold: true });
+      const h = recorder();
+      const abort = new AbortController();
+      const turn = createAdapter(profile(protocol, base), 'k')
+        .turn({ system: '', turns: ASK, tools: TOOLS, model: 'm' }, h, abort.signal)
+        .catch(() => null);
+      await vi.waitFor(() => expect(h.calls, protocol).toHaveLength(1));
+      expect(h.calls[0]).toMatchObject({ name: 'say', args: '{"text":"hi"}' });
+      abort.abort();
+      await turn;
+    }
   });
 
   it('sends the image as a JPEG data part and the key in the right header', async () => {
