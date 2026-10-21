@@ -1,8 +1,8 @@
 import { Button, Combobox, Dropdown, Input, Option, OptionGroup, Switch, Textarea } from '@fluentui/react-components';
 import {
-  Bot24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, Emoji24Regular, History24Regular,
-  Keyboard24Regular, MusicNote224Regular, Person24Regular, ShieldKeyhole24Regular, Sparkle24Regular,
-  TextEditStyle24Regular,
+  Bot24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, DocumentText24Regular, Emoji24Regular,
+  Globe24Regular, History24Regular, Keyboard24Regular, MusicNote224Regular, Person24Regular, ScanText24Regular,
+  ShieldKeyhole24Regular, Sparkle24Regular, TextEditStyle24Regular, TextField24Regular,
 } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
@@ -427,6 +427,17 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         <Swatches label={m.tagColor} color={mate.tagColorCustom ? -1 : mate.tagColor}
           onPick={(i) => patch({ tagColor: i, tagColorCustom: null })} />
       </SettingRow>
+
+      <div className="section">{m.reads}</div>
+      <SwitchRow icon={<ScanText24Regular />} title={m.readMarks} description={m.readMarksDesc}
+        checked={mate.context.marks} onChange={(marks) => patch({ context: { ...mate.context, marks } })} />
+      <SwitchRow icon={<TextField24Regular />} title={m.readSystemText} description={m.readSystemTextDesc}
+        checked={mate.context.systemText}
+        onChange={(systemText) => patch({ context: { ...mate.context, systemText } })} />
+      <SwitchRow icon={<DocumentText24Regular />} title={m.readFiles} description={m.readFilesDesc}
+        checked={mate.context.files} onChange={(files) => patch({ context: { ...mate.context, files } })} />
+      <SwitchRow icon={<Globe24Regular />} title={m.readWebPdfs} description={m.readWebPdfsDesc}
+        checked={mate.context.webPdfs} onChange={(webPdfs) => patch({ context: { ...mate.context, webPdfs } })} />
 
       <div className="card mate">
         <div className="mateHead">
