@@ -52,10 +52,19 @@ describe('language', () => {
     expect(en.failed.noProfile).toMatch(/^Set me up first/);
   });
 
-  it('names the pages a file answer used in both languages', () => {
-    expect(strings('en').teammate.ask.usedFile('paper.pdf', 'p. 3–4')).toBe('paper.pdf p. 3–4');
-    expect(strings('zh-CN').teammate.ask.usedFile('paper.pdf', 'p. 3–4')).toBe('paper.pdf 第 3–4 页');
-    expect(strings('zh-CN').teammate.ask.usedFile('plan.xlsx', 'sheet Budget')).toBe('plan.xlsx sheet Budget');
+  it('names the part of a file an answer used in both languages', () => {
+    const en = strings('en').teammate.ask.usedFile;
+    const zh = strings('zh-CN').teammate.ask.usedFile;
+    expect(en('paper.pdf', 'page', '3', '4')).toBe('paper.pdf p. 3–4');
+    expect(en('deck.pptx', 'slide', '2', '2')).toBe('deck.pptx slide 2');
+    expect(en('plan.xlsx', 'sheet', 'Budget', 'Costs')).toBe('plan.xlsx sheets Budget–Costs');
+    expect(en('notes.md', 'part', '1', '2')).toBe('notes.md parts 1–2');
+    expect(zh('paper.pdf', 'page', '3', '4')).toBe('paper.pdf 第 3–4 页');
+    expect(zh('paper.pdf', 'page', '3', '3')).toBe('paper.pdf 第 3 页');
+    expect(zh('deck.pptx', 'slide', '2', '5')).toBe('deck.pptx 第 2–5 张幻灯片');
+    expect(zh('plan.xlsx', 'sheet', 'Budget', 'Budget')).toBe('plan.xlsx 工作表 Budget');
+    expect(zh('plan.xlsx', 'sheet', 'Budget', 'Costs')).toBe('plan.xlsx 工作表 Budget–Costs');
+    expect(zh('notes.md', 'part', '1', '2')).toBe('notes.md 第 1–2 部分');
   });
 
   it('has a teammate label and instruction for every ping in both languages', () => {

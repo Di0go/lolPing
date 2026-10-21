@@ -18,9 +18,8 @@ import { applyLimits, parseToolCall, toolDefs, type Target, type ToolCall } from
 import type { BubbleState, CardState, MateAction, MateView } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
-import {
-  fileBudget, fileRange, gather, readFileTool, type GatherDeps, type Gathered, type UsedItem,
-} from './gather';
+import type { Doc } from './files';
+import { fileBudget, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
 import { firstTurn, systemPrompt, type AskContext } from './prompt';
@@ -126,7 +125,8 @@ interface Run {
   dir: string;
   /** Controls and text lines near the spot, which the teammate's pings snap onto. */
   screenMarks: Mark[];
-  file: Gathered['file'];
+  /** The whole file behind the window, which read_file serves. */
+  doc: Doc | null;
   used: UsedItem[];
   skipped: boolean;
   /** File characters `read_file` has given this ask, and the most it may give. */
@@ -150,7 +150,7 @@ function usedLabel(u: UsedItem, lang: Lang): string {
     case 'text': return t.usedText;
     case 'marks': return t.usedMarks;
     case 'address': return t.usedAddress;
-    case 'file': return t.usedFile(u.name, fileRange(u.from, u.to));
+    case 'file': return t.usedFile(u.name, u.unit, u.from, u.to);
   }
 }
 
@@ -240,7 +240,7 @@ export class AskController extends EventEmitter {
       profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
       tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
-      screenMarks: [], file: null, used: [], skipped: false, fileRead: 0, fileReadLimit: 0,
+      screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, fileReadLimit: 0,
     };
     this.run = run;
     this.shown = run;
@@ -358,6 +358,8 @@ export class AskController extends EventEmitter {
     if (!run.display) return this.fail(run, 'capture');
     run.profile = profile;
     run.machine.startGathering();
+    // The total time runs from here, so a capture, helper or file read that hangs can't hold the ask up.
+    this.deadline(run, TOTAL_MS, () => this.fail(run, 'timeout'));
     const signal = run.abort.signal;
 
     const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '' }));
@@ -378,7 +380,7 @@ export class AskController extends EventEmitter {
     }, signal);
     if (!this.alive(run)) return;
     run.screenMarks = layers.marks;
-    run.file = layers.file;
+    run.doc = layers.doc;
     run.used = layers.used;
     run.skipped = layers.skipped;
     run.fileReadLimit = 2 * fileBudget(allin);
@@ -394,7 +396,9 @@ export class AskController extends EventEmitter {
     const tools = toolDefs({ emotes: run.emotes, spots: 1, file: ctx.file !== null });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
-    this.startDeadlines(run);
+    this.deadline(run, RECEIVE_MS, () => {
+      if (run.machine.phase === 'sent') this.fail(run, 'notReceived');
+    });
 
     let nudged = false;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
@@ -446,18 +450,14 @@ export class AskController extends EventEmitter {
   }
 
   /**
-   * Each deadline fails with its own reason when it fires. Timers run on libuv's cached loop time, which can be a few ms
-   * behind now(), so re-checking the clock here (machine.tick) could find the deadline not yet due and never fire.
+   * A deadline fails the ask with its own reason when it fires, unless the ask is over. Timers run on libuv's cached
+   * loop time, which can be a few ms behind now(), so re-checking the clock here (machine.tick) could find the
+   * deadline not yet due and never fire.
    */
-  private startDeadlines(run: Run): void {
-    run.deadlines.push(
-      this.timer(RECEIVE_MS, () => {
-        if (this.alive(run) && run.machine.phase === 'sent') this.fail(run, 'notReceived');
-      }),
-      this.timer(TOTAL_MS, () => {
-        if (this.alive(run)) this.fail(run, 'timeout');
-      }),
-    );
+  private deadline(run: Run, ms: number, onDue: () => void): void {
+    run.deadlines.push(this.timer(ms, () => {
+      if (this.alive(run)) onDue();
+    }));
   }
 
   /** A timer whose callback can't throw into the main process. */
@@ -552,12 +552,12 @@ export class AskController extends EventEmitter {
     for (const { raw, call } of valid) {
       if (call.tool !== 'read_file') continue;
       // Like look: no round follows the last one to read what it gives.
-      if (lastRound || !run.file) {
+      if (lastRound || !run.doc) {
         results.set(raw, NOT_AVAILABLE);
         continue;
       }
       again = true;
-      const read = readFileTool(run.file.doc, call, run.fileRead, run.fileReadLimit);
+      const read = readFileTool(run.doc, call, run.fileRead, run.fileReadLimit);
       run.fileRead = read.served;
       results.set(raw, [{ text: read.text }]);
     }

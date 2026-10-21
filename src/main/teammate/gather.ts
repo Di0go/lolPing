@@ -1,3 +1,4 @@
+import type { FileUnit } from '../../shared/i18n';
 import type { Point } from '../../shared/ipc';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
 import { locate, PAGE_CHARS } from '../../shared/teammate/locate';
@@ -27,15 +28,18 @@ export interface GatherRequest {
   title: string;
 }
 
-/** What the answer used, for the card footer; `from` and `to` are section labels. */
+/** What the answer used, for the card footer; a file's `from` and `to` are section numbers or sheet names. */
 export type UsedItem =
   | { kind: 'selection' | 'text' | 'marks' | 'address' }
-  | { kind: 'file'; name: string; from: string; to: string };
+  | { kind: 'file'; name: string; unit: FileUnit; from: string; to: string };
 
 export interface Gathered {
   marks: Mark[];
   system: SystemTextLayer | null;
+  /** The located sections for the prompt; a single section over the budget is cut there. */
   file: { doc: Doc; from: number; to: number } | null;
+  /** The whole file, uncut, for read_file. */
+  doc: Doc | null;
   used: UsedItem[];
   /** A layer was dropped because the helper was too slow or died: the footer says so. */
   skipped: boolean;
@@ -46,6 +50,13 @@ const MARK_RADIUS = 600;
 const MAX_MARKS = 150;
 /** Enough screen text to find the page by, while normalising it stays cheap. */
 const MAX_VISIBLE = 4000;
+/** A web PDF that takes longer is left out, so the ask isn't held up by a slow server. */
+const WEB_PDF_MS = 10_000;
+
+const UNITS: Record<Doc['kind'], FileUnit> = { pdf: 'page', pptx: 'slide', xlsx: 'sheet', docx: 'part', text: 'part' };
+
+/** A section label without its unit: "p. 3" is 3, "sheet Budget" is Budget. */
+const sectionRef = (label: string): string => label.replace(/^(?:p\.|slide|sheet|part) /, '');
 
 /** The file text an ask may carry: about 20 pages, or 100 for Whole picture. */
 export const fileBudget = (allin: boolean): number => PAGE_CHARS * (allin ? 100 : 20);
@@ -92,12 +103,27 @@ function located(doc: Doc, visible: string, budget: number): Gathered['file'] {
   return { doc: { ...doc, sections }, from, to: from };
 }
 
+/** Downloads a web PDF, or rejects with `timeout` once it has taken WEB_PDF_MS. */
+async function fetchWithin(deps: GatherDeps, url: string, signal: AbortSignal): Promise<Buffer> {
+  const late = new AbortController();
+  const timer = setTimeout(() => late.abort(), WEB_PDF_MS);
+  try {
+    return await deps.fetchWebPdf(url, AbortSignal.any([signal, late.signal]));
+  } catch (err) {
+    // A ContextError so the step counts it as skipped context, like a helper that was too slow.
+    if (late.signal.aborted && !signal.aborted) throw new ContextError('timeout', 'the PDF took too long to download');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Runs the context layers that are on for one ask, one after another (the helper answers one request at a time). A
  * layer that fails is left out; a cancelled ask rejects.
  */
 export async function gather(deps: GatherDeps, req: GatherRequest, signal: AbortSignal): Promise<Gathered> {
-  const out: Gathered = { marks: [], system: null, file: null, used: [], skipped: false };
+  const out: Gathered = { marks: [], system: null, file: null, doc: null, used: [], skipped: false };
   /** Runs one step; a failure leaves its layer out, and one from a slow or dead helper says context was skipped. */
   const step = async <T>(run: () => Promise<T>): Promise<T | null> => {
     try {
@@ -110,11 +136,9 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
       return null;
     }
   };
-  const { settings } = req;
+  const { settings, captureId } = req;
 
-  if (settings.systemText) out.system = await step(() => deps.context.systemText(req.spots, signal));
-
-  const { captureId } = req;
+  // Marks first: a slow probe ends the helper, and the capture's grab, which marks are read from, goes with it.
   if (settings.marks && captureId !== null) {
     const marks = await step(async () => {
       const found = await deps.context.marks({
@@ -127,15 +151,18 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
     out.marks = marks ?? [];
   }
 
+  if (settings.systemText) out.system = await step(() => deps.context.systemText(req.spots, signal));
+
   if (settings.files) {
     const behind = await step(() => deps.context.fileOf(signal));
     const web = behind && behind.path === '' && settings.webPdfs ? webPdf(behind.address, req.title) : null;
     const doc = await step(async () => {
       if (behind && behind.path !== '') return deps.readDocument(behind.path);
-      if (web) return deps.readPdfBuffer(web.name, await deps.fetchWebPdf(web.url, signal));
+      if (web) return deps.readPdfBuffer(web.name, await fetchWithin(deps, web.url, signal));
       return null;
     });
-    if (doc) {
+    if (doc && doc.sections.length > 0) {
+      out.doc = doc;
       const visible = [...(out.system?.spotTexts ?? []), ...out.marks.map((m) => m.text)].join('\n');
       out.file = located(doc, visible.slice(0, MAX_VISIBLE), fileBudget(req.allin));
     }
@@ -150,17 +177,12 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
   if (out.marks.length > 0) out.used.push({ kind: 'marks' });
   if (file) {
     const { doc, from, to } = file;
-    out.used.push({ kind: 'file', name: doc.name, from: doc.sections[from].label, to: doc.sections[to].label });
+    out.used.push({
+      kind: 'file', name: doc.name, unit: UNITS[doc.kind],
+      from: sectionRef(doc.sections[from].label), to: sectionRef(doc.sections[to].label),
+    });
   }
   return out;
-}
-
-/** "p. 3" and "p. 4" read as "p. 3–4"; labels without a shared prefix as "sheet A–sheet B". */
-export function fileRange(from: string, to: string): string {
-  if (from === to) return from;
-  const a = /^(.*?)(\d+)$/.exec(from);
-  const b = /^(.*?)(\d+)$/.exec(to);
-  return a && b && a[1] === b[1] ? `${from}–${b[2]}` : `${from}–${to}`;
 }
 
 export const ALL_READ = "That's all of the file you can read for this ask.";

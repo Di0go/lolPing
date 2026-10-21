@@ -50,6 +50,9 @@ const enMateUi = {
   historyUnavailable: 'History is off because this system can’t encrypt it.',
 };
 
+/** What a file's sections are: PDF pages, slides, sheets, or parts of a text or Word file. */
+export type FileUnit = 'page' | 'slide' | 'sheet' | 'part';
+
 /** The teammate's line when an ask fails (spec §12), and the card footer's sources. */
 interface MateAskText {
   failed: Record<AskFailure, string>;
@@ -58,8 +61,8 @@ interface MateAskText {
   usedText: string;
   usedMarks: string;
   usedAddress: string;
-  /** `range` is the file's section labels, such as "p. 3–4". */
-  usedFile: (name: string, range: string) => string;
+  /** The sections of file `name` the answer used, `from` to `to`: numbers, or sheet names. */
+  usedFile: (name: string, unit: FileUnit, from: string, to: string) => string;
   contextSkipped: string;
 }
 
@@ -81,7 +84,12 @@ const enMateAsk: MateAskText = {
   usedText: 'text on screen',
   usedMarks: 'controls',
   usedAddress: 'address',
-  usedFile: (name, range) => `${name} ${range}`,
+  usedFile: (name, unit, from, to) => {
+    const one = from === to;
+    const range = one ? from : `${from}–${to}`;
+    const word = unit === 'page' ? 'p.' : `${unit}${one ? '' : 's'}`;
+    return `${name} ${word} ${range}`;
+  },
   contextSkipped: 'some context was skipped',
 };
 
@@ -905,8 +913,13 @@ const zh: Strings = {
       usedText: '屏幕文字',
       usedMarks: '界面元素',
       usedAddress: '网址',
-      // PDF page labels read "p. 3" in English; other labels stay as the file reader wrote them.
-      usedFile: (name, range) => `${name} ${range.replace(/^p\. (.+)$/, '第 $1 页')}`,
+      usedFile: (name, unit, from, to) => {
+        const range = from === to ? from : `${from}–${to}`;
+        const where = {
+          page: `第 ${range} 页`, slide: `第 ${range} 张幻灯片`, sheet: `工作表 ${range}`, part: `第 ${range} 部分`,
+        };
+        return `${name} ${where[unit]}`;
+      },
       contextSkipped: '部分上下文已跳过',
     },
     settings: {

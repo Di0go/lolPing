@@ -72,7 +72,8 @@ interface HarnessOptions {
 }
 
 interface Screen {
-  system: SystemTextLayer | Error;
+  /** `hangs`: no answer until the ask is aborted. */
+  system: SystemTextLayer | Error | 'hangs';
   /** The helper's marks file. */
   marksFile: string;
   /** The file behind the window; null: none. */
@@ -98,6 +99,8 @@ function harness(opts: HarnessOptions = {}) {
   const disk = new Set<string>();
   const dirs: string[] = [];
   const screen: Screen = { system: NO_TEXT, marksFile: '', doc: null, ...opts.screen };
+  /** The capture whose grab the helper keeps; a slow probe ends the helper and the grab with it. */
+  let grab: string | null = null;
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -126,6 +129,7 @@ function harness(opts: HarnessOptions = {}) {
           });
         }
         skew = opts.skewAfterCapture ?? 0;
+        grab = `c${captures}`;
         return {
           captureId: `c${captures}`,
           overviewPath: `ov${captures}.jpg`,
@@ -133,11 +137,21 @@ function harness(opts: HarnessOptions = {}) {
           zooms: req.spots.map((p, i) => ({ path: `zoom${captures}-${i}.jpg`, rect: zoomRect(req.display, p) })),
         };
       },
-      systemText: async () => {
-        if (screen.system instanceof Error) throw screen.system;
-        return screen.system;
+      systemText: async (_spots, signal) => {
+        const { system } = screen;
+        if (system === 'hangs') {
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(new ContextError('aborted', 'cancelled')), { once: true });
+          });
+        }
+        if (system instanceof ContextError && system.code === 'slow') grab = null;
+        if (system instanceof Error) throw system;
+        return system;
       },
-      marks: async (req) => ({ path: `${req.dir}/marks.tsv`, count: 1 }),
+      marks: async (req) => {
+        if (req.of !== grab) throw new ContextError('bad', 'that capture is gone');
+        return { path: `${req.dir}/marks.tsv`, count: 1 };
+      },
       fileOf: async () => (screen.doc
         ? { path: `C:/docs/${screen.doc.name}`, address: '', how: 'title' }
         : { path: '', address: '', how: 'none' }),
@@ -879,7 +893,8 @@ describe('AskController', () => {
       'screen', 'selection', 'text on screen', 'address', 'controls', 'paper.pdf p. 3–4',
     ]);
 
-    // Without the screen text the file is found by the button's text alone, which matches nothing: its start.
+    // The system text is too slow: the marks, read before it from the grab, stay. Without the screen text the file
+    // is found by the button's text alone, which matches nothing: its start.
     h.screen.system = new ContextError('slow', 'the system took too long to answer');
     h.ctl.ask(spot('missing', 1300, 900));
     await flush();
@@ -887,5 +902,42 @@ describe('AskController', () => {
     expect(h.cards().at(-1)?.footer.used).toEqual([
       'screen', 'controls', 'paper.pdf p. 1–2', 'some context was skipped',
     ]);
+  });
+
+  it('finds words past the cut of an oversized section', async () => {
+    // One 70,000-character section: the prompt gets its first 60,000, read_file the whole of it.
+    const text = `${'a '.repeat(33_000)}the hidden clause ${'b '.repeat(1_000)}`;
+    let found = '';
+    const h = harness({
+      screen: { doc: { name: 'contract.txt', kind: 'text', outline: [], sections: [{ label: 'part 1', text }] } },
+      steps: [
+        answers([call('read_file', { search: 'Hidden Clause' }, 'r')]),
+        async (req, hs) => {
+          const last = req.turns.at(-1);
+          const parts = last?.role === 'tool' ? last.results.flatMap((r) => r.content) : [];
+          found = parts.flatMap((c) => ('text' in c ? [c.text] : [])).join('');
+          hs.accepted();
+          return { text: '', calls: [call('say', { text: 'Found it.' }), call('answer', { markdown: 'There.' })] };
+        },
+      ],
+    });
+    h.ctl.ask(spot('needvision'));
+    await flush();
+    const first = h.requests[0].turns[0];
+    const prompt = first.role === 'user' ? first.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('') : '';
+    expect(prompt).not.toContain('the hidden clause');
+    expect(found).toContain('the hidden clause');
+  });
+
+  it('fails an ask whose gathering hangs at the total deadline', async () => {
+    const h = harness({ screen: { system: 'hangs' } });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(h.ctl.running).toBe(true);
+    expect(h.requests).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.timeout]);
+    expect(h.ctl.running).toBe(false);
   });
 });

@@ -125,10 +125,15 @@ describe('ContextClient', () => {
 
   it('starts a new helper after a slow reply', async () => {
     const { c, starts } = client(['slow', 'ok']);
+    const dir = tempDir();
+    const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
     await expect(c.systemText([{ x: 1, y: 2 }], signal())).rejects.toMatchObject({ code: 'slow' });
     // The old helper is on its way out and reads nothing more: this request must go to a fresh one.
     await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad' });
     expect(starts()).toBe(2);
+    // The grab went with the old helper, so marks for its capture are refused.
+    const req = { of: shot.captureId, spots: [{ x: 100, y: 200 }], radius: 600, ocr: true, controls: true, dir };
+    await expect(c.marks(req, signal())).rejects.toMatchObject({ code: 'bad' });
   });
 
   it('rejects instead of throwing when the helper cannot start', async () => {
