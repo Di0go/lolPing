@@ -43,21 +43,29 @@ export interface Gathered {
   skipped: boolean;
 }
 
-/** Spec §6.1: marks within 600 px of a spot, at most 150. */
+/** Marks within 600 px of a spot, the nearest 40: enough to aim by, few enough to keep the prompt short. */
 const MARK_RADIUS = 600;
-const MAX_MARKS = 150;
+const MAX_MARKS = 40;
 /** Enough screen text to find the page by, while normalising it stays cheap. */
 const MAX_VISIBLE = 4000;
 /** A web PDF that takes longer is left out, so the ask isn't held up by a slow server. */
 const WEB_PDF_MS = 10_000;
+/** A file that takes longer to read is left out, so one huge PDF can't hold every ask up. */
+const FILE_READ_MS = 3_000;
 
 const UNITS: Record<Doc['kind'], FileUnit> = { pdf: 'page', pptx: 'slide', xlsx: 'sheet', docx: 'part', text: 'part' };
 
 /** A section label without its unit: "p. 3" is 3, "sheet Budget" is Budget. */
 const sectionRef = (label: string): string => label.replace(/^(?:p\.|slide|sheet|part) /, '');
 
-/** The file text an ask may carry: about 20 pages, or 100 for Whole picture. */
-export const fileBudget = (allin: boolean): number => PAGE_CHARS * (allin ? 100 : 20);
+/**
+ * The file text an ask carries up front: about 4 pages around the one on screen, or 30 for Whole picture. Every page
+ * is input the model reads before its first word; read_file fetches more when the answer needs it.
+ */
+export const fileBudget = (allin: boolean): number => PAGE_CHARS * (allin ? 30 : 4);
+
+/** How much file text read_file may give in one ask on top: about 40 pages, or 200 for Whole picture. */
+export const fileReadLimit = (allin: boolean): number => PAGE_CHARS * (allin ? 200 : 40);
 
 /** A web PDF to fetch: the address ends in `.pdf`, or the tab title names one. Its name comes from the same place. */
 function webPdf(address: string, title: string): { url: string; name: string } | null {
@@ -99,6 +107,20 @@ function located(doc: Doc, visible: string, budget: number): Gathered['file'] {
   if (size <= budget) return { doc, from, to };
   const sections = doc.sections.map((s, i) => (i === from ? { ...s, text: clip(s.text, budget) } : s));
   return { doc: { ...doc, sections }, from, to: from };
+}
+
+/** `read`, or a `timeout` rejection once it has taken `ms`; the read itself can't be stopped and is left to finish. */
+async function within<T>(read: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_resolve, reject) => {
+    // A ContextError so the step counts it as skipped context, like a helper that was too slow.
+    timer = setTimeout(() => reject(new ContextError('timeout', 'the file took too long to read')), ms);
+  });
+  try {
+    return await Promise.race([read, late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Downloads a web PDF, or rejects with `timeout` once it has taken WEB_PDF_MS. */
@@ -155,8 +177,8 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
   if (behind) {
     const web = behind.path === '' && settings.webPdfs ? webPdf(behind.address, req.title) : null;
     const doc = await step(async () => {
-      if (behind.path !== '') return deps.readDocument(behind.path);
-      if (web) return deps.readPdfBuffer(web.name, await fetchWithin(deps, web.url, signal));
+      if (behind.path !== '') return within(deps.readDocument(behind.path), FILE_READ_MS);
+      if (web) return within(deps.readPdfBuffer(web.name, await fetchWithin(deps, web.url, signal)), FILE_READ_MS);
       return null;
     });
     if (doc && doc.sections.length > 0) {

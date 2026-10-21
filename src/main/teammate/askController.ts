@@ -19,7 +19,7 @@ import type { BubbleState, CardState, MateAction, MateView } from '../../shared/
 import type { OverlayManager } from '../overlayManager';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
 import type { Doc } from './files';
-import { fileBudget, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
+import { fileReadLimit, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
 import { firstTurn, systemPrompt, type AskContext } from './prompt';
@@ -389,7 +389,7 @@ export class AskController extends EventEmitter {
     run.doc = layers.doc;
     run.used = layers.used;
     run.skipped = layers.skipped;
-    run.fileReadLimit = 2 * fileBudget(allin);
+    run.fileReadLimit = fileReadLimit(allin);
     const ctx: AskContext = {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
       shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,

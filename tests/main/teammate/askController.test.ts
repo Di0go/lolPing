@@ -990,7 +990,7 @@ describe('AskController', () => {
   it('lists what the answer used in the footer', async () => {
     const seen = 'the quarterly revenue rose by nine percent';
     const sections = [1, 2, 3, 4, 5, 6].map((n) => ({
-      label: `p. ${n}`, text: n === 3 ? `${seen} ${'a'.repeat(24_000)}` : `page${n} `.repeat(4_000),
+      label: `p. ${n}`, text: n === 3 ? `${seen} ${'a'.repeat(2_400)}` : `page${n} `.repeat(400),
     }));
     const h = harness({
       screen: {
@@ -1007,7 +1007,7 @@ describe('AskController', () => {
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards().at(-1)?.footer.used).toEqual([
-      'screen', 'selection', 'text on screen', 'address', 'controls', 'paper.pdf p. 3–4',
+      'screen', 'selection', 'text on screen', 'address', 'controls', 'paper.pdf p. 2–5',
     ]);
 
     // The system text is too slow: the marks, read beside it, stay. Without the screen text the file is found by the
@@ -1017,12 +1017,12 @@ describe('AskController', () => {
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards().at(-1)?.footer.used).toEqual([
-      'screen', 'controls', 'paper.pdf p. 1–2', 'some context was skipped',
+      'screen', 'controls', 'paper.pdf p. 1–4', 'some context was skipped',
     ]);
   });
 
   it('finds words past the cut of an oversized section', async () => {
-    // One 70,000-character section: the prompt gets its first 60,000, read_file the whole of it.
+    // One 70,000-character section: the prompt gets its first 12,000, read_file the whole of it.
     const text = `${'a '.repeat(33_000)}the hidden clause ${'b '.repeat(1_000)}`;
     let found = '';
     const h = harness({

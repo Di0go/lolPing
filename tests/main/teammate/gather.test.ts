@@ -11,11 +11,11 @@ const layer = (over: Partial<SystemTextLayer> = {}): SystemTextLayer => ({
   selection: '', spotTexts: [], focus: null, address: '', ...over,
 });
 
-/** Six pages of 25,000 characters; page 3 holds the sentence on screen. */
+/** Six pages of about 2,500 characters; page 3 holds the sentence on screen. */
 const VISIBLE = 'the quarterly revenue rose by nine percent';
 const pages = (): Doc['sections'] => [1, 2, 3, 4, 5, 6].map((n) => ({
   label: `p. ${n}`,
-  text: n === 3 ? `${VISIBLE} ${'a'.repeat(25_000 - VISIBLE.length - 1)}` : `page${n} `.repeat(4_000),
+  text: n === 3 ? `${VISIBLE} ${'a'.repeat(2_500 - VISIBLE.length - 1)}` : `page${n} `.repeat(400),
 }));
 const pdf = (name: string, sections: Doc['sections'] = pages()): Doc => ({ name, kind: 'pdf', outline: [], sections });
 
@@ -101,6 +101,15 @@ describe('gather', () => {
     expect(none.calls).toEqual([]); // nothing to ask the helper
   });
 
+  it('keeps the 40 marks nearest the spot', async () => {
+    // 60 buttons in a row to the right of the spot, 10 px apart.
+    const row = Array.from({ length: 60 }, (_, i) => `button\t${1000 + i * 10}\t800\t8\t20\tB${i}`).join('\n');
+    const got = await gather(fakes({ marksFile: row }).deps, request(), signal());
+    expect(got.marks).toHaveLength(40);
+    expect(got.marks.map((m) => m.text)).toContain('B0');
+    expect(got.marks.map((m) => m.text)).not.toContain('B59');
+  });
+
   it('answers without a layer the helper was too slow for', async () => {
     const f = fakes({ status: { text: 'slow' } });
     const got = await gather(f.deps, request(), signal());
@@ -128,10 +137,10 @@ describe('gather', () => {
   it('locates the visible part of the file', async () => {
     const f = fakes();
     const got = await gather(f.deps, request(), signal());
-    // Page 3 holds the text at the spot; page 4 fits the 20-page budget beside it, page 2 would not.
-    expect(got.file).toMatchObject({ from: 2, to: 3 });
+    // Page 3 holds the text at the spot; pages 2, 4 and 5 fit the 4-page budget around it, pages 1 and 6 would not.
+    expect(got.file).toMatchObject({ from: 1, to: 4 });
     expect(got.used).toEqual([
-      { kind: 'text' }, { kind: 'marks' }, { kind: 'file', name: 'report.pdf', unit: 'page', from: '3', to: '4' },
+      { kind: 'text' }, { kind: 'marks' }, { kind: 'file', name: 'report.pdf', unit: 'page', from: '2', to: '5' },
     ]);
 
     // One section bigger than the whole budget is cut to it in the prompt; read_file keeps the whole file.
@@ -140,7 +149,7 @@ describe('gather', () => {
     };
     const huge = fakes({ doc: big });
     const cut = await gather(huge.deps, request(), signal());
-    expect(cut.file?.doc.sections[0].text).toHaveLength(PAGE_CHARS * 20);
+    expect(cut.file?.doc.sections[0].text).toHaveLength(PAGE_CHARS * 4);
     expect(cut.doc?.sections[0].text).toHaveLength(70_000);
     expect(cut.used).toContainEqual({ kind: 'file', name: 'big.txt', unit: 'part', from: '1', to: '1' });
 
@@ -162,7 +171,7 @@ describe('gather', () => {
     const got = await gather(on.deps, request({ settings }), signal());
     expect(on.fetched).toEqual([web.address]);
     expect(got.file?.doc.name).toBe('q3 report.pdf');
-    expect(got.used).toContainEqual({ kind: 'file', name: 'q3 report.pdf', unit: 'page', from: '3', to: '4' });
+    expect(got.used).toContainEqual({ kind: 'file', name: 'q3 report.pdf', unit: 'page', from: '2', to: '5' });
 
     // An address without .pdf counts when the tab's title names a PDF.
     const titled = fakes({ file: { path: '', address: 'https://example.com/view?id=3', how: 'address' } });
@@ -175,6 +184,19 @@ describe('gather', () => {
       await gather(other.deps, request({ settings, title: 'Example - Microsoft Edge' }), signal());
       expect(other.fetched).toEqual([]);
     }
+  });
+
+  it('skips a file that takes over 3 s to read', async () => {
+    vi.useFakeTimers();
+    const slow = fakes();
+    slow.deps.readDocument = () => new Promise(() => undefined);
+    let got: unknown = null;
+    void gather(slow.deps, request(), signal()).then((g) => { got = g; });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(got).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(got).toMatchObject({ file: null, doc: null, skipped: true });
+    expect((got as { system: unknown }).system).not.toBeNull(); // the rest of the context still goes
   });
 
   it('skips a web PDF that takes over 10 s', async () => {
