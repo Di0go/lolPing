@@ -561,6 +561,63 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGra
   return Reply{formatError(cmd.id, "bad", "nothing to do")};
 }
 
+namespace {
+
+// The code point a UTF-8 string starts with, or 0 when it is empty or does not start with a whole character.
+char32_t firstCodePoint(const std::string& s) {
+  if (s.empty()) return 0;
+  const auto b = [&s](size_t i) { return static_cast<unsigned char>(s[i]); };
+  const unsigned char lead = b(0);
+  const size_t n = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3 : (lead >> 3) == 0x1E ? 4 : 0;
+  if (n == 0 || s.size() < n) return 0;
+  char32_t c = n == 1 ? lead : lead & (0x7F >> n);
+  for (size_t i = 1; i < n; ++i) {
+    if ((b(i) & 0xC0) != 0x80) return 0;
+    c = (c << 6) | (b(i) & 0x3F);
+  }
+  return c;
+}
+
+// The code point a UTF-8 string ends with, or 0.
+char32_t lastCodePoint(const std::string& s) {
+  size_t start = s.size();
+  while (start > 0 && s.size() - start < 4) {
+    --start;
+    if ((static_cast<unsigned char>(s[start]) & 0xC0) != 0x80) break;
+  }
+  return start < s.size() ? firstCodePoint(s.substr(start)) : 0;
+}
+
+// Han and kana: OCR splits these into words of a character or so, written with no space between them.
+bool isCjkLetter(char32_t c) {
+  return (c >= 0x3040 && c <= 0x30FF) ||    // Hiragana, Katakana
+         (c >= 0x31F0 && c <= 0x31FF) ||    // Katakana phonetic extensions
+         (c >= 0x3400 && c <= 0x4DBF) ||    // Han extension A
+         (c >= 0x4E00 && c <= 0x9FFF) ||    // Han
+         (c >= 0xF900 && c <= 0xFAFF) ||    // Han compatibility
+         (c >= 0xFF66 && c <= 0xFF9F) ||    // half-width Katakana
+         (c >= 0x20000 && c <= 0x3FFFF);    // Han extensions B and later
+}
+
+// CJK punctuation and full-width forms take no space on either side.
+bool isCjkMark(char32_t c) { return (c >= 0x3000 && c <= 0x303F) || (c >= 0xFF00 && c <= 0xFF65); }
+
+}  // namespace
+
+std::string joinOcrWords(const std::vector<std::string>& words) {
+  std::string line;
+  for (const std::string& word : words) {
+    if (word.empty()) continue;
+    if (!line.empty()) {
+      const char32_t a = lastCodePoint(line), b = firstCodePoint(word);
+      const bool tight = isCjkMark(a) || isCjkMark(b) || (isCjkLetter(a) && isCjkLetter(b));
+      if (!tight) line += ' ';
+    }
+    line += word;
+  }
+  return line;
+}
+
 std::string marksFileText(const std::vector<RawMark>& marks) {
   std::string out;
   for (const RawMark& m : marks) {

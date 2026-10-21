@@ -130,6 +130,12 @@ constexpr int kExitNow = 2;
 Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last,
                     int budgetMs = kProbeBudgetMs);
 
+/**
+ * One OCR line from its words (UTF-8): a space between words, none between two Han or kana characters and none next
+ * to CJK punctuation or a full-width form. Korean keeps its spaces.
+ */
+std::string joinOcrWords(const std::vector<std::string>& words);
+
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
 std::string marksFileText(const std::vector<RawMark>& marks);
 

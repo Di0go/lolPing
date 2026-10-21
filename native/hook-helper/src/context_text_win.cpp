@@ -21,9 +21,11 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Globalization.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.System.UserProfile.h>
 #pragma warning(pop)
 
 #include "context.h"
@@ -44,42 +46,19 @@ std::string failed(const char* what, HRESULT code) {
   return buf;
 }
 
-char32_t firstChar(std::wstring_view s) {
-  if (s.empty()) return 0;
-  if (s.size() >= 2 && IS_HIGH_SURROGATE(s[0]) && IS_LOW_SURROGATE(s[1])) {
-    return 0x10000 + ((static_cast<char32_t>(s[0]) - 0xD800) << 10) + (static_cast<char32_t>(s[1]) - 0xDC00);
+// The user's first Chinese or Japanese language, when OCR has it, else the first OCR language of the profile. An
+// English-first profile would otherwise read Chinese text as Latin noise.
+OcrEngine engineForUser() {
+  for (const winrt::hstring& tag : winrt::Windows::System::UserProfile::GlobalizationPreferences::Languages()) {
+    const std::wstring_view t(tag);
+    const bool cjk = t.size() >= 2 && (_wcsnicmp(t.data(), L"zh", 2) == 0 || _wcsnicmp(t.data(), L"ja", 2) == 0) &&
+                     (t.size() == 2 || t[2] == L'-');
+    if (!cjk) continue;
+    const winrt::Windows::Globalization::Language language(tag);
+    if (!OcrEngine::IsLanguageSupported(language)) continue;
+    if (OcrEngine engine = OcrEngine::TryCreateFromLanguage(language)) return engine;
   }
-  return s[0];
-}
-
-char32_t lastChar(std::wstring_view s) {
-  if (s.empty()) return 0;
-  const size_t n = s.size();
-  if (n >= 2 && IS_HIGH_SURROGATE(s[n - 2]) && IS_LOW_SURROGATE(s[n - 1])) {
-    return 0x10000 + ((static_cast<char32_t>(s[n - 2]) - 0xD800) << 10) + (static_cast<char32_t>(s[n - 1]) - 0xDC00);
-  }
-  return s[n - 1];
-}
-
-// Han, Hiragana, Katakana and Hangul: OCR splits these into words of a character or so, with no space between them.
-bool isCjk(char32_t c) {
-  return (c >= 0x1100 && c <= 0x11FF) ||    // Hangul Jamo
-         (c >= 0x3040 && c <= 0x30FF) ||    // Hiragana, Katakana
-         (c >= 0x3130 && c <= 0x318F) ||    // Hangul compatibility Jamo
-         (c >= 0x31F0 && c <= 0x31FF) ||    // Katakana phonetic extensions
-         (c >= 0x3400 && c <= 0x4DBF) ||    // Han extension A
-         (c >= 0x4E00 && c <= 0x9FFF) ||    // Han
-         (c >= 0xAC00 && c <= 0xD7AF) ||    // Hangul syllables
-         (c >= 0xF900 && c <= 0xFAFF) ||    // Han compatibility
-         (c >= 0xFF66 && c <= 0xFF9F) ||    // half-width Katakana
-         (c >= 0x20000 && c <= 0x3FFFF);    // Han extensions B and later
-}
-
-// Adds an OCR word to its line: a space between words, none between two CJK characters.
-void appendWord(std::wstring& line, std::wstring_view word) {
-  if (word.empty()) return;
-  if (!line.empty() && !(isCjk(lastChar(line)) && isCjk(firstChar(word)))) line += L' ';
-  line += word;
+  return OcrEngine::TryCreateFromUserProfileLanguages();
 }
 
 // Distance from `p` to the nearest point of `r`, squared; 0 inside. Same measure as selectMarks in marks.ts.
@@ -117,9 +96,9 @@ const char* kindOf(CONTROLTYPEID type) {
 
 std::wstring trimmed(const wchar_t* s, UINT n) {
   std::wstring_view v(s, n);
-  const size_t a = v.find_first_not_of(L" \t\r\n ");
+  const size_t a = v.find_first_not_of(L" \t\r\n\u00a0");
   if (a == std::wstring_view::npos) return std::wstring();
-  const size_t b = v.find_last_not_of(L" \t\r\n ");
+  const size_t b = v.find_last_not_of(L" \t\r\n\u00a0");
   return std::wstring(v.substr(a, b - a + 1));
 }
 
@@ -166,7 +145,7 @@ bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const
               std::vector<RawMark>& out, Failure& fail) {
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    const OcrEngine engine = OcrEngine::TryCreateFromUserProfileLanguages();
+    const OcrEngine engine = engineForUser();
     if (!engine) {
       fail.message = "no OCR language";
       return false;
@@ -200,11 +179,11 @@ bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const
                                                                        BitmapAlphaMode::Premultiplied);
     const double sx = static_cast<double>(area.w) / crop.w, sy = static_cast<double>(area.h) / crop.h;
     for (const auto& line : engine.RecognizeAsync(bitmap).get().Lines()) {
-      std::wstring text;
+      std::vector<std::string> words;
       float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
       bool any = false;
       for (const auto& word : line.Words()) {
-        appendWord(text, word.Text());
+        words.push_back(winrt::to_string(word.Text()));
         const auto r = word.BoundingRect();
         x0 = any ? std::min(x0, r.X) : r.X;
         y0 = any ? std::min(y0, r.Y) : r.Y;
@@ -212,13 +191,13 @@ bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const
         y1 = any ? std::max(y1, r.Y + r.Height) : r.Y + r.Height;
         any = true;
       }
+      const std::string text = joinOcrWords(words);
       if (!any || text.empty()) continue;
       const int left = area.x + static_cast<int>(std::floor(x0 * sx));
       const int top = area.y + static_cast<int>(std::floor(y0 * sy));
       const int right = area.x + static_cast<int>(std::ceil(x1 * sx));
       const int bottom = area.y + static_cast<int>(std::ceil(y1 * sy));
-      out.push_back(RawMark{"text", Rect{left, top, std::max(1, right - left), std::max(1, bottom - top)},
-                            winrt::to_string(text)});
+      out.push_back(RawMark{"text", Rect{left, top, std::max(1, right - left), std::max(1, bottom - top)}, text});
     }
     return true;
   } catch (const winrt::hresult_error& e) {
@@ -237,6 +216,8 @@ bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<Raw
     winrt::check_hresult(uia->CreateCacheRequest(hwndReq.put()));
     winrt::check_hresult(hwndReq->AddProperty(UIA_NativeWindowHandlePropertyId));
     winrt::check_hresult(uia->CreateCacheRequest(controlReq.put()));
+    // Only cached values are read, so no live reference per element: far fewer cross-process calls on big trees.
+    winrt::check_hresult(controlReq->put_AutomationElementMode(AutomationElementMode_None));
     for (const PROPERTYID id : {UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_BoundingRectanglePropertyId,
                                 UIA_IsOffscreenPropertyId}) {
       winrt::check_hresult(controlReq->AddProperty(id));

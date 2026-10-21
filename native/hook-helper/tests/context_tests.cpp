@@ -380,6 +380,23 @@ static void test_marks_file_cuts_on_a_character_boundary() {
   CHECK(mixed.substr(prefix.size()) == std::string(119, 'a') + "\xe4\xb8\xad\n");
 }
 
+static void test_ocr_words_join_with_spaces_except_between_cjk() {
+  const std::string ni = "\xe4\xbd\xa0", hao = "\xe5\xa5\xbd", shi = "\xe4\xb8\x96", jie = "\xe7\x95\x8c";
+  const std::string comma = "\xef\xbc\x8c", stop = "\xe3\x80\x82";  // U+FF0C, U+3002
+  const std::string hangul1 = "\xed\x95\x9c\xea\xb5\xad\xec\x96\xb4";  // a Korean word
+  const std::string hangul2 = "\xed\x85\x8d\xec\x8a\xa4\xed\x8a\xb8";  // another one
+  CHECK(joinOcrWords({"Riot", "Games", "client"}) == "Riot Games client");
+  CHECK(joinOcrWords({ni + hao, shi + jie}) == ni + hao + shi + jie);
+  CHECK(joinOcrWords({ni + hao, "League", "100", shi}) == ni + hao + " League 100 " + shi);
+  CHECK(joinOcrWords({hangul1, hangul2}) == hangul1 + " " + hangul2);
+  CHECK(joinOcrWords({ni + hao, comma, shi + jie, stop}) == ni + hao + comma + shi + jie + stop);
+  CHECK(joinOcrWords({"OK", comma, "go"}) == "OK" + comma + "go");
+  // A Han character outside the BMP (U+20000) still counts as Han.
+  CHECK(joinOcrWords({"\xf0\xa0\x80\x80", ni}) == "\xf0\xa0\x80\x80" + ni);
+  CHECK(joinOcrWords({"a", "", "b"}) == "a b");
+  CHECK(joinOcrWords({}).empty());
+}
+
 static void test_budget_gives_up_on_a_slow_probe() {
   const auto start = std::chrono::steady_clock::now();
   const bool done = runWithBudget([] { std::this_thread::sleep_for(std::chrono::milliseconds(200)); }, 20);
@@ -510,6 +527,7 @@ int main() {
   test_marks_keeps_what_one_probe_found();
   test_marks_file_escapes_tabs_and_newlines();
   test_marks_file_cuts_on_a_character_boundary();
+  test_ocr_words_join_with_spaces_except_between_cjk();
   test_budget_gives_up_on_a_slow_probe();
   test_budget_returns_a_fast_probe();
   test_secure_focus_sends_no_value();
