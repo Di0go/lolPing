@@ -9,7 +9,7 @@ import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/as
 import { overviewToPhysical, physicalToOverview, receiptPoint, type Shot } from '../../shared/teammate/coords';
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
-import { bubbleMs, splitLine } from '../../shared/teammate/line';
+import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
 import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
 import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
@@ -77,16 +77,6 @@ const DONE: Part[] = [{ text: 'Done.' }];
 const NOT_AVAILABLE: Part[] = [{ text: 'Not available.' }];
 const INVALID: Part[] = [{ text: 'Ignored: the arguments were not valid.' }];
 const OVER_LIMIT: Part[] = [{ text: 'Ignored: an answer has at most 6 pings and 1 emote.' }];
-
-/** Every ask ends with a line and a card answer, so More is always there; a model that skipped one is asked once. */
-function missingPart(run: Pick<Run, 'line' | 'markdown'>): string | null {
-  const line = run.line !== '';
-  const card = run.markdown.length > 0;
-  if (line && card) return null;
-  if (line) return 'Now call `answer` with the full answer in Markdown. Every ask needs it as well as the line.';
-  if (card) return 'Now call `say` with the one-line answer for the bubble.';
-  return 'Every ask needs both: call `say` with the one-line answer and `answer` with the full answer in Markdown.';
-}
 
 interface Run {
   machine: AskMachine;
@@ -406,7 +396,6 @@ export class AskController extends EventEmitter {
       if (run.machine.phase === 'sent') this.fail(run, 'notReceived');
     });
 
-    let nudged = false;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       const result = await adapter.turn({ system, turns, tools, model: profile.model }, this.handlers(run), signal);
       if (!this.alive(run)) return;
@@ -417,17 +406,8 @@ export class AskController extends EventEmitter {
       const last = round === MAX_ROUNDS - 1;
       const step = await this.play(run, result.calls, new Set(tools.map((d) => d.name)), last);
       if (!this.alive(run)) return;
-      const nudge = step.again || nudged || last ? null : missingPart(run);
-      if (!step.again && nudge === null) break;
-      if (nudge !== null) nudged = true;
-      if (result.calls.length === 0) {
-        turns.push({ role: 'user', parts: [{ text: nudge ?? '' }] });
-        continue;
-      }
-      const results = step.results;
-      const lastResult = results[results.length - 1];
-      if (nudge !== null && lastResult) lastResult.content = [...lastResult.content, { text: nudge }];
-      turns.push({ role: 'tool', results });
+      if (!step.again) break;
+      turns.push({ role: 'tool', results: step.results });
     }
     await this.finish(run);
   }
@@ -672,6 +652,15 @@ export class AskController extends EventEmitter {
 
   private async finish(run: Run): Promise<void> {
     if (!run.line && run.text.trim()) this.say(run, run.text);
+    // A model that skipped `say` is not asked again, which would cost a whole round: the card's start is the line.
+    // The card keeps no copy of it above the answer it came from.
+    if (!run.line && run.markdown.length > 0) {
+      run.line = lineFromMarkdown(run.markdown.join('\n\n'), run.lang);
+      if (run.line) {
+        this.deps.overlay.mateSaid();
+        if (!run.autoCard && !this.cardShown) this.showLine(run, run.line);
+      }
+    }
     if (!run.line && run.markdown.length === 0 && run.marks.length === 0) return this.fail(run, 'other');
     if (!run.line) {
       this.deps.overlay.mateSaid(); // the thinking is over even without a line
@@ -754,7 +743,8 @@ export class AskController extends EventEmitter {
   private bubbleState(run: Run, line: string): BubbleState {
     return {
       view: 'bubble', lang: run.lang, tag: run.tag, line, thread: run.thread?.title ?? null, thinking: false,
-      more: run.rest !== '' || run.markdown.length > 0,
+      // An answer's line always offers More, if only for the card's reply box; a failure's line doesn't.
+      more: run.rest !== '' || run.markdown.length > 0 || (line !== '' && run.machine.failure === null),
     };
   }
 

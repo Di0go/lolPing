@@ -27,6 +27,31 @@ export function splitLine(text: string, lang: Lang): { line: string; rest: strin
   return { line: `${body.slice(0, cut).trimEnd()}…`, rest: body.slice(cut).trim() };
 }
 
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
+
+/** One Markdown block as plain text: no code, tables, images or marks, links as their text, on one line. */
+function plainBlock(block: string): string {
+  const lines = block.split('\n').filter((l) => !/^\s*\|/.test(l)); // a table row
+  // A list is one block: its first item is the part that reads as a line.
+  const next = lines.findIndex((l, i) => i > 0 && LIST_ITEM.test(l));
+  const first = LIST_ITEM.test(lines[0] ?? '') && next > 0 ? lines.slice(0, next) : lines;
+  return first
+    .map((l) => l.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)/, ''))
+    .join(' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|__|\*|`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** The bubble's line for an answer that came only as Markdown: the start of its first block of prose. */
+export function lineFromMarkdown(markdown: string, lang: Lang): string {
+  const prose = markdown.replace(/```[\s\S]*?(?:```|$)/g, '\n\n');
+  const first = prose.split(/\n\s*\n/).map(plainBlock).find((b) => b !== '') ?? '';
+  return splitLine(first, lang).line;
+}
+
 /** How long the bubble stays: 6 s plus 1 s for every 15 characters. */
 export function bubbleMs(line: string): number {
   return 6_000 + Math.floor(line.length / 15) * 1_000;
