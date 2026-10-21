@@ -1,10 +1,9 @@
 import type { Point } from '../ipc';
-import { overviewToPhysical, type Shot } from './coords';
+import { overviewToPhysical, type Rect, type Shot } from './coords';
 import type { Target } from './tools';
 
 export type MarkKind = 'text' | 'button' | 'link' | 'field' | 'menu' | 'tab' | 'check' | 'item' | 'other';
 /** A rectangle in physical screen pixels. */
-export type Rect = Shot['display'];
 
 export interface RawMark {
   kind: MarkKind;

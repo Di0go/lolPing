@@ -1,20 +1,20 @@
 import type { Point } from '../ipc';
-import type { Shot } from './coords';
+import type { Rect } from './coords';
 
 /** The overview's long side, its JPEG quality and the zoom crop size (spec §6.1). */
 export const OVERVIEW_LONG_SIDE = 1600;
 export const JPEG_QUALITY = 80;
 export const ZOOM_SIZE = { w: 1000, h: 750 };
 
-type Rect = Shot['display'];
-
 /** Lines main writes to context-helper's stdin: flat JSON, lists as strings, like the hook helper's commands. */
 export type ContextCommand =
   | {
-    type: 'capture'; id: string; display: string; spots: string; overview: number; zoom: string; quality: number; dir: string;
+    type: 'capture'; id: string; display: string; area?: string; spots: string; crops?: string; overview: number;
+    zoom: string; quality: number; dir: string;
   }
   | {
-    type: 'read'; id: string; spots: string; radius: number; marks: boolean; text: boolean; file: boolean; dir: string;
+    type: 'read'; id: string; spots: string; radius: number; marks: boolean; text: boolean; file: boolean;
+    boxes: boolean; dir: string;
   }
   | { type: 'foreground'; id: string }
   | { type: 'ping'; id: string }
@@ -38,10 +38,12 @@ export interface SystemTextLayer {
 
 /** What one read found; a layer is null unless its status is `ok`. */
 export interface ReadResult {
-  status: { marks: LayerStatus; text: LayerStatus; file: LayerStatus };
+  status: { marks: LayerStatus; text: LayerStatus; file: LayerStatus; boxes: LayerStatus };
   marks: { path: string; count: number } | null;
   text: SystemTextLayer | null;
   file: { path: string; address: string; how: FileHow } | null;
+  /** Per spot, the boxes that hold the element under it, innermost first, ending with its window. */
+  boxes: Rect[][] | null;
 }
 
 /** Lines context-helper writes to stdout, after validation. */
@@ -57,16 +59,21 @@ const spotsText = (spots: readonly Point[]): string => (
   spots.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join(';')
 );
 
-/** The capture command for one ask: the helper wants whole pixels. */
+/**
+ * The capture command for one ask: the helper wants whole pixels. The overview shows `area` (the whole display when
+ * left out); each spot's close-up is its crop, or a fixed-size one around it.
+ */
 export function captureCommand(
   id: string,
-  req: { display: Rect; spots: { x: number; y: number }[]; dir: string },
+  req: { display: Rect; area?: Rect; spots: { x: number; y: number }[]; crops?: Rect[]; dir: string },
 ): ContextCommand {
   return {
     type: 'capture',
     id,
     display: rectText(req.display),
+    ...(req.area ? { area: rectText(req.area) } : {}),
     spots: spotsText(req.spots),
+    ...(req.crops ? { crops: req.crops.map(rectText).join(';') } : {}),
     overview: OVERVIEW_LONG_SIDE,
     zoom: `${ZOOM_SIZE.w},${ZOOM_SIZE.h}`,
     quality: JPEG_QUALITY,
@@ -75,16 +82,16 @@ export function captureCommand(
 }
 
 /**
- * Reads the layers that are on, side by side: the controls and text near the spots (into a marks file in `dir`), the
- * system text and the file behind the window.
+ * Reads the layers that are on, side by side: the boxes around the element under each spot, the controls and text
+ * near the spots (into a marks file in `dir`), the system text and the file behind the window.
  */
 export function readCommand(
   id: string,
-  req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; dir: string },
+  req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; boxes: boolean; dir: string },
 ): ContextCommand {
   return {
     type: 'read', id, spots: spotsText(req.spots), radius: Math.round(req.radius), marks: req.marks, text: req.text,
-    file: req.file, dir: req.dir,
+    file: req.file, boxes: req.boxes, dir: req.dir,
   };
 }
 
@@ -136,8 +143,8 @@ function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
 }
 
 function parseRead(o: Record<string, unknown>): ReadResult | null {
-  const { marks, text, file } = o;
-  if (!isLayerStatus(marks) || !isLayerStatus(text) || !isLayerStatus(file)) return null;
+  const { marks, text, file, boxes } = o;
+  if (!isLayerStatus(marks) || !isLayerStatus(text) || !isLayerStatus(file) || !isLayerStatus(boxes)) return null;
   let found: ReadResult['marks'] = null;
   if (marks === 'ok') {
     if (typeof o.marksPath !== 'string' || o.marksPath === '' || !isCount(o.count)) return null;
@@ -150,7 +157,12 @@ function parseRead(o: Record<string, unknown>): ReadResult | null {
     if (typeof o.filePath !== 'string' || typeof o.fileAddress !== 'string' || !isFileHow(o.how)) return null;
     behind = { path: o.filePath, address: o.fileAddress, how: o.how };
   }
-  return { status: { marks, text, file }, marks: found, text: layer, file: behind };
+  let chains: ReadResult['boxes'] = null;
+  if (boxes === 'ok') {
+    chains = typeof o.boxRects === 'string' ? parseBoxes(o.boxRects) : null;
+    if (!chains) return null;
+  }
+  return { status: { marks, text, file, boxes }, marks: found, text: layer, file: behind, boxes: chains };
 }
 
 function parseRect(s: string): Rect | null {
@@ -158,6 +170,17 @@ function parseRect(s: string): Rect | null {
   if (parts.length !== 4 || parts.some((p) => !/^-?\d+$/.test(p))) return null;
   const [x, y, w, h] = parts.map(Number);
   return w > 0 && h > 0 ? { x, y, w, h } : null;
+}
+
+/** Spots separated by ';', each spot's boxes by '|'; a spot with no boxes is empty. */
+function parseBoxes(s: string): Rect[][] | null {
+  const out: Rect[][] = [];
+  for (const spot of s.split(';')) {
+    const chain = spot === '' ? [] : spot.split('|').map(parseRect);
+    if (chain.some((r) => r === null)) return null;
+    out.push(chain.filter((r): r is Rect => r !== null));
+  }
+  return out;
 }
 
 function parseZooms(paths: string, rects: string): { path: string; rect: Rect }[] | null {

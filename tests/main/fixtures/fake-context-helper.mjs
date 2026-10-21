@@ -22,7 +22,8 @@ function capture(cmd) {
 
 function read(cmd) {
   writeFileSync(join(cmd.dir, 'read-command.json'), JSON.stringify(cmd));
-  const out = { type: 'read', id: cmd.id, marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off' };
+  const out = { type: 'read', id: cmd.id, marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', boxes: 'off' };
+  if (cmd.boxes) Object.assign(out, { boxes: 'ok', boxRects: '90,190,40,20|0,0,1400,1000' });
   if (cmd.marks) {
     const path = join(cmd.dir, `marks-${cmd.id}.tsv`);
     writeFileSync(path, 'button\t900\t700\t200\t60\tSave\n');

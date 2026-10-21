@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { overviewToPhysical, physicalBoxToOverview, physicalToOverview, receiptPoint, zoomRect, type Shot } from '../../../src/shared/teammate/coords';
 import { physicalToLocal, type DisplayMap } from '../../../src/main/coords';
 
-const shot = (display: Shot['display'], overview: Shot['overview']): Shot => ({ display, overview, zooms: [] });
+const shot = (area: Shot['area'], overview: Shot['overview']): Shot => ({ area, overview, zooms: [] });
 
 describe('teammate coords', () => {
   it('maps an overview point back to physical pixels', () => {

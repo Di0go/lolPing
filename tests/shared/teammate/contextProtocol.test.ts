@@ -3,7 +3,7 @@ import { captureCommand, parseContextLine, readCommand } from '../../../src/shar
 
 /** A read reply with every layer off; `over` adds or replaces fields. */
 const readLine = (over: Record<string, unknown> = {}): string => JSON.stringify({
-  type: 'read', id: 'r1', marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', ...over,
+  type: 'read', id: 'r1', marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', boxes: 'off', ...over,
 });
 const textFields = {
   text: 'ok', selection: 'picked', spotTexts: 'one', focusKind: 'field', focusLabel: 'Name', focusValue: 'Ada',
@@ -17,6 +17,14 @@ describe('contextProtocol', () => {
         type: 'capture', id: 'r1', display: '-1920,0,1920,1080', spots: '11,20', overview: 1600, zoom: '1000,750', quality: 80,
         dir: 'C:\\t',
       });
+  });
+
+  it('sends the overview area and one crop per spot when given', () => {
+    const cmd = captureCommand('r1', {
+      display: { x: 0, y: 0, w: 2752, h: 1152 }, area: { x: 92.4, y: 40, w: 1400, h: 1000 },
+      spots: [{ x: 700, y: 400 }], crops: [{ x: 264, y: 184, w: 972, h: 432 }], dir: 'C:\\t',
+    });
+    expect(cmd).toMatchObject({ area: '92,40,1400,1000', crops: '264,184,972,432' });
   });
 
   it('pairs each zoom path with its rect', () => {
@@ -60,9 +68,11 @@ describe('contextProtocol', () => {
 
   it('flattens a read command', () => {
     expect(readCommand('r1', {
-      spots: [{ x: 10.4, y: -20 }, { x: 3, y: 4 }], radius: 600, marks: true, text: false, file: true, dir: 'C:\\t',
+      spots: [{ x: 10.4, y: -20 }, { x: 3, y: 4 }], radius: 600, marks: true, text: false, file: true, boxes: true,
+      dir: 'C:\\t',
     })).toEqual({
-      type: 'read', id: 'r1', spots: '10,-20;3,4', radius: 600, marks: true, text: false, file: true, dir: 'C:\\t',
+      type: 'read', id: 'r1', spots: '10,-20;3,4', radius: 600, marks: true, text: false, file: true, boxes: true,
+      dir: 'C:\\t',
     });
   });
 
@@ -70,20 +80,23 @@ describe('contextProtocol', () => {
     expect(parseContextLine(readLine({
       marks: 'ok', marksPath: 'C:\\t\\marks-r1.tsv', count: 12, ...textFields,
       file: 'ok', filePath: 'C:\\a.pdf', fileAddress: '', how: 'title',
+      boxes: 'ok', boxRects: '10,10,40,20|0,0,800,600;',
     }))).toEqual({
       type: 'read', id: 'r1',
-      status: { marks: 'ok', text: 'ok', file: 'ok' },
+      status: { marks: 'ok', text: 'ok', file: 'ok', boxes: 'ok' },
       marks: { path: 'C:\\t\\marks-r1.tsv', count: 12 },
       text: {
         selection: 'picked', spotTexts: ['one'], focus: { kind: 'field', label: 'Name', value: 'Ada', secure: false },
         address: 'https://example.com/',
       },
       file: { path: 'C:\\a.pdf', address: '', how: 'title' },
+      // The second spot has no boxes.
+      boxes: [[{ x: 10, y: 10, w: 40, h: 20 }, { x: 0, y: 0, w: 800, h: 600 }], []],
     });
     // A layer that is off, too slow or refused comes back null with its status.
     expect(parseContextLine(readLine({ text: 'permission', file: 'slow' }))).toEqual({
-      type: 'read', id: 'r1', status: { marks: 'off', text: 'permission', file: 'slow' }, marks: null, text: null,
-      file: null,
+      type: 'read', id: 'r1', status: { marks: 'off', text: 'permission', file: 'slow', boxes: 'off' }, marks: null,
+      text: null, file: null, boxes: null,
     });
     expect(parseContextLine(readLine({ text: 'ok', selection: '', spotTexts: '', focusKind: '', focusLabel: '',
       focusValue: '', focusSecure: false, address: '' }))).toMatchObject({
@@ -96,6 +109,8 @@ describe('contextProtocol', () => {
     expect(parseContextLine(readLine({ marks: 'ok', marksPath: '', count: 1 }))).toBeNull();
     expect(parseContextLine(readLine({ marks: 'ok', marksPath: 'a.tsv', count: -1 }))).toBeNull();
     expect(parseContextLine(readLine({ text: 'ok' }))).toBeNull(); // ok, but no text fields
+    expect(parseContextLine(readLine({ boxes: 'ok' }))).toBeNull();
+    expect(parseContextLine(readLine({ boxes: 'ok', boxRects: '1,2,3|4,5,6,7' }))).toBeNull();
     expect(parseContextLine(readLine({ file: 'ok', filePath: 'a', fileAddress: '', how: 'guess' }))).toBeNull();
     expect(parseContextLine(readLine({ file: 'ok', filePath: 3, fileAddress: '', how: 'none' }))).toBeNull();
     expect(parseContextLine(readLine({ file: 'ok', filePath: '', fileAddress: '', how: 'none' })))

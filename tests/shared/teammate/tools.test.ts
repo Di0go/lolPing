@@ -58,10 +58,10 @@ describe('tools', () => {
   });
 
   it('offers read_file only with a file', () => {
-    const names = (file: boolean) => toolDefs({ emotes: true, spots: 1, file }).map((d) => d.name);
+    const names = (file: boolean) => toolDefs({ emotes: true, spots: 1, file, look: true }).map((d) => d.name);
     expect(names(true)).toContain('read_file');
     expect(names(false)).not.toContain('read_file');
-    const ping = toolDefs({ emotes: false, spots: 1, file: false }).find((d) => d.name === 'ping');
+    const ping = toolDefs({ emotes: false, spots: 1, file: false, look: true }).find((d) => d.name === 'ping');
     const props = Object.keys((ping?.parameters.properties ?? {}) as object);
     expect(props).toEqual(expect.arrayContaining(['x', 'y', 'spot']));
     expect(props).not.toContain('mark');
@@ -110,9 +110,15 @@ describe('tools', () => {
     expect(out.map((c) => c.tool).slice(-2)).toEqual(['say', 'answer']);
   });
 
+  it('offers look only when the ask may use it', () => {
+    expect(toolDefs({ emotes: false, spots: 1, file: false, look: false }).map((t) => t.name))
+      .toEqual(['say', 'ping', 'answer']);
+  });
+
   it('leaves emote out of the tool list when emotes are off', () => {
-    expect(toolDefs({ emotes: false, spots: 1, file: false }).map((t) => t.name)).toEqual(['say', 'ping', 'answer', 'look']);
-    const on = toolDefs({ emotes: true, spots: 1, file: false });
+    expect(toolDefs({ emotes: false, spots: 1, file: false, look: true }).map((t) => t.name))
+      .toEqual(['say', 'ping', 'answer', 'look']);
+    const on = toolDefs({ emotes: true, spots: 1, file: false, look: true });
     expect(on.map((t) => t.name)).toContain('emote');
     const params = on.find((t) => t.name === 'ping')?.parameters as { properties: { type: { enum: string[] } } };
     expect(params.properties.type.enum).not.toContain('omw');

@@ -128,7 +128,7 @@ describe('snapPoint', () => {
 
 describe('resolveTarget', () => {
   const shot: Shot = {
-    display: { x: 1920, y: 0, w: 3200, h: 1800 },
+    area: { x: 1920, y: 0, w: 3200, h: 1800 },
     overview: { w: 1600, h: 900 },
     zooms: [],
   };

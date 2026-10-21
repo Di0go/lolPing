@@ -1,5 +1,6 @@
-// macOS text probes: named controls and text near the spots by the Accessibility API, the system's own text
-// (selection, focus, text under the spots, browser address) and the file behind the window.
+// macOS text probes: named controls and text near the spots by the Accessibility API, the boxes around the element
+// under each spot, the system's own text (selection, focus, text under the spots, browser address) and the file
+// behind the window.
 // Each runs on its own fresh thread (context.h), so each opens its own autorelease pool and keeps no caller state.
 // The Accessibility probes need the Accessibility permission for this process.
 #import <AppKit/AppKit.h>
@@ -454,6 +455,36 @@ void readFocus(AXUIElementRef system, Clock::time_point deadline, SystemText& ou
 }
 
 }  // namespace
+
+bool elementBoxes(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail) {
+  @autoreleasepool {
+    if (noAccess(fail)) return false;
+    const Clock::time_point deadline = Clock::now() + kWalkBudget;
+    const Ref system = systemWide();
+    if (!system) {
+      fail.message = "could not reach the Accessibility API";
+      return false;
+    }
+    for (const Point& spot : spots) {
+      std::vector<Rect>& chain = out.emplace_back();
+      Ref el = elementAt(system.el(), spot);
+      // Up to the window: the application above it frames nothing.
+      for (int depth = 0; isElement(el) && depth < 40 && Clock::now() < deadline; ++depth) {
+        const Node n = readNode(el.el());
+        if (n.role.empty() || n.role == "AXApplication") break;
+        if (n.hasFrame) {
+          chain.push_back(Rect{static_cast<int>(std::lround(n.frame.origin.x)),
+                               static_cast<int>(std::lround(n.frame.origin.y)),
+                               static_cast<int>(std::lround(n.frame.size.width)),
+                               static_cast<int>(std::lround(n.frame.size.height))});
+        }
+        if (n.role == "AXWindow") break;
+        el = attr(el.el(), kAXParentAttribute);
+      }
+    }
+    return true;
+  }
+}
 
 bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail) {
   @autoreleasepool {

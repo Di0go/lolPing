@@ -176,7 +176,10 @@ export function systemPrompt(ctx: AskContext): string {
         + `of a word.${ctx.marks.length > 0 ? ' Use the boxes in the marks list to aim.' : ''} \`spot\` N points at `
         + "one of the user's spots."
       : '- Point with `x` and `y` in overview pixels at the thing you mean; lolPing moves a ping onto the control under '
-        + "it. `spot` N points at one of the user's spots. Use `look` only for a detail you can't read in the images.",
+        + "it. `spot` N points at one of the user's spots.",
+    ...(canLook(ctx.intent.def.id)
+      ? ["- `look` works once per ask: use it only for a detail you can't read in the images you have."]
+      : []),
     '- Pings you place are labeled with at most 20 characters when a label helps.',
     '',
     'Ping vocabulary (what each ping means when you place it):',
@@ -208,6 +211,12 @@ const spotNumber = (n: number): string => `spot ${n + 1}`;
  */
 export const aimsExactly = (id: PingId): boolean => id === 'assist';
 
+/**
+ * Only Show me how and Whole picture may need something away from the spot, so only they get `look`, for one round:
+ * every other ask answers from the overview and the close-up it was sent, in one round.
+ */
+export const canLook = (id: PingId): boolean => id === 'assist' || id === 'allin';
+
 function threadParts(thread: ThreadRecord): Part[] {
   const parts: Part[] = [];
   let used = 0;
@@ -232,7 +241,8 @@ function screenLines(ctx: AskContext): (string | null)[] {
     `The overview image is ${overview.w} x ${overview.h} pixels.`,
     ...ctx.spots.map((p, i) => `${spotNumber(i)} is at x=${p.x}, y=${p.y} in the overview.`),
     ctx.spots.length > 0
-      ? 'Each zoom image after the overview is a full-resolution crop around the spot with the same number, in order.'
+      ? 'Each zoom image after the overview is a sharper crop of the part of the window around the spot with the same '
+        + 'number, in order.'
       : null,
   ];
 }

@@ -118,6 +118,20 @@ std::string dirField(const Fields& m, std::string& out) {
   return "";
 }
 
+// Reads an optional "x,y,w,h;x,y,w,h" field of rects with area; the error is empty when it was fine.
+std::string rectsField(const Fields& m, const char* key, std::vector<Rect>& out) {
+  const auto it = m.find(key);
+  if (it == m.end() || it->second.empty()) return "";
+  std::vector<int> v;
+  for (const std::string& r : split(it->second, ';')) {
+    if (!parseInts(r, 4, v) || v[2] < 1 || v[3] < 1 || v[2] > 32768 || v[3] > 32768) {
+      return std::string(key) + " must be \"x,y,w,h;x,y,w,h\"";
+    }
+    out.push_back(Rect{v[0], v[1], v[2], v[3]});
+  }
+  return "";
+}
+
 Command parseCapture(const Fields& m, const std::string& id) {
   Command c;
   c.kind = Command::Kind::Capture;
@@ -131,6 +145,12 @@ Command parseCapture(const Fields& m, const std::string& id) {
     return bad(id, "display has no area");
   }
   if (const std::string why = spotsField(m, r.spots); !why.empty()) return bad(id, why);
+  std::vector<Rect> area;
+  if (const std::string why = rectsField(m, "area", area); !why.empty()) return bad(id, why);
+  if (area.size() > 1) return bad(id, "area must be one rect");
+  r.area = area.empty() ? r.display : area[0];
+  if (const std::string why = rectsField(m, "crops", r.crops); !why.empty()) return bad(id, why);
+  if (!r.crops.empty() && r.crops.size() != r.spots.size()) return bad(id, "crops must have one rect per spot");
   if (!intField(m, "overview", 64, 8192, r.overviewLongSide)) return bad(id, "overview out of range");
   if (!intField(m, "quality", 1, 100, r.quality)) return bad(id, "quality out of range");
   const auto zoom = m.find("zoom");
@@ -152,8 +172,9 @@ Command parseRead(const Fields& m, const std::string& id) {
   ReadRequest& r = c.read;
   if (const std::string why = spotsField(m, r.spots); !why.empty()) return bad(id, why);
   if (!intField(m, "radius", 0, 32768, r.radius)) return bad(id, "radius out of range");
-  if (!boolField(m, "marks", r.marks) || !boolField(m, "text", r.text) || !boolField(m, "file", r.file)) {
-    return bad(id, "marks, text and file must be true or false");
+  if (!boolField(m, "marks", r.marks) || !boolField(m, "text", r.text) || !boolField(m, "file", r.file) ||
+      !boolField(m, "boxes", r.boxes)) {
+    return bad(id, "marks, text, file and boxes must be true or false");
   }
   if (const std::string why = dirField(m, r.dir); !why.empty()) return bad(id, why);
   return c;
@@ -253,6 +274,35 @@ void drawSpots(Image& img, const std::vector<Point>& spots, const Rect& area) {
   }
 }
 
+// The part of `a` inside `b`; no area when they don't meet.
+Rect intersect(const Rect& a, const Rect& b) {
+  const int x = std::max(a.x, b.x), y = std::max(a.y, b.y);
+  const int right = std::min(a.x + a.w, b.x + b.w), bottom = std::min(a.y + a.h, b.y + b.h);
+  return right > x && bottom > y ? Rect{x, y, right - x, bottom - y} : Rect{};
+}
+
+// `r` (request units, inside the display) as pixels of the grab, which may be larger than the display.
+Image cropUnits(const Image& full, const Rect& display, const Rect& r) {
+  const double sx = static_cast<double>(full.w) / display.w;
+  const double sy = static_cast<double>(full.h) / display.h;
+  const int px = clampInt(static_cast<int>(std::lround((r.x - display.x) * sx)), 0, full.w - 1);
+  const int py = clampInt(static_cast<int>(std::lround((r.y - display.y) * sy)), 0, full.h - 1);
+  const int pw = clampInt(static_cast<int>(std::lround(r.w * sx)), 1, full.w - px);
+  const int ph = clampInt(static_cast<int>(std::lround(r.h * sy)), 1, full.h - py);
+  return crop(full, px, py, pw, ph);
+}
+
+// `img` with its long side cut to `longSide`; false when the resize failed.
+bool fitLongSide(const Image& img, int longSide, const ContextPlatform& platform, Image& out) {
+  int w = 0, h = 0;
+  overviewSize(img.w, img.h, longSide, w, h);
+  if (w == img.w && h == img.h) {
+    out = img;
+    return true;
+  }
+  return platform.resize(img, w, h, out);
+}
+
 std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
   const CaptureRequest& r = cmd.capture;
   Failure fail;
@@ -262,12 +312,16 @@ std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
     return formatError(cmd.id, "capture", "the capture came back empty");
   }
 
-  int ow = 0, oh = 0;
-  overviewSize(full.w, full.h, r.overviewLongSide, ow, oh);
+  // An area off the display shows the whole display, as an overview with no area would.
+  Rect area = intersect(r.area, r.display);
+  if (area.w < 1) area = r.display;
+  const bool whole = area.x == r.display.x && area.y == r.display.y && area.w == r.display.w && area.h == r.display.h;
   Image overview;
-  if (ow == full.w && oh == full.h) overview = full;
-  else if (!platform.resize(full, ow, oh, overview)) return formatError(cmd.id, "capture", "could not resize");
-  drawSpots(overview, r.spots, r.display);
+  if (!fitLongSide(whole ? full : cropUnits(full, r.display, area), r.overviewLongSide, platform, overview)) {
+    return formatError(cmd.id, "capture", "could not resize");
+  }
+  const int ow = overview.w, oh = overview.h;
+  drawSpots(overview, r.spots, area);
   const std::string overviewPath = joinPath(r.dir, "overview-" + cmd.id + ".jpg");
   if (!platform.writeJpeg(overview, r.quality, overviewPath, fail)) return formatError(cmd.id, fail.code, fail.message);
 
@@ -276,13 +330,17 @@ std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
   std::string zooms, zoomRects;
   for (size_t i = 0; i < r.spots.size(); ++i) {
     // The zoom is zoomW x zoomH pixels of the capture, so on a Retina display it covers fewer points.
-    const Rect z = zoomRectAround(r.display, r.spots[i], std::max(1, static_cast<int>(std::lround(r.zoomW / sx))),
-                                  std::max(1, static_cast<int>(std::lround(r.zoomH / sy))));
-    const int px = clampInt(static_cast<int>(std::lround((z.x - r.display.x) * sx)), 0, full.w - 1);
-    const int py = clampInt(static_cast<int>(std::lround((z.y - r.display.y) * sy)), 0, full.h - 1);
-    const int pw = clampInt(static_cast<int>(std::lround(z.w * sx)), 1, full.w - px);
-    const int ph = clampInt(static_cast<int>(std::lround(z.h * sy)), 1, full.h - py);
-    Image zoom = crop(full, px, py, pw, ph);
+    Rect z = zoomRectAround(r.display, r.spots[i], std::max(1, static_cast<int>(std::lround(r.zoomW / sx))),
+                            std::max(1, static_cast<int>(std::lround(r.zoomH / sy))));
+    if (i < r.crops.size()) {
+      const Rect c = intersect(r.crops[i], r.display);
+      if (c.w > 0) z = c;
+    }
+    // A close-up larger than the overview's long side would only be shrunk by the model's provider.
+    Image zoom;
+    if (!fitLongSide(cropUnits(full, r.display, z), r.overviewLongSide, platform, zoom)) {
+      return formatError(cmd.id, "capture", "could not resize");
+    }
     drawSpots(zoom, r.spots, z);
     const std::string path = joinPath(r.dir, "zoom-" + cmd.id + "-" + std::to_string(i + 1) + ".jpg");
     if (!platform.writeJpeg(zoom, r.quality, path, fail)) return formatError(cmd.id, fail.code, fail.message);
@@ -338,14 +396,17 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
   const auto marksJob = std::make_shared<Probe<std::vector<RawMark>>>();
   const auto textJob = std::make_shared<Probe<SystemText>>();
   const auto fileJob = std::make_shared<Probe<FileInfo>>();
+  const auto boxesJob = std::make_shared<Probe<std::vector<std::vector<Rect>>>>();
   const bool wantMarks = r.marks && !r.spots.empty();
+  const bool wantBoxes = r.boxes && !r.spots.empty();
   // The layers run at once under one deadline: the slowest, not the sum, sets how long an ask waits. On a fresh
   // helper, UI Automation fails a controls walk that runs beside the system text probe (E_FAIL), so the quick text
   // probe goes first on the walk's own thread.
   std::vector<std::function<void()>> probes;
   size_t screenAt = 0, fileAt = 0;
-  if (wantMarks || r.text) {
+  if (wantMarks || r.text || wantBoxes) {
     screenAt = probes.size();
+    const auto boxes = platform.boxes;
     const auto controls = platform.controls;
     const auto systemText = platform.systemText;
     const std::vector<Point> spots = r.spots;
@@ -353,7 +414,10 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
     const bool text = r.text;
     // In a browser the file probe reads the address bar anyway; reading it twice was most of the text probe's time.
     const bool withAddress = !r.file;
-    probes.push_back([marksJob, textJob, controls, systemText, spots, radius, text, withAddress, wantMarks] {
+    // The boxes are a few calls per spot and frame the capture, so they go first.
+    probes.push_back([marksJob, textJob, boxesJob, boxes, controls, systemText, spots, radius, text, withAddress,
+                      wantMarks, wantBoxes] {
+      if (wantBoxes && boxes) boxesJob->ok = boxes(spots, boxesJob->out, boxesJob->fail);
       if (text) textJob->ok = systemText(spots, withAddress, textJob->out, textJob->fail);
       if (wantMarks) marksJob->ok = controls(spots, radius, marksJob->out, marksJob->fail);
     });
@@ -407,6 +471,18 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
             "\",\"focusValue\":\"" + jsonEscape(value) + "\",\"focusSecure\":" + (t.focusSecure ? "true" : "false") +
             ",\"address\":\"" + jsonEscape(t.address) + "\"";
   }
+  const std::string boxes = layerStatus(wantBoxes, inTime(wantBoxes, screenAt), *boxesJob);
+  line += ",\"boxes\":\"" + boxes + "\"";
+  if (boxes == "ok") {
+    std::string all;
+    for (size_t i = 0; i < r.spots.size(); ++i) {
+      if (i > 0) all += ';';
+      if (i >= boxesJob->out.size()) continue;
+      const std::vector<Rect> chain = thinBoxes(boxesJob->out[i]);
+      for (size_t j = 0; j < chain.size(); ++j) all += (j == 0 ? "" : "|") + rectText(chain[j]);
+    }
+    line += ",\"boxRects\":\"" + all + "\"";
+  }
   line += ",\"file\":\"" + file + "\"";
   if (file == "ok") {
     const FileInfo& f = fileJob->out;
@@ -440,6 +516,23 @@ Command parseCommand(const std::string& line) {
   else if (type->second == "ping") c.kind = Command::Kind::Ping;
   else return bad(id, "unknown type");
   return c;
+}
+
+std::vector<Rect> thinBoxes(const std::vector<Rect>& chain) {
+  std::vector<Rect> out;
+  for (const Rect& r : chain) {
+    if (r.w < 1 || r.h < 1) continue;
+    if (!out.empty() && out.back().x == r.x && out.back().y == r.y && out.back().w == r.w && out.back().h == r.h) {
+      continue;
+    }
+    out.push_back(r);
+  }
+  if (out.size() > kMaxBoxes) {
+    const Rect window = out.back();
+    out.resize(kMaxBoxes - 1);
+    out.push_back(window);
+  }
+  return out;
 }
 
 Rect zoomRectAround(const Rect& display, Point spot, int w, int h) {

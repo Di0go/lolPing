@@ -20,7 +20,7 @@ function ctx(over: Partial<AskContext> = {}): AskContext {
     app: 'Notepad',
     title: 'notes.txt',
     shot: {
-      display: { x: 0, y: 0, w: 3200, h: 1800 },
+      area: { x: 0, y: 0, w: 3200, h: 1800 },
       overview: { w: 1600, h: 900 },
       zooms: [{ x: 1100, y: 525, w: 1000, h: 750 }],
     },
@@ -290,7 +290,13 @@ describe('teammate prompt context', () => {
     const s = systemPrompt(c);
     expect(s).not.toContain('exact element');
     expect(s).not.toContain('marks list');
-    expect(s).toContain("Use `look` only for a detail you can't read in the images.");
+    expect(s).not.toContain('`look`');
+  });
+
+  it('tells Show me how and Whole picture that look works once', () => {
+    const once = "- `look` works once per ask: use it only for a detail you can't read in the images you have.";
+    expect(systemPrompt(ctx({ intent: ASSIST }))).toContain(once);
+    expect(systemPrompt(ctx({ intent: intentFor(DEFAULT_TEAMMATE, 'allin', 'en') }))).toContain(once);
   });
 
   it('offers read_file only with a file', () => {

@@ -105,6 +105,9 @@ static void test_parse_rejects_bad_input() {
   CHECK(bad("quality", "101").kind == Command::Kind::Bad);
   CHECK(bad("dir", R"("")").kind == Command::Kind::Bad);
   CHECK(bad("dir", R"("C:\\a;b")").kind == Command::Kind::Bad);  // ';' separates the reply's paths
+  CHECK(bad("area", R"("0,0,0,10")").kind == Command::Kind::Bad);
+  CHECK(bad("area", R"("0,0,10,10;0,0,5,5")").kind == Command::Kind::Bad);
+  CHECK(bad("crops", R"("0,0,10,10")").kind == Command::Kind::Bad);  // two spots need two crops
   CHECK(parseCommand(R"({"type":"ping","id":"../x"})").kind == Command::Kind::Bad);  // the id names files
 }
 
@@ -209,6 +212,27 @@ static void test_capture_scales_spots_to_a_larger_image() {
   CHECK(fields(reply).at("zoomRects") == "-1920,13,500,375;-670,705,500,375");
   CHECK(fake.written[1].second.w == 1000 && fake.written[1].second.h == 750);
   CHECK(fake.written[2].second.w == 1000 && fake.written[2].second.h == 750);
+}
+
+static void test_capture_shows_the_area_and_the_crops() {
+  Fake fake;
+  // The overview shows an 800 x 600 window; spot 1's close-up is a 600 x 200 paragraph, spot 2's a 2400 x 900 panel.
+  const std::string line = captureLine({{"area", R"("-1900,100,800,600")"},
+                                        {"crops", R"("-1900,150,600,200;-1900,100,2400,900")"}});
+  const Command c = parseCommand(line);
+  CHECK(c.capture.area.x == -1900 && c.capture.area.w == 800);
+  CHECK(c.capture.crops.size() == 2 && c.capture.crops[0].h == 200);
+  const auto m = fields(handleCommand(c, fake.platform()).line);
+  CHECK(m.at("ow") == "800" && m.at("oh") == "600");  // small enough to send at full size
+  CHECK(fake.written[0].second.w == 800 && fake.written[0].second.h == 600);
+  // A crop is cut to the display; one longer than the overview's long side is scaled down to it.
+  CHECK(m.at("zoomRects") == "-1900,150,600,200;-1900,100,1900,900");
+  CHECK(fake.written[1].second.w == 600 && fake.written[1].second.h == 200);
+  CHECK(fake.written[2].second.w == 1600 && fake.written[2].second.h == 758);
+  // An area off the display shows the whole display.
+  Fake off;
+  const auto o = fields(handleCommand(parseCommand(captureLine({{"area", R"("100,100,500,500")"}})), off.platform()).line);
+  CHECK(o.at("ow") == "1600" && o.at("oh") == "900");
 }
 
 static void test_capture_failure_is_an_error_reply() {
@@ -326,6 +350,33 @@ static void test_read_answers_every_layer_it_was_asked_for() {
   CHECK(m.at("text") == "ok" && m.at("spotTexts") == "spot 1" && m.at("focusSecure") == "false");
   CHECK(m.at("file") == "ok" && m.at("filePath") == "C:\\docs\\a.pdf" && m.at("how") == "title");
   CHECK(m.at("fileAddress").empty());
+}
+
+static void test_read_sends_the_boxes_around_each_spot() {
+  Fake fake;
+  ContextPlatform p = readPlatform(fake);
+  p.boxes = [](const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure&) {
+    out.push_back({Rect{-1830, 190, 40, 20}, Rect{-1830, 190, 40, 20}, Rect{-1900, 150, 600, 200},
+                   Rect{-1920, 0, 1920, 1040}});
+    for (size_t i = 1; i < spots.size(); ++i) out.emplace_back();
+    return true;
+  };
+  const auto m = fields(handleCommand(parseCommand(readLine("r1", R"("boxes":true,)")), p).line);
+  CHECK(m.at("boxes") == "ok");
+  CHECK(m.at("boxRects") == "-1830,190,40,20|-1900,150,600,200|-1920,0,1920,1040");  // the repeat is dropped
+  CHECK(m.at("marks") == "off" && m.at("text") == "off");
+  const auto none = fields(handleCommand(parseCommand(readLine("r2", "")), p).line);
+  CHECK(none.at("boxes") == "off" && none.count("boxRects") == 0);
+}
+
+static void test_thin_boxes_keeps_the_inner_boxes_and_the_window() {
+  std::vector<Rect> chain;
+  for (int i = 0; i < 20; ++i) chain.push_back(Rect{0, 0, 10 + i, 10 + i});
+  const std::vector<Rect> thin = thinBoxes(chain);
+  CHECK(thin.size() == kMaxBoxes);
+  CHECK(thin.front().w == 10 && thin[kMaxBoxes - 2].w == 10 + static_cast<int>(kMaxBoxes) - 2);
+  CHECK(thin.back().w == 29);
+  CHECK(thinBoxes({Rect{0, 0, 0, 5}, Rect{0, 0, 5, 5}}).size() == 1);  // a box with no area is dropped
 }
 
 static void test_read_leaves_out_the_layers_that_are_off() {
@@ -584,11 +635,14 @@ int main() {
   test_draw_spot_marker_clips_at_the_edge();
   test_capture_writes_overview_and_one_zoom_per_spot();
   test_capture_scales_spots_to_a_larger_image();
+  test_capture_shows_the_area_and_the_crops();
   test_capture_failure_is_an_error_reply();
   test_foreground_and_pong_replies();
   test_loop_answers_until_shutdown();
   test_parse_read_command();
   test_read_answers_every_layer_it_was_asked_for();
+  test_read_sends_the_boxes_around_each_spot();
+  test_thin_boxes_keeps_the_inner_boxes_and_the_window();
   test_read_leaves_out_the_layers_that_are_off();
   test_read_reports_a_failed_layer_and_keeps_the_others();
   test_secure_focus_sends_no_value();

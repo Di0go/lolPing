@@ -7,7 +7,7 @@ import { strings } from '../../../src/shared/i18n';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
 import type { Spot } from '../../../src/shared/teammate/askMachine';
 import type { SystemTextLayer } from '../../../src/shared/teammate/contextProtocol';
-import { zoomRect } from '../../../src/shared/teammate/coords';
+import { zoomRect, type Rect } from '../../../src/shared/teammate/coords';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 import { bubbleMs } from '../../../src/shared/teammate/line';
 import { DEFAULT_TEAMMATE, type BuiltinProfile, type TeammateSettings } from '../../../src/shared/teammate/settings';
@@ -76,6 +76,8 @@ interface Screen {
   marksFile: string;
   /** The file behind the window; null: none. */
   doc: Doc | null;
+  /** The boxes around the element under the spot, innermost first, ending with its window. */
+  boxes: Rect[];
 }
 
 const NO_TEXT: SystemTextLayer = { selection: '', spotTexts: [], focus: null, address: '' };
@@ -96,7 +98,7 @@ function harness(opts: HarnessOptions = {}) {
   /** The fake disk: folders and files under the temp folder. */
   const disk = new Set<string>();
   const dirs: string[] = [];
-  const screen: Screen = { system: NO_TEXT, marksFile: '', doc: null, ...opts.screen };
+  const screen: Screen = { system: NO_TEXT, marksFile: '', doc: null, boxes: [], ...opts.screen };
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -116,6 +118,7 @@ function harness(opts: HarnessOptions = {}) {
       capture: async (req, signal) => {
         captures += 1;
         log.push(['capture', req.spots]);
+        log.push(['framed', { area: req.area ?? null, crops: req.crops ?? null }]);
         dirs.push(req.dir);
         if (opts.captureThrows) throw new ContextError('capture', 'no screen');
         if (opts.captureHangs) {
@@ -128,7 +131,9 @@ function harness(opts: HarnessOptions = {}) {
         return {
           overviewPath: `ov${captures}.jpg`,
           overview: { w: 1600, h: 1000 },
-          zooms: req.spots.map((p, i) => ({ path: `zoom${captures}-${i}.jpg`, rect: zoomRect(req.display, p) })),
+          zooms: req.spots.map((p, i) => ({
+            path: `zoom${captures}-${i}.jpg`, rect: req.crops?.[i] ?? zoomRect(req.display, p),
+          })),
         };
       },
       read: async (req, signal) => {
@@ -140,12 +145,13 @@ function harness(opts: HarnessOptions = {}) {
         }
         const text = !req.text ? 'off' : system === 'slow' ? 'slow' : 'ok';
         return {
-          status: { marks: req.marks ? 'ok' : 'off', text, file: req.file ? 'ok' : 'off' },
+          status: { marks: req.marks ? 'ok' : 'off', text, file: req.file ? 'ok' : 'off', boxes: req.boxes ? 'ok' : 'off' },
           marks: req.marks ? { path: `${req.dir}/marks.tsv`, count: 1 } : null,
           text: typeof system === 'object' && req.text ? system : null,
           file: !req.file ? null : screen.doc
             ? { path: `C:/docs/${screen.doc.name}`, address: '', how: 'title' }
             : { path: '', address: '', how: 'none' },
+          boxes: req.boxes ? req.spots.map(() => screen.boxes) : null,
         };
       },
     },
@@ -447,7 +453,7 @@ describe('AskController', () => {
         },
       ],
     });
-    h.ctl.ask(spot('needvision'));
+    h.ctl.ask(spot('allin'));
     await flush();
 
     // The look area's centre in the overview (600, 375) is (1200, 750) on the display.
@@ -843,14 +849,46 @@ describe('AskController', () => {
     expect(h.appends.map((a) => a.threadId)).toEqual([null, null]);
   });
 
-  it('stops after 6 rounds and never captures for a look on the last one', async () => {
+  it('looks once per ask and stops after 6 rounds', async () => {
     const look = (n: number) => answers([call('look', { x: 500, y: 300, w: 200, h: 150 }, `l${n}`)]);
     const h = harness({ steps: [1, 2, 3, 4, 5, 6, 7].map(look) });
-    h.ctl.ask(spot('needvision'));
+    h.ctl.ask(spot('allin'));
     await flush();
     expect(h.requests).toHaveLength(6);
-    expect(h.of('capture')).toHaveLength(6); // the ask's own capture and the looks of rounds 1 to 5
+    expect(h.of('capture')).toHaveLength(2); // the ask's own capture and the first look
+    expect(h.requests[0].tools.map((d) => d.name)).toContain('look');
+    expect(h.requests[1].tools.map((d) => d.name)).not.toContain('look');
     expect(h.ctl.running).toBe(false);
+  });
+
+  it('offers look only to Show me how and Whole picture', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'A.' })]), answers([call('say', { text: 'B.' })])] });
+    h.ctl.ask(spot('missing'));
+    await flush();
+    h.ctl.ask(spot('assist', 1300, 900));
+    await flush();
+    expect(h.requests[0].tools.map((d) => d.name)).not.toContain('look');
+    expect(h.requests[1].tools.map((d) => d.name)).toContain('look');
+  });
+
+  it('frames the capture with the window and the block around the spot', async () => {
+    const h = harness({
+      screen: {
+        boxes: [
+          { x: 980, y: 790, w: 40, h: 20 }, { x: 600, y: 600, w: 900, h: 400 }, { x: 100, y: 100, w: 1700, h: 1100 },
+        ],
+      },
+      steps: [answers([call('say', { text: 'A table.' })])],
+    });
+    h.ctl.ask(spot('missing'));
+    await flush();
+    expect(h.of('framed')).toEqual([{
+      area: { x: 100, y: 100, w: 1700, h: 1100 }, crops: [{ x: 584, y: 584, w: 932, h: 432 }],
+    }]);
+    // The overview's pixels now map onto the window, not the display.
+    const first = h.requests[0].turns[0];
+    const text = first.role === 'user' ? first.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('\n') : '';
+    expect(text).toContain('spot 1 is at x=847, y=636 in the overview.');
   });
 
   it('lets the overlays and windows back into captures when a capture throws', async () => {
@@ -933,7 +971,7 @@ describe('AskController', () => {
       teammate: { profiles: [{ ...profile('fast'), model: 'deepseek-chat' }] },
       steps: [answers([call('say', { text: 'Fine.' })])],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask(spot('allin'));
     await flush();
     expect(h.of('capture')).toHaveLength(1);
     const req = h.requests[0];

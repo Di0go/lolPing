@@ -38,7 +38,7 @@ const POINT_PROPS = {
   spot: { type: 'integer', description: "Number of one of the user's spots, instead of x and y." },
 };
 
-export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean }): ToolDef[] {
+export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean; look: boolean }): ToolDef[] {
   const spotNote = opts.spots > 0 ? ` The user marked ${opts.spots} spot${opts.spots === 1 ? '' : 's'}.` : '';
   const defs: ToolDef[] = [
     {
@@ -72,13 +72,13 @@ export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean }
       },
     });
   }
-  defs.push(
-    {
-      name: 'answer',
-      description: 'Give a longer answer in Markdown, shown in a card.',
-      parameters: { type: 'object', properties: { markdown: { type: 'string' } }, required: ['markdown'] },
-    },
-    {
+  defs.push({
+    name: 'answer',
+    description: 'Give a longer answer in Markdown, shown in a card.',
+    parameters: { type: 'object', properties: { markdown: { type: 'string' } }, required: ['markdown'] },
+  });
+  if (opts.look) {
+    defs.push({
       name: 'look',
       description: "Get a closer, zoomed view of a rectangle of the overview, for a detail you can't read in the images.",
       parameters: {
@@ -91,8 +91,8 @@ export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean }
         },
         required: ['x', 'y', 'w', 'h'],
       },
-    },
-  );
+    });
+  }
   if (opts.file) {
     defs.push({
       name: 'read_file',

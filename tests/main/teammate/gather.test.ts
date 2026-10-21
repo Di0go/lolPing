@@ -38,15 +38,16 @@ function fakes(opts: FakeOptions = {}) {
   const deps: GatherDeps = {
     context: {
       read: async (req) => {
-        const asked = (['marks', 'text', 'file'] as const).filter((l) => req[l]);
+        const asked = (['marks', 'text', 'file', 'boxes'] as const).filter((l) => req[l]);
         calls.push(`read:${asked.join('+')}`);
         if (opts.readError) throw opts.readError;
         const status = (l: Layer): LayerStatus => (!req[l] ? 'off' : opts.status?.[l] ?? 'ok');
         return {
-          status: { marks: status('marks'), text: status('text'), file: status('file') },
+          status: { marks: status('marks'), text: status('text'), file: status('file'), boxes: req.boxes ? 'ok' : 'off' },
           marks: status('marks') === 'ok' ? { path: `${req.dir}/marks.tsv`, count: 1 } : null,
           text: status('text') === 'ok' ? opts.system ?? layer({ spotTexts: [VISIBLE] }) : null,
           file: status('file') === 'ok' ? opts.file ?? { path: 'C:/docs/report.pdf', address: '', how: 'title' } : null,
+          boxes: req.boxes ? [[{ x: 900, y: 700, w: 200, h: 60 }, { x: 0, y: 0, w: 1920, h: 1040 }]] : null,
         };
       },
     },
@@ -82,7 +83,10 @@ describe('gather', () => {
   it('runs only the layers that are on, in one helper read', async () => {
     const all = fakes();
     const got = await gather(all.deps, request(), signal());
-    expect(all.calls).toEqual(['read:marks+text+file', 'readFile:tmp/run/marks.tsv', 'readDocument:C:/docs/report.pdf']);
+    expect(all.calls).toEqual([
+      'read:marks+text+file+boxes', 'readFile:tmp/run/marks.tsv', 'readDocument:C:/docs/report.pdf',
+    ]);
+    expect(got.boxes).toEqual([[{ x: 900, y: 700, w: 200, h: 60 }, { x: 0, y: 0, w: 1920, h: 1040 }]]);
     expect(got.marks).toEqual([{ kind: 'button', box: { x: 900, y: 700, w: 200, h: 60 }, text: 'Save' }]);
     expect(got.system).toEqual(layer({ spotTexts: [VISIBLE] }));
     expect(got.file?.doc.name).toBe('report.pdf');
@@ -92,19 +96,20 @@ describe('gather', () => {
     const some = fakes();
     const off = { ...ALL_ON, marks: false, files: false };
     const less = await gather(some.deps, request({ settings: off }), signal());
-    expect(some.calls).toEqual(['read:text']);
+    expect(some.calls).toEqual(['read:text+boxes']);
     expect(less).toMatchObject({ marks: [], file: null, skipped: false });
 
     // Only Whole picture reads the file behind the window, so no other ask waits for it.
     const quick = fakes();
     const spot = await gather(quick.deps, request({ allin: false }), signal());
-    expect(quick.calls).toEqual(['read:marks+text', 'readFile:tmp/run/marks.tsv']);
+    expect(quick.calls).toEqual(['read:marks+text+boxes', 'readFile:tmp/run/marks.tsv']);
     expect(spot).toMatchObject({ file: null, doc: null });
 
     const none = fakes();
     const nothing = { ...ALL_ON, marks: false, systemText: false, files: false };
-    await gather(none.deps, request({ settings: nothing }), signal());
-    expect(none.calls).toEqual([]); // nothing to ask the helper
+    const framed = await gather(none.deps, request({ settings: nothing }), signal());
+    expect(none.calls).toEqual(['read:boxes']); // the boxes frame the capture whatever is read
+    expect(framed.boxes).toHaveLength(1);
   });
 
   it('keeps the 40 marks nearest the spot', async () => {
@@ -222,7 +227,7 @@ describe('gather', () => {
   it('rethrows when the ask is cancelled', async () => {
     const f = fakes({ readError: new ContextError('aborted', 'the ask was cancelled') });
     await expect(gather(f.deps, request(), signal())).rejects.toMatchObject({ code: 'aborted' });
-    expect(f.calls).toEqual(['read:marks+text+file']);
+    expect(f.calls).toEqual(['read:marks+text+file+boxes']);
 
     // A download cut off by the cancel rejects with the signal's own error, which goes up as well.
     const ac = new AbortController();

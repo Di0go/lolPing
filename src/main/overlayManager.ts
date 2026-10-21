@@ -8,7 +8,7 @@ import { WHEEL, pickSlice } from '../shared/geometry';
 import { isPingId, type PingId } from '../shared/pings';
 import type { HelperEvent, WheelKind } from '../shared/protocol';
 import type { OverlaySettings, RoomTextStyle } from '../shared/settings';
-import type { Shot } from '../shared/teammate/coords';
+import type { Rect } from '../shared/teammate/coords';
 import { displayAtPhysical, physicalToDip, physicalToLocal, type DisplayMap, type LocalPoint } from './coords';
 import { numberDisplays, type NumberedDisplay } from './displayNumbers';
 import { IS_LINUX, IS_MAC, loadPage, preloadPath } from './paths';
@@ -238,7 +238,7 @@ export class OverlayManager extends EventEmitter {
   }
 
   /** The display under a physical point, with its rect in physical px. */
-  displayAt(phys: { x: number; y: number }): { id: number; rect: Shot['display'] } | null {
+  displayAt(phys: { x: number; y: number }): { id: number; rect: Rect } | null {
     const d = displayAtPhysical(phys.x, phys.y, this.maps);
     return d ? { id: d.id, rect: { x: d.phys.x, y: d.phys.y, w: d.phys.width, h: d.phys.height } } : null;
   }

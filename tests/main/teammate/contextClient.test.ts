@@ -101,30 +101,37 @@ describe('ContextClient', () => {
   it('reads every layer it asks for in one request', async () => {
     const { c } = client(['ok']);
     const dir = tempDir();
-    const req = { spots: [{ x: 100.4, y: 200 }], radius: 600, marks: true, text: true, file: true, dir };
+    const req = { spots: [{ x: 100.4, y: 200 }], radius: 600, marks: true, text: true, file: true, boxes: true, dir };
     const got = await c.read(req, signal());
-    expect(got.status).toEqual({ marks: 'ok', text: 'ok', file: 'ok' });
+    expect(got.status).toEqual({ marks: 'ok', text: 'ok', file: 'ok', boxes: 'ok' });
+    expect(got.boxes).toEqual([[{ x: 90, y: 190, w: 40, h: 20 }, { x: 0, y: 0, w: 1400, h: 1000 }]]);
     expect(got.marks?.count).toBe(1);
     expect(readFileSync(got.marks?.path ?? '', 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
     expect(got.text).toEqual({ selection: 'chosen', spotTexts: ['under the spot'], focus: null, address: '' });
     expect(got.file).toEqual({ path: 'C:/docs/a.txt', address: '', how: 'title' });
     const sent: unknown = JSON.parse(readFileSync(join(dir, 'read-command.json'), 'utf8'));
-    expect(sent).toMatchObject({ type: 'read', spots: '100,200', radius: 600, marks: true, text: true, file: true });
+    expect(sent).toMatchObject({
+      type: 'read', spots: '100,200', radius: 600, marks: true, text: true, file: true, boxes: true,
+    });
   });
 
   it('leaves out the layers it does not ask for', async () => {
     const { c } = client(['ok']);
-    const got = await c.read({ spots: [], radius: 600, marks: false, text: true, file: false, dir: tempDir() }, signal());
-    expect(got.status).toEqual({ marks: 'off', text: 'ok', file: 'off' });
+    const req = { spots: [], radius: 600, marks: false, text: true, file: false, boxes: false, dir: tempDir() };
+    const got = await c.read(req, signal());
+    expect(got.status).toEqual({ marks: 'off', text: 'ok', file: 'off', boxes: 'off' });
+    expect(got.boxes).toBeNull();
     expect(got.marks).toBeNull();
     expect(got.file).toBeNull();
   });
 
   it('keeps what a helper read on its way out, and starts a new helper after it', async () => {
     const { c, starts } = client(['slow', 'ok']);
-    const req = { spots: [{ x: 100, y: 200 }], radius: 600, marks: true, text: true, file: true, dir: tempDir() };
+    const req = {
+      spots: [{ x: 100, y: 200 }], radius: 600, marks: true, text: true, file: true, boxes: false, dir: tempDir(),
+    };
     const got = await c.read(req, signal());
-    expect(got.status).toEqual({ marks: 'ok', text: 'ok', file: 'slow' });
+    expect(got.status).toEqual({ marks: 'ok', text: 'ok', file: 'slow', boxes: 'off' });
     expect(got.marks?.count).toBe(1);
     expect(got.file).toBeNull();
     // The old helper is on its way out and reads nothing more: this request must go to a fresh one.

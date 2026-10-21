@@ -1,4 +1,4 @@
-// Windows text probes: named controls and text near the spots by UI Automation, the system's own text (selection, focus, text under the spots, browser address) and the file behind the window.
+// Windows text probes: named controls and text near the spots by UI Automation, the boxes around the element under each spot, the system's own text (selection, focus, text under the spots, browser address) and the file behind the window.
 // Each runs on its own fresh thread (context.h), so each joins the MTA itself and never uninitializes: an abandoned
 // thread may still be inside a call when the helper exits.
 #define NOMINMAX
@@ -728,6 +728,40 @@ bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText&
     std::string path, address;
     if (front && !isLolPing(proc.pid) && isBrowser(proc.exe) && addressBar(uia.get(), front, path, address)) {
       out.address = cutText(path.empty() ? address : path, kAddressMax);
+    }
+    return true;
+  } catch (const winrt::hresult_error& e) {
+    fail.message = failed("UI Automation", e.code());
+    return false;
+  }
+}
+
+bool elementBoxes(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail) {
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    const auto uia = winrt::create_instance<IUIAutomation>(CLSID_CUIAutomation);
+    winrt::com_ptr<IUIAutomationTreeWalker> walker;
+    winrt::check_hresult(uia->get_ControlViewWalker(walker.put()));
+    winrt::com_ptr<IUIAutomationElement> root;
+    winrt::check_hresult(uia->GetRootElement(root.put()));
+    for (const Point& spot : spots) {
+      std::vector<Rect>& chain = out.emplace_back();
+      winrt::com_ptr<IUIAutomationElement> el;
+      if (FAILED(uia->ElementFromPoint(POINT{spot.x, spot.y}, el.put())) || !el) continue;
+      int pid = 0;
+      if (SUCCEEDED(el->get_CurrentProcessId(&pid)) && isLolPing(static_cast<DWORD>(pid))) continue;
+      // Up to the top-level window: the desktop itself frames nothing.
+      for (int depth = 0; el && depth < 40; ++depth) {
+        BOOL isRoot = FALSE;
+        if (SUCCEEDED(uia->CompareElements(el.get(), root.get(), &isRoot)) && isRoot) break;
+        RECT r{};
+        if (SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && r.right > r.left && r.bottom > r.top) {
+          chain.push_back(Rect{r.left, r.top, r.right - r.left, r.bottom - r.top});
+        }
+        winrt::com_ptr<IUIAutomationElement> parent;
+        if (FAILED(walker->GetParentElement(el.get(), parent.put()))) break;
+        el = parent;
+      }
     }
     return true;
   } catch (const winrt::hresult_error& e) {

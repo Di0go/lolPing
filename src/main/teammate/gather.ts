@@ -1,6 +1,7 @@
 import type { FileUnit } from '../../shared/i18n';
 import type { Point } from '../../shared/ipc';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
+import type { Rect } from '../../shared/teammate/coords';
 import { locate, PAGE_CHARS } from '../../shared/teammate/locate';
 import { parseMarksFile, selectMarks, type Mark } from '../../shared/teammate/marks';
 import type { TeammateSettings } from '../../shared/teammate/settings';
@@ -32,6 +33,8 @@ export type UsedItem =
   | { kind: 'file'; name: string; unit: FileUnit; from: string; to: string };
 
 export interface Gathered {
+  /** Per spot, the boxes around the element under it, innermost first, ending with its window; empty when unknown. */
+  boxes: Rect[][];
   marks: Mark[];
   system: SystemTextLayer | null;
   /** The located sections for the prompt; a single section over the budget is cut there. */
@@ -139,11 +142,11 @@ async function fetchWithin(deps: GatherDeps, url: string, signal: AbortSignal): 
 }
 
 /**
- * Runs the context layers that are on for one ask: one helper read, side by side, then the marks file and the file
- * behind the window. A layer that fails is left out; a cancelled ask rejects.
+ * Runs the context layers that are on for one ask, and the boxes that frame its capture: one helper read, side by
+ * side, then the marks file and the file behind the window. A layer that fails is left out; a cancelled ask rejects.
  */
 export async function gather(deps: GatherDeps, req: GatherRequest, signal: AbortSignal): Promise<Gathered> {
-  const out: Gathered = { marks: [], system: null, file: null, doc: null, used: [], skipped: false };
+  const out: Gathered = { boxes: [], marks: [], system: null, file: null, doc: null, used: [], skipped: false };
   /** Runs one step; a failure leaves its layer out, and one from a slow or dead helper says context was skipped. */
   const step = async <T>(run: () => Promise<T>): Promise<T | null> => {
     try {
@@ -157,10 +160,11 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
     }
   };
   const { settings } = req;
-  const layers = { marks: settings.marks, text: settings.systemText, file: settings.files && req.allin };
-  const read = layers.marks || layers.text || layers.file
-    ? await step(() => deps.context.read({ spots: req.spots, radius: MARK_RADIUS, ...layers, dir: req.dir }, signal))
-    : null;
+  // The boxes are only geometry, read for every ask whatever the settings: they frame the capture.
+  const layers = { marks: settings.marks, text: settings.systemText, file: settings.files && req.allin, boxes: true };
+  const ask = { spots: req.spots, radius: MARK_RADIUS, ...layers, dir: req.dir };
+  const read = await step(() => deps.context.read(ask, signal));
+  out.boxes = read?.boxes ?? [];
   // A layer still running at the helper's budget is left out, and the footer says some context was skipped.
   if (read && Object.values(read.status).includes('slow')) out.skipped = true;
 

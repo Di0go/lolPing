@@ -197,6 +197,7 @@ bool foreground(std::string& app, std::string& title, Failure&) {
 bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail);
 bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail);
 bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail);
+bool elementBoxes(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail);
 
 ContextPlatform nativePlatform() {
   ContextPlatform p;
@@ -207,6 +208,7 @@ ContextPlatform nativePlatform() {
   p.controls = nearbyControls;
   p.systemText = systemTextAt;
   p.fileOf = fileBehindWindow;
+  p.boxes = elementBoxes;
   return p;
 }
 

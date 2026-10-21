@@ -25,7 +25,9 @@ struct Image {
 
 struct CaptureRequest {
   Rect display;               // the display to grab, in the same units as the input helper's coordinates
+  Rect area;                  // the part of the display the overview shows; the whole display when not given
   std::vector<Point> spots;   // 1-based numbers follow this order
+  std::vector<Rect> crops;    // one close-up per spot when given, instead of a zoomW x zoomH crop around it
   int overviewLongSide = 1600;
   int zoomW = 1000, zoomH = 750;
   int quality = 80;
@@ -36,7 +38,7 @@ struct CaptureRequest {
 struct ReadRequest {
   std::vector<Point> spots;
   int radius = 600;           // request units around each spot, for marks
-  bool marks = false, text = false, file = false;
+  bool marks = false, text = false, file = false, boxes = false;
   std::string dir;            // where the marks file goes
 };
 
@@ -98,6 +100,11 @@ struct ContextPlatform {
   std::function<bool(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail)> controls;
   /** `withAddress`: also look up the browser's address; off when the file probe of the same read looks it up. */
   std::function<bool(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail)> systemText;
+  /**
+   * The boxes that hold the element under each spot, innermost first, ending with its top-level window; none for
+   * lolPing's own windows or an element that does not answer. Request (screen) units.
+   */
+  std::function<bool(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail)> boxes;
   /** The file or web address behind the foreground window; `how` is office, address, title or none. */
   std::function<bool(std::string& path, std::string& address, std::string& how, Failure& fail)> fileOf;
 };
@@ -121,6 +128,12 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int bud
 
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
 std::string marksFileText(const std::vector<RawMark>& marks);
+
+/** At most this many boxes per spot: the innermost ones and the window. */
+constexpr size_t kMaxBoxes = 12;
+
+/** `chain` without repeats of the same box, cut to kMaxBoxes by dropping the outer ones short of the last. */
+std::vector<Rect> thinBoxes(const std::vector<Rect>& chain);
 
 /** Caps on the system text a read sends, in characters; the probes apply them. */
 constexpr size_t kSelectionMax = 4000;

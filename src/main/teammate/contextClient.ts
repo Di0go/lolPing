@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Point } from '../../shared/ipc';
-import type { Shot } from '../../shared/teammate/coords';
+import type { Rect, Shot } from '../../shared/teammate/coords';
 import {
   captureCommand, parseContextLine, readCommand, serializeContextCommand, type ContextCommand, type ContextErrorCode,
   type ContextReply, type ReadResult,
@@ -54,7 +54,7 @@ export class ContextClient {
   }
 
   async capture(
-    req: { display: Shot['display']; spots: { x: number; y: number }[]; dir: string },
+    req: { display: Rect; area?: Rect; spots: { x: number; y: number }[]; crops?: Rect[]; dir: string },
     signal: AbortSignal,
   ): Promise<Capture> {
     const r = await this.request((id) => captureCommand(id, req), 'captured', signal);
@@ -63,16 +63,17 @@ export class ContextClient {
   }
 
   /**
-   * The context layers that are on, read side by side: the controls and text near the spots (into a marks file in
-   * `dir`), the system text and the file behind the window. A layer that was too slow comes back `slow`.
+   * The context layers that are on, read side by side: the boxes around the element under each spot, the controls
+   * and text near the spots (into a marks file in `dir`), the system text and the file behind the window. A layer
+   * that was too slow comes back `slow`.
    */
   async read(
-    req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; dir: string },
+    req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; boxes: boolean; dir: string },
     signal: AbortSignal,
   ): Promise<ReadResult> {
     const r = await this.request((id) => readCommand(id, req), 'read', signal);
     if (r.type !== 'read') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { status: r.status, marks: r.marks, text: r.text, file: r.file };
+    return { status: r.status, marks: r.marks, text: r.text, file: r.file, boxes: r.boxes };
   }
 
   async foreground(signal: AbortSignal): Promise<{ app: string; title: string }> {

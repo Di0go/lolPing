@@ -6,7 +6,8 @@ import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
-import { overviewToPhysical, physicalToOverview, receiptPoint, type Shot } from '../../shared/teammate/coords';
+import { overviewToPhysical, physicalToOverview, receiptPoint, type Rect, type Shot } from '../../shared/teammate/coords';
+import { frameAsk, type Framing } from '../../shared/teammate/framing';
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
@@ -22,7 +23,7 @@ import type { Doc } from './files';
 import { FILE_READ_LIMIT, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
-import { aimsExactly, firstTurn, systemPrompt, type AskContext } from './prompt';
+import { aimsExactly, canLook, firstTurn, systemPrompt, type AskContext } from './prompt';
 import {
   ProviderError, type Part, type ProviderAdapter, type RawCall, type StreamHandlers, type Turn,
 } from './providers/types';
@@ -87,7 +88,7 @@ interface Run {
   ended: boolean;
   spot: Spot;
   receipt: Point;
-  display: { id: number; rect: Shot['display'] } | null;
+  display: { id: number; rect: Rect } | null;
   intent: ReturnType<typeof intentFor>;
   words: string | null;
   thread: ThreadRecord | null;
@@ -363,19 +364,22 @@ export class AskController extends EventEmitter {
     if (!this.alive(run)) return;
     run.app = fg.app;
     run.title = fg.title;
-    const cap = await this.capture(run, [run.spot.phys]);
-    if (!this.alive(run)) return;
-    const shot: Shot = { display: run.display.rect, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
-    run.shot = shot;
-    const overviewJpeg = await this.files.read(cap.overviewPath);
-    const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
-    if (!this.alive(run)) return;
-    run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
+    // The context comes first: the boxes around the spot decide what the capture shows.
+    await this.files.makeDir(run.dir);
     const allin = run.intent.def.id === 'allin';
     const layers = await gather({ context: deps.context, ...deps.readers }, {
       settings: t.context, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
     }, signal);
     if (!this.alive(run)) return;
+    const framing = frameAsk(run.intent.def.id, layers.boxes[0] ?? [], run.display.rect, run.spot.phys);
+    const cap = await this.capture(run, [run.spot.phys], framing);
+    if (!this.alive(run)) return;
+    const shot: Shot = { area: framing.area, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
+    run.shot = shot;
+    const overviewJpeg = await this.files.read(cap.overviewPath);
+    const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
+    if (!this.alive(run)) return;
+    run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
     run.screenMarks = layers.marks;
     run.doc = layers.doc;
     // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
@@ -389,8 +393,8 @@ export class AskController extends EventEmitter {
     };
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
-    // The same `file` decides the tool and the prompt's read_file rule, so the two never disagree.
-    const tools = toolDefs({ emotes: run.emotes, spots: 1, file: ctx.file !== null });
+    // The same `file` and intent decide the tools and the prompt's rules for them, so the two never disagree.
+    let tools = toolDefs({ emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id) });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
     this.deadline(run, RECEIVE_MS, () => {
@@ -408,6 +412,8 @@ export class AskController extends EventEmitter {
       const last = round === MAX_ROUNDS - 1;
       const step = await this.play(run, result.calls, new Set(tools.map((d) => d.name)), last);
       if (!this.alive(run)) return;
+      // One look round per ask: each costs a whole round trip.
+      if (result.calls.some((c) => c.name === 'look')) tools = tools.filter((d) => d.name !== 'look');
       // Pings alone leave nothing to read. A round that goes on anyway carries the reminder for free; a round that
       // would end the ask is followed by one more, once.
       const unanswered = !run.line && run.markdown.length === 0 && !run.text.trim();
@@ -479,15 +485,19 @@ export class AskController extends EventEmitter {
     }
   }
 
-  /** Overlays and teammate windows stay out of the grab; a count, so an older ask's capture can't let them back in. */
-  private async capture(run: Run, spots: Point[]): Promise<Capture> {
+  /**
+   * Overlays and teammate windows stay out of the grab; a count, so an older ask's capture can't let them back in.
+   * Without a framing the overview is the whole display and each close-up a fixed crop around its spot.
+   */
+  private async capture(run: Run, spots: Point[], framing?: Framing): Promise<Capture> {
     const rect = run.display?.rect;
     if (!rect) throw new ContextError('capture', 'no display under the spot');
     try {
       this.excluded += 1;
       if (this.excluded === 1) this.exclude(true);
       await this.files.makeDir(run.dir);
-      return await this.deps.context.capture({ display: rect, spots, dir: run.dir }, run.abort.signal);
+      const framed = framing ? { area: framing.area, crops: [framing.crop] } : {};
+      return await this.deps.context.capture({ display: rect, spots, dir: run.dir, ...framed }, run.abort.signal);
     } finally {
       this.excluded -= 1;
       if (this.excluded === 0) this.exclude(false);
