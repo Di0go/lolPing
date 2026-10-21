@@ -21,6 +21,28 @@ export function overviewToPhysical(shot: Shot, p: { x: number; y: number }): { x
   };
 }
 
+/** A physical screen point → overview-image pixels, rounded; it may lie outside the image. */
+export function physicalToOverview(shot: Shot, p: { x: number; y: number }): { x: number; y: number } {
+  const { display, overview } = shot;
+  return {
+    x: Math.round(((p.x - display.x) * overview.w) / display.w),
+    y: Math.round(((p.y - display.y) * overview.h) / display.h),
+  };
+}
+
+/** A physical screen rectangle → overview-image pixels, each number rounded. */
+export function physicalBoxToOverview(shot: Shot, box: Shot['display']): Shot['display'] {
+  const { display, overview } = shot;
+  const sx = overview.w / display.w;
+  const sy = overview.h / display.h;
+  return {
+    x: Math.round((box.x - display.x) * sx),
+    y: Math.round((box.y - display.y) * sy),
+    w: Math.round(box.w * sx),
+    h: Math.round(box.h * sy),
+  };
+}
+
 /** The crop around `spot` for a zoom, moved (not shrunk) to stay inside the display unless the display is smaller. */
 export function zoomRect(
   display: Shot['display'],

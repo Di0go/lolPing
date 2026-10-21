@@ -6,7 +6,7 @@ import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
-import { overviewToPhysical, receiptPoint, type Shot } from '../../shared/teammate/coords';
+import { overviewToPhysical, physicalToOverview, receiptPoint, type Shot } from '../../shared/teammate/coords';
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, splitLine } from '../../shared/teammate/line';
@@ -142,11 +142,6 @@ function failureOf(err: unknown): AskFailure {
 function route(t: TeammateSettings, deep: boolean): BuiltinProfile | null {
   const id = deep && t.deepProfile ? t.deepProfile : t.defaultProfile;
   return t.profiles.find((p) => p.id === id) ?? null;
-}
-
-function toOverview(shot: Shot, p: Point): Point {
-  const { display: d, overview: o } = shot;
-  return { x: Math.round(((p.x - d.x) * o.w) / d.w), y: Math.round(((p.y - d.y) * o.h) / d.h) };
 }
 
 /**
@@ -353,8 +348,8 @@ export class AskController extends EventEmitter {
     run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
     const ctx: AskContext = {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
-      shot, spots: [toOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
-      instructions: deps.secrets.instructions(), emotes: run.emotes,
+      shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
+      instructions: deps.secrets.instructions(), emotes: run.emotes, marks: [], system: null, file: null,
     };
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);

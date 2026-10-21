@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { overviewToPhysical, receiptPoint, zoomRect, type Shot } from '../../../src/shared/teammate/coords';
+import { overviewToPhysical, physicalBoxToOverview, physicalToOverview, receiptPoint, zoomRect, type Shot } from '../../../src/shared/teammate/coords';
 import { physicalToLocal, type DisplayMap } from '../../../src/main/coords';
 
 const shot = (display: Shot['display'], overview: Shot['overview']): Shot => ({ display, overview, zooms: [] });
@@ -27,6 +27,12 @@ describe('teammate coords', () => {
     expect(phys).toEqual({ x: 3360, y: 810 });
     const local = phys && physicalToLocal(phys.x, phys.y, maps);
     expect(local).toEqual({ displayId: 2, x: 960, y: 540 });
+  });
+
+  it('maps physical pixels and boxes onto the overview', () => {
+    const s = shot({ x: 1920, y: 0, w: 2880, h: 1620 }, { w: 1600, h: 900 });
+    expect(physicalToOverview(s, { x: 3360, y: 810 })).toEqual({ x: 800, y: 450 });
+    expect(physicalBoxToOverview(s, { x: 1920, y: 0, w: 288, h: 162 })).toEqual({ x: 0, y: 0, w: 160, h: 90 });
   });
 
   it('keeps the zoom inside the display near a corner', () => {
