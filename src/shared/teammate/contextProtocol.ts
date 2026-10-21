@@ -39,7 +39,8 @@ export interface SystemTextLayer {
 /** Lines context-helper writes to stdout, after validation. */
 export type ContextReply =
   | { type: 'captured'; id: string; overview: string; ow: number; oh: number; zooms: { path: string; rect: Rect }[] }
-  | { type: 'marks'; id: string; path: string; count: number }
+  /** `exiting`: a probe ran over its budget, so these are the marks the others found and the helper exits after. */
+  | { type: 'marks'; id: string; path: string; count: number; exiting: boolean }
   | { type: 'systemText'; id: string; layer: SystemTextLayer }
   | { type: 'fileOf'; id: string; path: string; address: string; how: FileHow }
   | { type: 'foreground'; id: string; app: string; title: string }
@@ -154,7 +155,9 @@ export function parseContextLine(line: string): ContextReply | null {
     }
     case 'marks':
       if (typeof o.path !== 'string' || o.path === '' || !isCount(o.count)) return null;
-      return { type: 'marks', id, path: o.path, count: o.count };
+      // Older helpers never send `exiting`.
+      if (o.exiting !== undefined && typeof o.exiting !== 'boolean') return null;
+      return { type: 'marks', id, path: o.path, count: o.count, exiting: o.exiting === true };
     case 'systemText': {
       const layer = parseSystemText(o);
       return layer ? { type: 'systemText', id, layer } : null;

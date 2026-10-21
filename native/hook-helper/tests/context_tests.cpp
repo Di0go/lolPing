@@ -357,6 +357,7 @@ static void test_marks_keeps_what_one_probe_found() {
     f.message = "no UI Automation";
     return false;
   };
+  handleCommand(parseCommand(captureLine()), p, last);
   const auto m = fields(handleCommand(parseCommand(line), p, last).line);
   CHECK(m.at("type") == "error" && m.at("message") == "no OCR language");  // nothing could be read at all
 }
@@ -484,13 +485,55 @@ static void test_marks_runs_both_probes_under_one_deadline() {
   CHECK(!r.exitAfter);
   CHECK(m.at("type") == "marks" && m.at("count") == "2");
   CHECK(took < std::chrono::milliseconds(budget));  // the whole command fits the one budget the client waits for
-  // A probe still running at the shared deadline makes the whole command slow.
+  // A probe still running at the shared deadline, with nothing else finished, makes the whole command slow.
   p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure&) {
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     return true;
   };
+  handleCommand(parseCommand(captureLine()), p, last, budget);
   const Reply slow = handleCommand(parseCommand(marksLine("m4", R"("controls":true)")), p, last, 30);
   CHECK(slow.exitAfter && fields(slow.line).at("code") == "slow");
+}
+
+static void test_marks_keeps_finished_ocr_when_the_controls_walk_is_slow() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>& out, Failure&) {
+    out.push_back(RawMark{"text", Rect{0, 400, 100, 40}, "Line"});
+    return true;
+  };
+  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure&) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    return true;
+  };
+  LastGrab last;
+  handleCommand(parseCommand(captureLine()), p, last, 30);
+  const Reply r = handleCommand(parseCommand(marksLine("m5", R"("ocr":true,"controls":true)")), p, last, 30);
+  const auto m = fields(r.line);
+  CHECK(m.at("type") == "marks" && m.at("id") == "m5" && m.at("count") == "1");
+  CHECK(m.count("exiting") == 1 && m.at("exiting") == "true");
+  CHECK(r.exitAfter);  // the walk is still running, so the helper still ends after this reply
+  CHECK(readFile(testDir() / "marks-m5.tsv") == "text\t-1920\t400\t100\t40\tLine\n");
+  // A reply where every probe finished says nothing about exiting.
+  handleCommand(parseCommand(captureLine()), p, last, 30);
+  const Reply ok = handleCommand(parseCommand(marksLine("m6", R"("ocr":true)")), p, last, 30);
+  CHECK(!ok.exitAfter && fields(ok.line).count("exiting") == 0);
+}
+
+static void test_marks_releases_the_grab_it_used() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>& out, Failure&) {
+    out.push_back(RawMark{"text", Rect{0, 400, 100, 40}, "Line"});
+    return true;
+  };
+  LastGrab last;
+  handleCommand(parseCommand(captureLine()), p, last);
+  CHECK(last.image != nullptr);
+  CHECK(fields(handleCommand(parseCommand(marksLine("m7", R"("ocr":true)")), p, last).line).at("type") == "marks");
+  CHECK(last.image == nullptr);  // the full-resolution grab is not kept around after its one use
+  const auto again = fields(handleCommand(parseCommand(marksLine("m8", R"("ocr":true)")), p, last).line);
+  CHECK(again.at("type") == "error" && again.at("code") == "bad" && again.at("message") == "that capture is gone");
 }
 
 static void test_file_of_reply() {
@@ -604,6 +647,8 @@ int main() {
   test_secure_focus_sends_no_value();
   test_slow_probe_replies_slow_and_exits();
   test_marks_runs_both_probes_under_one_deadline();
+  test_marks_keeps_finished_ocr_when_the_controls_walk_is_slow();
+  test_marks_releases_the_grab_it_used();
   test_file_of_reply();
   test_cut_text_keeps_whole_characters();
   test_file_name_from_a_window_title();

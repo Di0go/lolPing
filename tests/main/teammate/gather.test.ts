@@ -22,6 +22,8 @@ const pdf = (name: string, sections: Doc['sections'] = pages()): Doc => ({ name,
 interface FakeOptions {
   system?: SystemTextLayer | Error;
   marks?: Error;
+  /** The helper sent the marks it had and is exiting: a probe ran over its budget. */
+  marksExiting?: boolean;
   marksFile?: string;
   file?: { path: string; address: string; how: FileHow } | Error;
   doc?: Doc | Error;
@@ -47,7 +49,7 @@ function fakes(opts: FakeOptions = {}) {
         calls.push(`marks:${req.of}`);
         if (opts.marks) throw failed(opts.marks);
         if (!grab) throw new ContextError('bad', 'that capture is gone');
-        return { path: `${req.dir}/marks.tsv`, count: 1 };
+        return { path: `${req.dir}/marks.tsv`, count: 1, exiting: opts.marksExiting ?? false };
       },
       fileOf: async () => {
         calls.push('fileOf');
@@ -123,6 +125,13 @@ describe('gather', () => {
     const slowMarks = fakes({ marks: new ContextError('slow', 'OCR took too long') });
     const rest = await gather(slowMarks.deps, request(), signal());
     expect(rest).toMatchObject({ marks: [], system: layer({ spotTexts: [VISIBLE] }), skipped: true });
+
+    // The OCR finished but the controls walk didn't: the marks found are kept, and the footer says some were skipped.
+    const partial = fakes({ marksExiting: true });
+    const kept = await gather(partial.deps, request(), signal());
+    expect(kept.marks).toHaveLength(1);
+    expect(kept.skipped).toBe(true);
+    expect(kept.used.map((u) => u.kind)).toContain('marks');
 
     const timedOut = fakes({ marks: new ContextError('timeout', 'no reply') });
     await expect(gather(timedOut.deps, request(), signal())).resolves.toMatchObject({ marks: [], skipped: true });

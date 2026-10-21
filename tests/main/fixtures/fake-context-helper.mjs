@@ -1,12 +1,13 @@
 // Stand-in for context-helper in ContextClient tests. Mode comes from argv[2]:
 // ok answers everything, silent answers nothing, denied refuses captures for missing permission, slow answers
-// systemText with `slow` and then, like the real helper, reads nothing more and exits.
+// systemText with `slow`, partial answers marks with `exiting`; after either, like the real helper, it reads nothing
+// more and exits.
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const mode = process.argv[2];
 const reply = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
-/** The helper keeps only the latest capture's grab for `marks`. */
+/** The helper keeps only the latest capture's grab, for one `marks`. */
 let lastCapture = null;
 let exiting = false;
 
@@ -28,14 +29,24 @@ function marks(cmd) {
   writeFileSync(join(cmd.dir, 'marks-command.json'), JSON.stringify(cmd));
   const path = join(cmd.dir, `marks-${cmd.id}.tsv`);
   writeFileSync(path, 'button\t900\t700\t200\t60\tSave\n');
+  lastCapture = null;
+  if (mode === 'partial') {
+    reply({ type: 'marks', id: cmd.id, path, count: 1, exiting: true });
+    exitSoon();
+    return;
+  }
   reply({ type: 'marks', id: cmd.id, path, count: 1 });
+}
+
+function exitSoon() {
+  exiting = true;
+  setTimeout(() => process.exit(0), 200);
 }
 
 function systemText(cmd) {
   if (mode === 'slow') {
     reply({ type: 'error', id: cmd.id, code: 'slow', message: 'the system took too long to answer' });
-    exiting = true;
-    setTimeout(() => process.exit(0), 200);
+    exitSoon();
     return;
   }
   reply({

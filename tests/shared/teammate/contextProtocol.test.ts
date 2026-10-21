@@ -62,7 +62,12 @@ describe('contextProtocol', () => {
 
   it('parses marks, systemText and fileOf replies', () => {
     expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm1', path: 'C:\\t\\marks-m1.tsv', count: 12 })))
-      .toEqual({ type: 'marks', id: 'm1', path: 'C:\\t\\marks-m1.tsv', count: 12 });
+      .toEqual({ type: 'marks', id: 'm1', path: 'C:\\t\\marks-m1.tsv', count: 12, exiting: false });
+    // A probe ran over its budget: the marks the others found, and the helper exits after them.
+    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm2', path: 'm.tsv', count: 3, exiting: true })))
+      .toEqual({ type: 'marks', id: 'm2', path: 'm.tsv', count: 3, exiting: true });
+    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm2', path: 'm.tsv', count: 3, exiting: 'yes' })))
+      .toBeNull();
     expect(parseContextLine(JSON.stringify({
       type: 'systemText', id: 's1', selection: 'picked', spotTexts: 'one', focusKind: 'field', focusLabel: 'Name',
       focusValue: 'Ada', focusSecure: false, address: 'https://example.com/',

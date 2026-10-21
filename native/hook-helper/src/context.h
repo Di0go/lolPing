@@ -108,7 +108,7 @@ struct ContextPlatform {
 /** This OS's capture, resize, JPEG and foreground calls (context_capture_win.cpp, context_capture_mac.mm). */
 ContextPlatform nativePlatform();
 
-/** The latest successful capture's full grab, kept for `marks` until the next capture. */
+/** The latest successful capture's full grab, kept for one `marks` command and released by it. */
 struct LastGrab {
   std::string id;
   Rect display;
@@ -171,8 +171,12 @@ bool browserAddress(const std::string& value, std::string& path, std::string& ad
 /** Runs `probe` on its own thread; false when it is still running at the budget, leaving it running detached. */
 bool runWithBudget(const std::function<void()>& probe, int budgetMs);
 
-/** Runs every probe at once on its own thread against one deadline; false when any is still running at it. */
-bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budgetMs);
+/**
+ * Runs every probe at once on its own thread against one deadline; false when any is still running at it. With
+ * `finished`, it gets one flag per probe saying whether that probe returned in time (its output is then safe to read).
+ */
+bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budgetMs,
+                      std::vector<bool>* finished = nullptr);
 
 /**
  * Reads commands until shutdown, end of input or a reply that exits, writing each reply with `write`.

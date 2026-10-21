@@ -104,14 +104,13 @@ describe('ContextClient', () => {
     const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
     const req = { of: shot.captureId, spots: [{ x: 100.4, y: 200 }], radius: 600, ocr: true, controls: true, dir };
     const found = await c.marks(req, signal());
-    expect(found.count).toBe(1);
+    expect(found).toMatchObject({ count: 1, exiting: false });
     expect(readFileSync(found.path, 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
     const sent: unknown = JSON.parse(readFileSync(join(dir, 'marks-command.json'), 'utf8'));
     expect(sent).toMatchObject({
       type: 'marks', of: shot.captureId, spots: '100,200', radius: 600, ocr: true, controls: true,
     });
-    // The helper keeps only the latest grab: an older capture's id is refused.
-    await c.capture({ display, spots: [], dir }, signal());
+    // The helper releases a grab once marks have read it: a second marks for that capture is refused.
     await expect(c.marks(req, signal())).rejects.toMatchObject({ code: 'bad' });
   });
 
@@ -134,6 +133,19 @@ describe('ContextClient', () => {
     // The grab went with the old helper, so marks for its capture are refused.
     const req = { of: shot.captureId, spots: [{ x: 100, y: 200 }], radius: 600, ocr: true, controls: true, dir };
     await expect(c.marks(req, signal())).rejects.toMatchObject({ code: 'bad' });
+  });
+
+  it('keeps the marks a helper sent on its way out, and starts a new helper after them', async () => {
+    const { c, starts } = client(['partial', 'ok']);
+    const dir = tempDir();
+    const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
+    const req = { of: shot.captureId, spots: [{ x: 100, y: 200 }], radius: 600, ocr: true, controls: true, dir };
+    const found = await c.marks(req, signal());
+    expect(found).toMatchObject({ count: 1, exiting: true });
+    expect(readFileSync(found.path, 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
+    // The old helper reads nothing more: this request must go to a fresh one.
+    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad' });
+    expect(starts()).toBe(2);
   });
 
   it('rejects instead of throwing when the helper cannot start', async () => {

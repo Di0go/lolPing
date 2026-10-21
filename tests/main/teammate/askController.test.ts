@@ -150,7 +150,8 @@ function harness(opts: HarnessOptions = {}) {
       },
       marks: async (req) => {
         if (req.of !== grab) throw new ContextError('bad', 'that capture is gone');
-        return { path: `${req.dir}/marks.tsv`, count: 1 };
+        grab = null; // the helper releases the grab once marks have read it
+        return { path: `${req.dir}/marks.tsv`, count: 1, exiting: false };
       },
       fileOf: async () => (screen.doc
         ? { path: `C:/docs/${screen.doc.name}`, address: '', how: 'title' }

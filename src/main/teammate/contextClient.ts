@@ -64,14 +64,17 @@ export class ContextClient {
     return { captureId: r.id, overviewPath: r.overview, overview: { w: r.ow, h: r.oh }, zooms: r.zooms };
   }
 
-  /** Text and controls near the spots, read from capture `of`'s grab into a marks file in `dir`. */
+  /**
+   * Text and controls near the spots, read from capture `of`'s grab into a marks file in `dir`. `exiting`: a probe
+   * was too slow, so some marks may be missing.
+   */
   async marks(
     req: { of: string; spots: Point[]; radius: number; ocr: boolean; controls: boolean; dir: string },
     signal: AbortSignal,
-  ): Promise<{ path: string; count: number }> {
+  ): Promise<{ path: string; count: number; exiting: boolean }> {
     const r = await this.request((id) => marksCommand(id, req), 'marks', signal);
     if (r.type !== 'marks') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { path: r.path, count: r.count };
+    return { path: r.path, count: r.count, exiting: r.exiting };
   }
 
   async systemText(spots: Point[], signal: AbortSignal): Promise<SystemTextLayer> {
@@ -192,7 +195,7 @@ export class ContextClient {
       else if (reply.type !== p.expect) p.reject(new ContextError('bad', `expected ${p.expect}, got ${reply.type}`));
       else p.resolve(reply);
     }
-    if (reply.type === 'error' && reply.code === 'slow') {
+    if ((reply.type === 'error' && reply.code === 'slow') || (reply.type === 'marks' && reply.exiting)) {
       // The helper exits after this reply and reads nothing more: the next request must start a fresh one.
       this.child = null;
       this.failAll('exited', 'the context helper stopped after a slow probe');

@@ -363,9 +363,12 @@ bool writeTextFile(const std::string& path, const std::string& text) {
   return !out.fail();
 }
 
-Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const LastGrab& last, int budgetMs) {
+Reply handleMarks(const Command& cmd, const ContextPlatform& platform, LastGrab& kept, int budgetMs) {
   const MarksRequest& r = cmd.marks;
-  if (!last.image || last.id != r.of) return Reply{formatError(cmd.id, "bad", "that capture is gone")};
+  if (!kept.image || kept.id != r.of) return Reply{formatError(cmd.id, "bad", "that capture is gone")};
+  // One marks command per capture: the full-resolution grab is released now, not held until the next capture.
+  const LastGrab last = std::move(kept);
+  kept = LastGrab{};
   std::vector<RawMark> marks;
   bool tried = false, found = false;
   Failure firstFail;
@@ -402,17 +405,21 @@ Reply handleMarks(const Command& cmd, const ContextPlatform& platform, const Las
       return controls(spots, radius, out, f);
     }));
   }
-  if (!probes.empty() && !runAllWithBudget(probes, budgetMs)) return slowReply(cmd.id);
-  if (ocrJob) keep(*ocrJob, true);
-  if (controlsJob) keep(*controlsJob, false);
+  std::vector<bool> finished;
+  const bool allDone = probes.empty() || runAllWithBudget(probes, budgetMs, &finished);
+  // A probe still running is left out: what the others found in time is still sent, then the helper exits.
+  if (ocrJob && (allDone || finished[0])) keep(*ocrJob, true);
+  if (controlsJob && (allDone || finished[ocrJob ? 1 : 0])) keep(*controlsJob, false);
+  if (!allDone && !found) return slowReply(cmd.id);
   // One probe coming up empty-handed leaves its marks out; only nothing at all is an error.
   if (tried && !found) return Reply{formatError(cmd.id, firstFail.code, firstFail.message)};
   const std::string path = joinPath(r.dir, "marks-" + cmd.id + ".tsv");
   if (!writeTextFile(path, marksFileText(marks))) {
-    return Reply{formatError(cmd.id, "capture", "could not write the marks file")};
+    return allDone ? Reply{formatError(cmd.id, "capture", "could not write the marks file")} : slowReply(cmd.id);
   }
   return Reply{"{\"type\":\"marks\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"path\":\"" + jsonEscape(path) +
-               "\",\"count\":" + std::to_string(marks.size()) + "}"};
+                   "\",\"count\":" + std::to_string(marks.size()) + (allDone ? "" : ",\"exiting\":true") + "}",
+               !allDone};
 }
 
 Reply handleSystemText(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
@@ -812,18 +819,20 @@ bool runWithBudget(const std::function<void()>& probe, int budgetMs) {
   return runAllWithBudget({probe}, budgetMs);
 }
 
-bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budgetMs) {
+bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budgetMs, std::vector<bool>* finished) {
   struct State {
     std::mutex m;
     std::condition_variable cv;
     size_t running = 0;
+    std::vector<bool> done;
   };
   const auto state = std::make_shared<State>();
   state->running = probes.size();
+  state->done.assign(probes.size(), false);
   std::vector<std::thread> workers;
   try {
-    for (const std::function<void()>& probe : probes) {
-      workers.emplace_back([state, probe] {
+    for (size_t i = 0; i < probes.size(); ++i) {
+      workers.emplace_back([state, probe = probes[i], i] {
         try {
           probe();
         } catch (...) {  // a throwing probe is a failed one, not a dead helper
@@ -831,6 +840,7 @@ bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budg
         {
           const std::lock_guard<std::mutex> lock(state->m);
           --state->running;
+          state->done[i] = true;
         }
         state->cv.notify_all();
       });
@@ -843,6 +853,8 @@ bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budg
   {
     std::unique_lock<std::mutex> lock(state->m);
     done = state->cv.wait_for(lock, std::chrono::milliseconds(budgetMs), [&state] { return state->running == 0; });
+    // Read under the lock: a probe marked done wrote its output before it took the lock.
+    if (finished) *finished = state->done;
   }
   // A slow probe cannot be cancelled; it keeps only its own copies and dies with the process.
   for (std::thread& w : workers) {

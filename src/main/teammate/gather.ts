@@ -144,6 +144,8 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
       const found = await deps.context.marks({
         of: captureId, spots: req.spots, radius: MARK_RADIUS, ocr: true, controls: true, dir: req.dir,
       }, signal);
+      // A probe was too slow: the marks the others found are used, and the footer says some context was skipped.
+      if (found.exiting) out.skipped = true;
       return selectMarks(parseMarksFile(await deps.readFile(found.path)), req.spots, {
         radius: MARK_RADIUS, max: MAX_MARKS,
       });

@@ -15,9 +15,11 @@
 #include <winternl.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -47,6 +49,9 @@ using winrt::Windows::Graphics::Imaging::SoftwareBitmap;
 using winrt::Windows::Media::Ocr::OcrEngine;
 
 constexpr size_t kMaxControls = 400;
+// The controls walk stops here with what it has, short of the 1.5 s probe budget, so a big page still gives marks.
+constexpr std::chrono::milliseconds kWalkBudget{1100};
+using Clock = std::chrono::steady_clock;
 
 std::string failed(const char* what, HRESULT code) {
   char buf[96];
@@ -68,6 +73,28 @@ OcrEngine engineForUser() {
   }
   return OcrEngine::TryCreateFromUserProfileLanguages();
 }
+
+// lolPing's main process started this helper and owns lolPing's windows.
+DWORD lolPingPid() {
+  static const DWORD pid = [] {
+    DWORD parent = 0;
+    const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return parent;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    for (BOOL more = Process32FirstW(snap, &entry); more; more = Process32NextW(snap, &entry)) {
+      if (entry.th32ProcessID == GetCurrentProcessId()) {
+        parent = entry.th32ParentProcessID;
+        break;
+      }
+    }
+    CloseHandle(snap);
+    return parent;
+  }();
+  return pid;
+}
+
+bool isLolPing(DWORD pid) { return pid != 0 && pid == lolPingPid(); }
 
 // Distance from `p` to the nearest point of `r`, squared; 0 inside. Same measure as selectMarks in marks.ts.
 double distanceSq(const Point& p, const RECT& r) {
@@ -215,6 +242,7 @@ bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const
 }
 
 bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail) {
+  const Clock::time_point deadline = Clock::now() + kWalkBudget;
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     const auto uia = winrt::create_instance<IUIAutomation>(CLSID_CUIAutomation);
@@ -224,45 +252,62 @@ bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<Raw
     winrt::check_hresult(uia->CreateCacheRequest(hwndReq.put()));
     winrt::check_hresult(hwndReq->AddProperty(UIA_NativeWindowHandlePropertyId));
     winrt::check_hresult(uia->CreateCacheRequest(controlReq.put()));
-    // Only cached values are read, so no live reference per element: far fewer cross-process calls on big trees.
-    winrt::check_hresult(controlReq->put_AutomationElementMode(AutomationElementMode_None));
     for (const PROPERTYID id : {UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_BoundingRectanglePropertyId,
-                                UIA_IsOffscreenPropertyId}) {
+                                UIA_IsControlElementPropertyId}) {
       winrt::check_hresult(controlReq->AddProperty(id));
     }
-    winrt::com_ptr<IUIAutomationCondition> isControl, notOffscreen, condition;
-    winrt::check_hresult(uia->get_ControlViewCondition(isControl.put()));
+    winrt::com_ptr<IUIAutomationCondition> notOffscreen;
     VARIANT no;
     VariantInit(&no);
     no.vt = VT_BOOL;
     no.boolVal = VARIANT_FALSE;
     winrt::check_hresult(uia->CreatePropertyCondition(UIA_IsOffscreenPropertyId, no, notOffscreen.put()));
-    winrt::check_hresult(uia->CreateAndCondition(isControl.get(), notOffscreen.get(), condition.put()));
 
     const double r2 = static_cast<double>(radius) * radius;
+    const auto nearSpot = [&](const RECT& box) {
+      return std::any_of(spots.begin(), spots.end(), [&](const Point& p) { return distanceSq(p, box) <= r2; });
+    };
     std::vector<HWND> seen;
     for (const Point& spot : spots) {
-      if (out.size() >= kMaxControls) break;
+      if (out.size() >= kMaxControls || Clock::now() >= deadline) break;
       const HWND top = topWindowAt(uia.get(), walker.get(), hwndReq.get(), spot);
       if (!top || std::find(seen.begin(), seen.end(), top) != seen.end()) continue;
       seen.push_back(top);
+      DWORD pid = 0;
+      GetWindowThreadProcessId(top, &pid);
+      if (isLolPing(pid)) continue;  // lolPing's own overlay is never a mark
       winrt::com_ptr<IUIAutomationElement> window;
-      winrt::com_ptr<IUIAutomationElementArray> found;
       if (FAILED(uia->ElementFromHandle(top, window.put())) || !window) continue;
-      if (FAILED(window->FindAllBuildCache(TreeScope_Descendants, condition.get(), controlReq.get(), found.put())) ||
-          !found) {
-        continue;
-      }
-      int count = 0;
-      found->get_Length(&count);
-      for (int i = 0; i < count && out.size() < kMaxControls; ++i) {
-        winrt::com_ptr<IUIAutomationElement> el;
-        if (FAILED(found->GetElement(i, el.put())) || !el) continue;
-        RawMark mark;
-        RECT box{};
-        if (!readControl(el.get(), mark, box)) continue;
-        if (std::any_of(spots.begin(), spots.end(), [&](const Point& p) { return distanceSq(p, box) <= r2; })) {
-          out.push_back(std::move(mark));
+      // Breadth first, one call per element for its on-screen children, so the walk can stop at the deadline with
+      // what it found. The raw view, as a control can sit under a container that is not one. A branch out of every
+      // spot's radius is skipped: a child lies inside its parent.
+      std::deque<winrt::com_ptr<IUIAutomationElement>> queue{window};
+      while (!queue.empty() && out.size() < kMaxControls && Clock::now() < deadline) {
+        const winrt::com_ptr<IUIAutomationElement> parent = queue.front();
+        queue.pop_front();
+        winrt::com_ptr<IUIAutomationElementArray> children;
+        if (FAILED(parent->FindAllBuildCache(TreeScope_Children, notOffscreen.get(), controlReq.get(),
+                                             children.put())) ||
+            !children) {
+          continue;
+        }
+        int count = 0;
+        children->get_Length(&count);
+        for (int i = 0; i < count && out.size() < kMaxControls; ++i) {
+          winrt::com_ptr<IUIAutomationElement> el;
+          RECT box{};
+          if (FAILED(children->GetElement(i, el.put())) || !el || FAILED(el->get_CachedBoundingRectangle(&box))) {
+            continue;
+          }
+          const bool sized = box.right > box.left && box.bottom > box.top;
+          // A zero-size wrapper can still hold sized children, so only a sized branch far away is skipped.
+          if (sized && !nearSpot(box)) continue;
+          queue.push_back(el);
+          BOOL control = FALSE;
+          RawMark mark;
+          if (SUCCEEDED(el->get_CachedIsControlElement(&control)) && control && readControl(el.get(), mark, box)) {
+            out.push_back(std::move(mark));
+          }
         }
       }
     }
@@ -297,28 +342,6 @@ struct Variant {
 };
 
 std::wstring wide(const std::string& s) { return std::wstring(winrt::to_hstring(s)); }
-
-// lolPing's main process started this helper and owns lolPing's windows.
-DWORD lolPingPid() {
-  static const DWORD pid = [] {
-    DWORD parent = 0;
-    const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) return parent;
-    PROCESSENTRY32W entry{};
-    entry.dwSize = sizeof(entry);
-    for (BOOL more = Process32FirstW(snap, &entry); more; more = Process32NextW(snap, &entry)) {
-      if (entry.th32ProcessID == GetCurrentProcessId()) {
-        parent = entry.th32ParentProcessID;
-        break;
-      }
-    }
-    CloseHandle(snap);
-    return parent;
-  }();
-  return pid;
-}
-
-bool isLolPing(DWORD pid) { return pid != 0 && pid == lolPingPid(); }
 
 struct WindowProcess {
   DWORD pid = 0;
