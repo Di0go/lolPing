@@ -848,9 +848,12 @@ bool fileBehindWindow(std::string& path, std::string& address, std::string& how,
       how = "address";
       return true;
     }
-    if (const OfficeApp* office = officeApp(proc.exe)) {
-      if (officeDocument(*office, file)) how = "office";
+    const OfficeApp* office = officeApp(proc.exe);
+    if (office && officeDocument(*office, file)) {
+      how = "office";
     } else {
+      // Office joins the running object table only once its window first loses focus, so a document just opened
+      // from Explorer is found by its title instead.
       wchar_t title[512];
       const int n = GetWindowTextW(front, title, static_cast<int>(std::size(title)));
       if (n > 0 && fromTitle(proc.pid, std::wstring(title, static_cast<size_t>(n)), file)) how = "title";
