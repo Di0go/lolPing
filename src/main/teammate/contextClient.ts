@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import type { Point } from '../../shared/ipc';
 import type { Shot } from '../../shared/teammate/coords';
 import {
-  captureCommand, parseContextLine, serializeContextCommand, type ContextCommand, type ContextErrorCode, type ContextReply,
+  captureCommand, fileOfCommand, marksCommand, parseContextLine, serializeContextCommand, systemTextCommand,
+  type ContextCommand, type ContextErrorCode, type ContextReply, type FileHow, type SystemTextLayer,
 } from '../../shared/teammate/contextProtocol';
 
 /** `timeout`: no reply in time (the helper was restarted); `exited`: it died or never started; `stopped`: stop() ran. */
@@ -26,6 +28,8 @@ export interface ContextClientOptions {
 }
 
 export interface Capture {
+  /** The helper keeps this capture's grab under this id, for `marks`. */
+  captureId: string;
   overviewPath: string;
   overview: Shot['overview'];
   zooms: { path: string; rect: Shot['zooms'][number] }[];
@@ -57,7 +61,29 @@ export class ContextClient {
   ): Promise<Capture> {
     const r = await this.request((id) => captureCommand(id, req), 'captured', signal);
     if (r.type !== 'captured') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { overviewPath: r.overview, overview: { w: r.ow, h: r.oh }, zooms: r.zooms };
+    return { captureId: r.id, overviewPath: r.overview, overview: { w: r.ow, h: r.oh }, zooms: r.zooms };
+  }
+
+  /** Text and controls near the spots, read from capture `of`'s grab into a marks file in `dir`. */
+  async marks(
+    req: { of: string; spots: Point[]; radius: number; ocr: boolean; controls: boolean; dir: string },
+    signal: AbortSignal,
+  ): Promise<{ path: string; count: number }> {
+    const r = await this.request((id) => marksCommand(id, req), 'marks', signal);
+    if (r.type !== 'marks') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return { path: r.path, count: r.count };
+  }
+
+  async systemText(spots: Point[], signal: AbortSignal): Promise<SystemTextLayer> {
+    const r = await this.request((id) => systemTextCommand(id, spots), 'systemText', signal);
+    if (r.type !== 'systemText') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return r.layer;
+  }
+
+  async fileOf(signal: AbortSignal): Promise<{ path: string; address: string; how: FileHow }> {
+    const r = await this.request((id) => fileOfCommand(id), 'fileOf', signal);
+    if (r.type !== 'fileOf') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return { path: r.path, address: r.address, how: r.how };
   }
 
   async foreground(signal: AbortSignal): Promise<{ app: string; title: string }> {
@@ -160,11 +186,18 @@ export class ContextClient {
     if (child !== this.child) return;
     const reply = parseContextLine(line);
     if (!reply) return;
-    const p = this.pending.get(reply.id);
-    if (!p) return; // aborted or timed out already
-    if (reply.type === 'error') p.reject(new ContextError(reply.code, reply.message));
-    else if (reply.type !== p.expect) p.reject(new ContextError('bad', `expected ${p.expect}, got ${reply.type}`));
-    else p.resolve(reply);
+    const p = this.pending.get(reply.id); // none when aborted or timed out already
+    if (p) {
+      if (reply.type === 'error') p.reject(new ContextError(reply.code, reply.message));
+      else if (reply.type !== p.expect) p.reject(new ContextError('bad', `expected ${p.expect}, got ${reply.type}`));
+      else p.resolve(reply);
+    }
+    if (reply.type === 'error' && reply.code === 'slow') {
+      // The helper exits after this reply and reads nothing more: the next request must start a fresh one.
+      this.child = null;
+      this.failAll('exited', 'the context helper stopped after a slow probe');
+      child.kill();
+    }
   }
 
   private failAll(code: ContextFailure, message: string): void {

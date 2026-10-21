@@ -98,6 +98,39 @@ describe('ContextClient', () => {
     await expect(c.capture({ display, spots: [], dir: tempDir() }, signal())).rejects.toMatchObject({ code: 'permission' });
   });
 
+  it('sends marks for the capture it names', async () => {
+    const { c } = client(['ok']);
+    const dir = tempDir();
+    const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
+    const req = { of: shot.captureId, spots: [{ x: 100.4, y: 200 }], radius: 600, ocr: true, controls: true, dir };
+    const found = await c.marks(req, signal());
+    expect(found.count).toBe(1);
+    expect(readFileSync(found.path, 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
+    const sent: unknown = JSON.parse(readFileSync(join(dir, 'marks-command.json'), 'utf8'));
+    expect(sent).toMatchObject({
+      type: 'marks', of: shot.captureId, spots: '100,200', radius: 600, ocr: true, controls: true,
+    });
+    // The helper keeps only the latest grab: an older capture's id is refused.
+    await c.capture({ display, spots: [], dir }, signal());
+    await expect(c.marks(req, signal())).rejects.toMatchObject({ code: 'bad' });
+  });
+
+  it('reads the system text and the file behind the window', async () => {
+    const { c } = client(['ok']);
+    await expect(c.systemText([{ x: 1, y: 2 }], signal())).resolves.toEqual({
+      selection: 'chosen', spotTexts: ['under the spot'], focus: null, address: '',
+    });
+    await expect(c.fileOf(signal())).resolves.toEqual({ path: 'C:/docs/a.txt', address: '', how: 'title' });
+  });
+
+  it('starts a new helper after a slow reply', async () => {
+    const { c, starts } = client(['slow', 'ok']);
+    await expect(c.systemText([{ x: 1, y: 2 }], signal())).rejects.toMatchObject({ code: 'slow' });
+    // The old helper is on its way out and reads nothing more: this request must go to a fresh one.
+    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad' });
+    expect(starts()).toBe(2);
+  });
+
   it('rejects instead of throwing when the helper cannot start', async () => {
     const c = new ContextClient({ command: join(tmpdir(), 'definitely-missing-context-helper.exe') });
     clients.push(c);

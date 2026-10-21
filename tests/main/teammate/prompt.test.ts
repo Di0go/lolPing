@@ -264,11 +264,18 @@ describe('teammate prompt context', () => {
   });
 
   it('asks for pixel points on the exact element', () => {
-    const s = systemPrompt(ctx());
+    const marks = [{ kind: 'button' as const, box: { x: 0, y: 0, w: 10, h: 10 }, text: 'OK' }];
+    const s = systemPrompt(ctx({ marks }));
     expect(s).toContain('Point with `x` and `y` in overview pixels, on the exact element you mean: the centre of a '
       + "button, the start of a word. Use the boxes in the marks list to aim. `spot` N points at one of the user's "
       + 'spots.');
     expect(s).not.toContain('Coordinates are pixels');
+  });
+
+  it('mentions the marks list only when there are marks', () => {
+    const s = systemPrompt(ctx());
+    expect(s).toContain("the centre of a button, the start of a word. `spot` N points at one of the user's spots.");
+    expect(s).not.toContain('marks list');
   });
 
   it('offers read_file only with a file', () => {

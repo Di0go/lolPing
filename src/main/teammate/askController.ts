@@ -10,7 +10,7 @@ import { overviewToPhysical, physicalToOverview, receiptPoint, type Shot } from 
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, splitLine } from '../../shared/teammate/line';
-import { resolveTarget } from '../../shared/teammate/marks';
+import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
 import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
@@ -18,6 +18,9 @@ import { applyLimits, parseToolCall, toolDefs, type Target, type ToolCall } from
 import type { BubbleState, CardState, MateAction, MateView } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
+import {
+  fileBudget, fileRange, gather, readFileTool, type GatherDeps, type Gathered, type UsedItem,
+} from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
 import { firstTurn, systemPrompt, type AskContext } from './prompt';
@@ -33,7 +36,9 @@ export interface AskDeps {
   settings: () => Settings;
   lang: () => Lang;
   secrets: Pick<SecretStore, 'key' | 'instructions' | 'available'>;
-  context: Pick<ContextClient, 'capture' | 'foreground'>;
+  context: Pick<ContextClient, 'capture' | 'foreground' | 'marks' | 'systemText' | 'fileOf'>;
+  /** What gather reads the marks file and the file behind the window with. */
+  readers: Omit<GatherDeps, 'context'>;
   adapter: (p: BuiltinProfile, key: string) => ProviderAdapter;
   overlay: Pick<OverlayManager,
     'spawnMate' | 'spawnMateEmote' | 'mateSaid' | 'clearMate' | 'fadeMate' | 'setMateTicket' | 'setCaptureExcluded'
@@ -119,6 +124,14 @@ interface Run {
   marks: Point[];
   /** This ask's capture folder, removed when the ask ends however it ends. */
   dir: string;
+  /** Controls and text lines near the spot, which the teammate's pings snap onto. */
+  screenMarks: Mark[];
+  file: Gathered['file'];
+  used: UsedItem[];
+  skipped: boolean;
+  /** File characters `read_file` has given this ask, and the most it may give. */
+  fileRead: number;
+  fileReadLimit: number;
 }
 
 /** One ask and its answer as the card shows them. */
@@ -128,6 +141,18 @@ const entryPair = (
   { kind: 'ask', label, markdown: words ?? '' },
   { kind: 'answer', label: tagName, line, markdown },
 ];
+
+/** One thing the answer used, as the card footer names it. */
+function usedLabel(u: UsedItem, lang: Lang): string {
+  const t = strings(lang).teammate.ask;
+  switch (u.kind) {
+    case 'selection': return t.usedSelection;
+    case 'text': return t.usedText;
+    case 'marks': return t.usedMarks;
+    case 'address': return t.usedAddress;
+    case 'file': return t.usedFile(u.name, fileRange(u.from, u.to));
+  }
+}
 
 const near = (p: Point, list: readonly Point[]): boolean =>
   list.some((q) => Math.hypot(p.x - q.x, p.y - q.y) <= NEAR_PX);
@@ -215,6 +240,7 @@ export class AskController extends EventEmitter {
       profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
       tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
+      screenMarks: [], file: null, used: [], skipped: false, fileRead: 0, fileReadLimit: 0,
     };
     this.run = run;
     this.shown = run;
@@ -346,14 +372,26 @@ export class AskController extends EventEmitter {
     const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
     if (!this.alive(run)) return;
     run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
+    const allin = run.intent.def.id === 'allin';
+    const layers = await gather({ context: deps.context, ...deps.readers }, {
+      settings: t.context, captureId: cap.captureId, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
+    }, signal);
+    if (!this.alive(run)) return;
+    run.screenMarks = layers.marks;
+    run.file = layers.file;
+    run.used = layers.used;
+    run.skipped = layers.skipped;
+    run.fileReadLimit = 2 * fileBudget(allin);
     const ctx: AskContext = {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
       shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
-      instructions: deps.secrets.instructions(), emotes: run.emotes, marks: [], system: null, file: null,
+      instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
+      file: layers.file,
     };
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
-    const tools = toolDefs({ emotes: run.emotes, spots: 1, file: false });
+    // The same `file` decides the tool and the prompt's read_file rule, so the two never disagree.
+    const tools = toolDefs({ emotes: run.emotes, spots: 1, file: ctx.file !== null });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
     this.startDeadlines(run);
@@ -512,6 +550,18 @@ export class AskController extends EventEmitter {
     for (const p of pings) this.placePing(run, p);
     for (const { call } of valid) if (call.tool === 'emote') this.placeEmote(run, call);
     for (const { raw, call } of valid) {
+      if (call.tool !== 'read_file') continue;
+      // Like look: no round follows the last one to read what it gives.
+      if (lastRound || !run.file) {
+        results.set(raw, NOT_AVAILABLE);
+        continue;
+      }
+      again = true;
+      const read = readFileTool(run.file.doc, call, run.fileRead, run.fileReadLimit);
+      run.fileRead = read.served;
+      results.set(raw, [{ text: read.text }]);
+    }
+    for (const { raw, call } of valid) {
       if (call.tool !== 'look') continue;
       // No round follows the last one to read a look, so don't capture for it.
       if (lastRound) {
@@ -545,8 +595,8 @@ export class AskController extends EventEmitter {
   }
 
   private target(run: Run, at: Target): Point | null {
-    // The model numbers the user's spots from 1. Real marks to snap onto come with the context helper's marks.
-    return run.shot ? resolveTarget(at, { spots: [run.spot.phys], marks: [], shot: run.shot }) : null;
+    // The model numbers the user's spots from 1; a pixel point snaps onto the control or text line under it.
+    return run.shot ? resolveTarget(at, { spots: [run.spot.phys], marks: run.screenMarks, shot: run.shot }) : null;
   }
 
   private placePing(run: Run, c: Extract<ToolCall, { tool: 'ping' }>): void {
@@ -715,7 +765,11 @@ export class AskController extends EventEmitter {
       title: run.thread?.title ?? (run.line || run.intent.label).slice(0, TITLE_MAX),
       footer: {
         profile: run.profile?.name ?? '', model: run.profile?.model ?? '', tokens: run.tokens,
-        used: [t.ask.usedScreen],
+        used: [
+          t.ask.usedScreen,
+          ...run.used.map((u) => usedLabel(u, run.lang)),
+          ...(run.skipped ? [t.ask.contextSkipped] : []),
+        ],
       },
     };
   }

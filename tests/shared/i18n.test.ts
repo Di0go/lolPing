@@ -52,6 +52,12 @@ describe('language', () => {
     expect(en.failed.noProfile).toMatch(/^Set me up first/);
   });
 
+  it('names the pages a file answer used in both languages', () => {
+    expect(strings('en').teammate.ask.usedFile('paper.pdf', 'p. 3–4')).toBe('paper.pdf p. 3–4');
+    expect(strings('zh-CN').teammate.ask.usedFile('paper.pdf', 'p. 3–4')).toBe('paper.pdf 第 3–4 页');
+    expect(strings('zh-CN').teammate.ask.usedFile('plan.xlsx', 'sheet Budget')).toBe('plan.xlsx sheet Budget');
+  });
+
   it('has a teammate label and instruction for every ping in both languages', () => {
     for (const lang of ['en', 'zh-CN'] as const) {
       const t = strings(lang).teammate.intent;

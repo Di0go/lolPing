@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AskController, type AskDeps } from '../../../src/main/teammate/askController';
 import { ContextError } from '../../../src/main/teammate/contextClient';
+import type { Doc } from '../../../src/main/teammate/files';
 import type { RawCall, StreamHandlers, Turn, TurnResult } from '../../../src/main/teammate/providers/types';
 import { strings } from '../../../src/shared/i18n';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
 import type { Spot } from '../../../src/shared/teammate/askMachine';
+import type { SystemTextLayer } from '../../../src/shared/teammate/contextProtocol';
 import { zoomRect } from '../../../src/shared/teammate/coords';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 import { bubbleMs } from '../../../src/shared/teammate/line';
@@ -65,7 +67,19 @@ interface HarnessOptions {
   noDisplay?: boolean;
   /** Sees the key each adapter is made with. */
   onAdapter?: (key: string) => void;
+  /** What the context helper and the file readers find; tests may change it between asks. */
+  screen?: Partial<Screen>;
 }
+
+interface Screen {
+  system: SystemTextLayer | Error;
+  /** The helper's marks file. */
+  marksFile: string;
+  /** The file behind the window; null: none. */
+  doc: Doc | null;
+}
+
+const NO_TEXT: SystemTextLayer = { selection: '', spotTexts: [], focus: null, address: '' };
 
 function harness(opts: HarnessOptions = {}) {
   const log: Entry[] = [];
@@ -83,6 +97,7 @@ function harness(opts: HarnessOptions = {}) {
   /** The fake disk: folders and files under the temp folder. */
   const disk = new Set<string>();
   const dirs: string[] = [];
+  const screen: Screen = { system: NO_TEXT, marksFile: '', doc: null, ...opts.screen };
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -112,10 +127,32 @@ function harness(opts: HarnessOptions = {}) {
         }
         skew = opts.skewAfterCapture ?? 0;
         return {
+          captureId: `c${captures}`,
           overviewPath: `ov${captures}.jpg`,
           overview: { w: 1600, h: 1000 },
           zooms: req.spots.map((p, i) => ({ path: `zoom${captures}-${i}.jpg`, rect: zoomRect(req.display, p) })),
         };
+      },
+      systemText: async () => {
+        if (screen.system instanceof Error) throw screen.system;
+        return screen.system;
+      },
+      marks: async (req) => ({ path: `${req.dir}/marks.tsv`, count: 1 }),
+      fileOf: async () => (screen.doc
+        ? { path: `C:/docs/${screen.doc.name}`, address: '', how: 'title' }
+        : { path: '', address: '', how: 'none' }),
+    },
+    readers: {
+      readFile: async () => screen.marksFile,
+      readDocument: async () => {
+        if (!screen.doc) throw new Error('no file');
+        return screen.doc;
+      },
+      fetchWebPdf: async () => {
+        throw new Error('no network in tests');
+      },
+      readPdfBuffer: async () => {
+        throw new Error('no PDFs in tests');
       },
     },
     adapter: (p, key) => {
@@ -188,7 +225,7 @@ function harness(opts: HarnessOptions = {}) {
 
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
-    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs,
+    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -759,5 +796,96 @@ describe('AskController', () => {
     expect(req.tools.map((d) => d.name)).toContain('look');
     const first = req.turns[0];
     expect(first.role === 'user' && first.parts.some((part) => 'image' in part)).toBe(true);
+  });
+
+  it('snaps a ping onto the button it aims at', async () => {
+    const h = harness({
+      // A Save button at physical (900, 700), 200 x 60: its centre is (1000, 730).
+      screen: { marksFile: 'button\t900\t700\t200\t60\tSave\n' },
+      steps: [answers([
+        call('ping', { type: 'assist', x: 460, y: 355 }, 'p'), // physical (920, 710): inside it, off centre
+        call('say', { text: 'Click Save.' }),
+        call('answer', { markdown: 'Save writes the file.' }),
+      ])],
+    });
+    h.ctl.ask(spot('assist'));
+    await flush();
+    expect(h.pings('assist')).toEqual([{ displayId: 1, x: 500, y: 365, id: 'assist', tag: TAG }]);
+    const first = h.requests[0].turns[0];
+    const text = first.role === 'user' ? first.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('\n') : '';
+    expect(text).toContain('button "Save" box 450,350,100,30');
+    expect(h.requests[0].system).toContain('Use the boxes in the marks list to aim.');
+  });
+
+  it('serves read_file pages and stops past the budget', async () => {
+    // Seven pages of 25,000 characters: an ask reads at most 2 x 20 pages x 3,000 = 120,000 of them with read_file.
+    const sections = [1, 2, 3, 4, 5, 6, 7].map((n) => ({
+      label: `p. ${n}`,
+      text: `${[2, 4, 5, 6].includes(n) ? 'Needle' : 'Hay'}${n} ${'.'.repeat(25_000)}`.slice(0, 25_000),
+    }));
+    const read: string[] = [];
+    const toolText = (turn: Turn | undefined): string => (turn?.role === 'tool'
+      ? turn.results.flatMap((r) => r.content.flatMap((c) => ('text' in c ? [c.text] : []))).join('')
+      : '');
+    const reads = (args: unknown, then: RawCall[] = []): Step => async (req, h) => {
+      if (req.turns.length > 1) read.push(toolText(req.turns.at(-1)));
+      h.accepted();
+      return { text: '', calls: args === null ? then : [call('read_file', args, `r${read.length}`)] };
+    };
+    const h = harness({
+      screen: { doc: { name: 'book.pdf', kind: 'pdf', outline: [], sections } },
+      steps: [
+        reads({ search: 'NEEDLE' }), reads({ pages: '1-2' }), reads({ pages: '7' }),
+        reads(null, [call('say', { text: 'Read it.' }), call('answer', { markdown: 'All of it.' })]),
+      ],
+    });
+    h.ctl.ask(spot('needvision'));
+    await flush();
+    expect(h.requests[0].tools.map((d) => d.name)).toContain('read_file');
+    expect(read).toHaveLength(3);
+    // A search gives the first 3 sections that hold the words, whatever their case.
+    expect(read[0]).toContain('p. 2:\nNeedle2');
+    expect(read[0]).toContain('p. 4:\nNeedle4');
+    expect(read[0]).toContain('p. 5:\nNeedle5');
+    expect(read[0]).not.toContain('Needle6');
+    // 75,000 read: page 1 fits, page 2 is cut where the budget ends.
+    expect(read[1]).toContain('p. 1:\nHay1');
+    expect(read[1]).toContain('p. 2:\nNeedle2');
+    expect(read[1].endsWith("That's all of the file you can read for this ask.")).toBe(true);
+    expect(read[1].length).toBeLessThan(46_000);
+    expect(read[2]).toBe("That's all of the file you can read for this ask.");
+  });
+
+  it('lists what the answer used in the footer', async () => {
+    const seen = 'the quarterly revenue rose by nine percent';
+    const sections = [1, 2, 3, 4, 5, 6].map((n) => ({
+      label: `p. ${n}`, text: n === 3 ? `${seen} ${'a'.repeat(24_000)}` : `page${n} `.repeat(4_000),
+    }));
+    const h = harness({
+      screen: {
+        system: { selection: 'chosen', spotTexts: [seen], focus: null, address: 'https://example.com/a' },
+        marksFile: 'button\t900\t700\t200\t60\tSave\n',
+        doc: { name: 'paper.pdf', kind: 'pdf', outline: [], sections },
+      },
+      steps: [
+        answers([call('say', { text: 'Revenue rose.' }), call('answer', { markdown: 'By 9 %.' })]),
+        answers([call('say', { text: 'Still up.' }), call('answer', { markdown: 'Yes.' })]),
+      ],
+    });
+    h.ctl.ask(spot('missing'));
+    await flush();
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    expect(h.cards().at(-1)?.footer.used).toEqual([
+      'screen', 'selection', 'text on screen', 'address', 'controls', 'paper.pdf p. 3–4',
+    ]);
+
+    // Without the screen text the file is found by the button's text alone, which matches nothing: its start.
+    h.screen.system = new ContextError('slow', 'the system took too long to answer');
+    h.ctl.ask(spot('missing', 1300, 900));
+    await flush();
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    expect(h.cards().at(-1)?.footer.used).toEqual([
+      'screen', 'controls', 'paper.pdf p. 1–2', 'some context was skipped',
+    ]);
   });
 });

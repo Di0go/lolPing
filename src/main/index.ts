@@ -3,7 +3,7 @@ import {
 } from 'electron';
 import { randomBytes, randomInt } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { resolveLang, strings, type Strings } from '../shared/i18n';
@@ -49,6 +49,7 @@ import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
 import { AskController } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
+import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
 import { HistoryStore } from './teammate/historyStore';
 import { MateWindows } from './teammate/mateWindows';
 import { createAdapter } from './teammate/providers';
@@ -728,11 +729,21 @@ function start(): void {
     const usage = new UsageLog(join(dir, 'usage.json'), Date.now);
     const context = new ContextClient({ command: contextHelperPath() }); // context-helper starts on the first capture
     const windows = new MateWindows();
+    // Chinese PDFs without their own character maps read as empty without pdfjs's CMaps.
+    const pdf = pdfAssetDirs({
+      packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(),
+    });
     const controller = new AskController({
       settings: () => settings,
       lang: mateLang,
       secrets,
       context,
+      readers: {
+        readFile: (path) => readFile(path, 'utf8'),
+        readDocument: (path, opts) => readDocument(path, { ...pdf, ...opts }),
+        fetchWebPdf,
+        readPdfBuffer: (name, data, opts) => readPdfBuffer(name, data, { ...pdf, ...opts }),
+      },
       adapter: (p, key) => createAdapter(p, key),
       overlay: overlays,
       windows,

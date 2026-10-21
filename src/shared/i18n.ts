@@ -54,6 +54,13 @@ const enMateUi = {
 interface MateAskText {
   failed: Record<AskFailure, string>;
   usedScreen: string;
+  usedSelection: string;
+  usedText: string;
+  usedMarks: string;
+  usedAddress: string;
+  /** `range` is the file's section labels, such as "p. 3–4". */
+  usedFile: (name: string, range: string) => string;
+  contextSkipped: string;
 }
 
 const enMateAsk: MateAskText = {
@@ -70,6 +77,12 @@ const enMateAsk: MateAskText = {
     other: 'Something went wrong with that answer.',
   },
   usedScreen: 'screen',
+  usedSelection: 'selection',
+  usedText: 'text on screen',
+  usedMarks: 'controls',
+  usedAddress: 'address',
+  usedFile: (name, range) => `${name} ${range}`,
+  contextSkipped: 'some context was skipped',
 };
 
 /** Settings → Teammate. */
@@ -888,6 +901,13 @@ const zh: Strings = {
         other: '这次回答出了问题。',
       },
       usedScreen: '屏幕',
+      usedSelection: '选中的文字',
+      usedText: '屏幕文字',
+      usedMarks: '界面元素',
+      usedAddress: '网址',
+      // PDF page labels read "p. 3" in English; other labels stay as the file reader wrote them.
+      usedFile: (name, range) => `${name} ${range.replace(/^p\. (.+)$/, '第 $1 页')}`,
+      contextSkipped: '部分上下文已跳过',
     },
     settings: {
       profiles: '配置',
