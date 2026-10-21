@@ -35,8 +35,11 @@ export interface OverlayEvents {
   'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean } & MateMark;
   /** Removes the ping kept on this display, if any: we pinged on another display, or paused. */
   'ping:unkeep': null;
-  /** `owner` is 'self', 'preview' or a room member: each owner has at most one emote on screen. */
-  'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag; ticket?: string };
+  /**
+   * `owner` is 'self', 'preview' or a room member: each owner has at most one emote on screen.
+   * `keep`: the teammate's emote stays until mate:clear or mate:fade.
+   */
+  'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag; ticket?: string; keep?: boolean };
   'emote:clear': { owner: string };
   'toast:show': { title: string; body: string };
   /** `owner` is 'self' or a room member: each owner has at most 3 lines on screen. */

@@ -109,6 +109,7 @@ function fadeMate(): void {
   for (const el of marks) el.classList.add('mate-fade');
   setTimeout(() => {
     for (const el of marks) el.remove();
+    if (mateMarks().length === 0) stage.clear('mate'); // lets go of the faded kept emote; a newer one stays
   }, MATE_FADE_MS);
 }
 
@@ -122,8 +123,8 @@ function dressWheel(ask: boolean): void {
   pingWheel.setCenterLabel(ask ? tag.name : null);
 }
 
-function emote(owner: string, art: EmoteArt, x: number, y: number, tag?: PingTag): void {
-  stage.spawn(owner, art, x, y, { sizePx: settings.emoteSizePx, tag });
+function emote(owner: string, art: EmoteArt, x: number, y: number, tag?: PingTag, keep = false): void {
+  stage.spawn(owner, art, x, y, { sizePx: settings.emoteSizePx, tag, keep });
   if (!settings.emoteSound) return;
   if (art.kind === 'bundled' && catalogEmote(art.slug)?.hasSound) sounds.play(`emote:${art.slug}`, volume());
   if (art.kind === 'custom' && art.sound) void sounds.playUrl(art.sound, volume());
@@ -164,7 +165,7 @@ window.overlay.on('ping:spawn', (p) => {
 window.overlay.on('ping:unkeep', dropKeptPing);
 window.overlay.on('emote:spawn', (p) => {
   if (p.owner === 'mate' && staleMate(p)) return;
-  emote(p.owner, p.art, p.x, p.y, p.tag);
+  emote(p.owner, p.art, p.x, p.y, p.tag, p.keep === true);
 });
 window.overlay.on('emote:clear', (p) => stage.clear(p.owner));
 window.overlay.on('toast:show', (t) => showToast(toastLayer, t.title, t.body));

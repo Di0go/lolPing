@@ -64,6 +64,8 @@ export interface AskDeps {
 /** Spec §7.1, §9.5: tool rounds per answer, the gap between a set of pings, and "the same spot". */
 const MAX_ROUNDS = 6;
 const PING_GAP_MS = 600;
+/** The teammate's pings and emotes stay at least this long after its answer, and while its bubble or card is up. */
+const MARKS_MIN_MS = 15_000;
 const NEAR_PX = 40;
 const RECEIVE_MS = 10_000;
 const TOTAL_MS = 60_000;
@@ -187,6 +189,8 @@ export class AskController extends EventEmitter {
   private fadeTimer: Timer | null = null;
   private readonly pingTimers = new Set<Timer>();
   private nextPingAt = 0;
+  /** When the answer on screen finished or failed; its marks stay MARKS_MIN_MS from then. Null while it is coming. */
+  private answeredAt: number | null = null;
   private excluded = 0;
   /** The thread asks continue: kept here so it works with history off or paused, and across a pause. */
   private thread: ThreadRecord | null = null;
@@ -218,6 +222,7 @@ export class AskController extends EventEmitter {
     machine.addSpot(spot);
 
     this.stopRun();
+    this.answeredAt = null;
     this.clearMarks();
     this.hideBubble();
     this.clearTimer('fade');
@@ -318,6 +323,7 @@ export class AskController extends EventEmitter {
     this.cardShown = true;
     this.hideCard();
     this.clearTimer('fade');
+    this.answeredAt = null;
     this.shown = null;
     this.viewed = null;
   }
@@ -605,7 +611,7 @@ export class AskController extends EventEmitter {
     if (!point || !at) return;
     run.marks.push(point);
     const ping = {
-      ...at, id: c.type, tag: run.tag,
+      ...at, id: c.type, keep: true, tag: run.tag,
       ...(c.label ? { label: c.label } : {}),
       ...(run.pings > 0 ? { silent: true } : {}), // one sound for the whole set
     };
@@ -633,7 +639,7 @@ export class AskController extends EventEmitter {
     const at = point ? this.deps.overlay.toLocal(point) : null;
     if (!point || !at) return;
     run.marks.push(point);
-    this.deps.overlay.spawnMateEmote({ ...at, slug: c.slug, tag: run.tag });
+    this.deps.overlay.spawnMateEmote({ ...at, slug: c.slug, keep: true, tag: run.tag });
     this.marksShown = true;
   }
 
@@ -678,6 +684,7 @@ export class AskController extends EventEmitter {
     if (this.bubbleShown && this.bubbleTimer === null) this.armBubble(run, run.line);
     if (run.autoCard && !this.cardShown) this.openCard(run);
     else if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, false));
+    this.answeredAt = this.deps.now();
     this.scheduleFade();
     const entry = {
       at: this.deps.now(), intent: run.spot.intent, words: run.words, line: run.said,
@@ -704,11 +711,13 @@ export class AskController extends EventEmitter {
     this.clearMarks();
     const at = this.deps.overlay.toLocal(run.receipt);
     if (at) {
-      this.deps.overlay.spawnMate({ ...at, id: 'missing', tag: run.tag });
+      this.deps.overlay.spawnMate({ ...at, id: 'missing', keep: true, tag: run.tag });
       this.marksShown = true;
     }
     if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, false));
     this.showLine(run, strings(run.lang).teammate.ask.failed[reason]);
+    this.answeredAt = this.deps.now();
+    this.scheduleFade();
   }
 
   /** Ends the running ask, if any: its requests are aborted and its deadlines dropped. */
@@ -754,6 +763,7 @@ export class AskController extends EventEmitter {
     this.hideBubble();
     this.deps.windows.showCard(this.popupAt(run), this.cardState(run, this.alive(run)));
     this.cardShown = true;
+    this.clearTimer('fade'); // the marks stay while the card is up; closing it schedules their fade
   }
 
   private cardState(run: Run, streaming: boolean): CardState {
@@ -785,14 +795,19 @@ export class AskController extends EventEmitter {
     return dip ? { x: dip.x + BUBBLE_OFFSET.x, y: dip.y + BUBBLE_OFFSET.y } : this.deps.overlay.primaryDip();
   }
 
-  /** The receipt fades with the bubble, once the answer's pings have played out too. */
+  /**
+   * The teammate's marks fade once the bubble is gone and the card is closed, and never sooner than MARKS_MIN_MS
+   * after the answer (nor before the last ping has been drawn). A card that opens or closes later calls this again.
+   */
   private scheduleFade(): void {
-    const now = this.deps.now();
-    const pingMs = this.deps.settings().pingDurationS * 1000;
-    const pingsEnd = this.nextPingAt > 0 ? this.nextPingAt - PING_GAP_MS + pingMs : 0;
     this.clearTimer('fade');
-    this.fadeTimer = this.timer(Math.max(0, this.bubbleEndsAt - now, pingsEnd - now), () => {
+    if (this.answeredAt === null || this.cardShown) return;
+    const now = this.deps.now();
+    const lastPingAt = this.nextPingAt > 0 ? this.nextPingAt - PING_GAP_MS : 0;
+    const at = Math.max(this.bubbleEndsAt, this.answeredAt + MARKS_MIN_MS, lastPingAt);
+    this.fadeTimer = this.timer(Math.max(0, at - now), () => {
       this.fadeTimer = null;
+      this.answeredAt = null;
       if (!this.marksShown) return;
       this.deps.overlay.fadeMate();
       this.marksShown = false;
@@ -809,6 +824,7 @@ export class AskController extends EventEmitter {
 
   private hideBubble(): void {
     this.clearTimer('bubble');
+    this.bubbleEndsAt = 0;
     if (!this.bubbleShown) return;
     this.deps.windows.hideBubble();
     this.bubbleShown = false;
@@ -818,6 +834,7 @@ export class AskController extends EventEmitter {
     if (!this.cardShown) return;
     this.deps.windows.hideCard();
     this.cardShown = false;
+    if (this.marksShown) this.scheduleFade();
   }
 
   private clearTimer(which: 'bubble' | 'fade'): void {

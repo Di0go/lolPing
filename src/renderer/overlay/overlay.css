@@ -90,6 +90,11 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 
 /* ---------- emotes (the box and the 13 effect envelopes live in shared/emoteFx.css, shared with the effect picker) ---------- */
 .emote .tag { top: calc(var(--size) * 0.5 + 8px); }
+/* A kept bundled emote holds its round wheel icon once the animation is over. */
+.emote .still {
+  position: absolute; left: calc(var(--size) * -0.5); top: calc(var(--size) * -0.5); width: var(--size); height: var(--size);
+  border-radius: 50%;
+}
 /* A bundled emote is a baked animation: a 320 px canvas holding 256 px of art, so it is drawn 1.25 times the art's size. */
 .emote .sheet {
   position: absolute; left: calc(var(--size) * -0.625); top: calc(var(--size) * -0.625);

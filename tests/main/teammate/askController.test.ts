@@ -279,7 +279,7 @@ describe('AskController', () => {
     expect(drawn[1]).toEqual(['bubble', expect.objectContaining({
       line: 'Line 3 divides by zero.', thinking: false, thread: null,
     })]);
-    expect(drawn[2]).toEqual(['ping', { displayId: 1, x: 600, y: 400, id: 'danger', tag: TAG }]);
+    expect(drawn[2]).toEqual(['ping', { displayId: 1, x: 600, y: 400, id: 'danger', keep: true, tag: TAG }]);
 
     // Overlays and teammate windows are out of the capture only while it runs.
     const kinds = h.log.map((e) => `${e[0]}:${String(e[1] === null || typeof e[1] === 'boolean' ? e[1] : '')}`);
@@ -293,11 +293,12 @@ describe('AskController', () => {
     expect(h.states).toEqual([true, false]);
     expect(h.appends).toEqual([{ threadId: null, line: 'Line 3 divides by zero.', markdown: '' }]);
 
-    // The receipt stays until the answer has had its time on screen, then fades with the bubble.
-    expect(h.of('fade')).toHaveLength(0);
+    // The bubble goes first; the receipt and pings stay 15 s after the answer, then fade.
     await vi.advanceTimersByTimeAsync(bubbleMs('Line 3 divides by zero.'));
-    expect(h.of('fade')).toHaveLength(1);
     expect(h.of('bubbleHidden')).toHaveLength(1);
+    expect(h.of('fade')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(15_000 - bubbleMs('Line 3 divides by zero.'));
+    expect(h.of('fade')).toHaveLength(1);
   });
 
   it('shows plain text as the line when the model calls no tools', async () => {
@@ -561,6 +562,127 @@ describe('AskController', () => {
     expect(h.pings('assist')).toHaveLength(2);
   });
 
+  describe('the teammate marks that stay with the answer', () => {
+    const withCard = () => harness({
+      steps: [answers([
+        call('say', { text: 'Line 3 divides by zero.' }),
+        call('answer', { markdown: 'B3 is 0, so =A3/B3 fails.' }),
+        call('ping', { type: 'danger', x: 600, y: 400 }, 'p'),
+        call('emote', { slug: 'facepalm', x: 200, y: 100 }, 'e'),
+      ])],
+    });
+
+    it('spawns every ping and emote to stay, like the receipt', async () => {
+      const h = withCard();
+      h.ctl.ask(spot('danger'));
+      await flush();
+      expect(h.pings('danger')).toEqual([expect.objectContaining({ keep: true })]);
+      expect(h.of('emote')).toEqual([expect.objectContaining({ slug: 'facepalm', keep: true })]);
+    });
+
+    it('keeps the teammate pings while the card is open', async () => {
+      const h = withCard();
+      h.ctl.ask(spot('danger'));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(h.of('fade')).toHaveLength(0);
+      expect(h.of('clear')).toHaveLength(0);
+    });
+
+    it('fades the pings 15 s after the answer at the earliest', async () => {
+      const h = harness({
+        steps: [answers([call('say', { text: 'Short.' }), call('ping', { type: 'danger', x: 600, y: 400 })])],
+      });
+      h.ctl.ask(spot('danger'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(bubbleMs('Short.') + 1_000); // the bubble is long gone
+      expect(h.of('bubbleHidden')).toHaveLength(1);
+      expect(h.of('fade')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(15_000 - bubbleMs('Short.') - 1_000 - 1);
+      expect(h.of('fade')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.of('fade')).toHaveLength(1);
+    });
+
+    it('fades the pings when the card closes after that', async () => {
+      const h = withCard();
+      h.ctl.ask(spot('danger'));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.of('fade')).toHaveLength(0);
+      h.ctl.onTeammateAction('card', { t: 'close' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.of('fade')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.of('fade')).toHaveLength(1);
+    });
+
+    it('waits out the 15 s when the card closes before that', async () => {
+      const h = withCard();
+      h.ctl.ask(spot('danger'));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      await vi.advanceTimersByTimeAsync(5_000);
+      h.ctl.onTeammateAction('card', { t: 'close' });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(h.of('fade')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.of('fade')).toHaveLength(1);
+    });
+
+    it('holds a fade that was already waiting when the card opens', async () => {
+      const h = withCard();
+      h.ctl.ask(spot('danger'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(10_000);
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.of('fade')).toHaveLength(0);
+    });
+
+    it('clears the pings on a new ask', async () => {
+      const h = harness({
+        steps: [
+          answers([call('say', { text: 'One.' }), call('ping', { type: 'danger', x: 600, y: 400 })]),
+          ignoresNudge,
+          hangs({ accept: true }),
+        ],
+      });
+      h.ctl.ask(spot('danger'));
+      await flush();
+      h.ctl.ask(spot('danger', 1200, 900));
+      await flush();
+      expect(h.of('clear')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.of('fade')).toHaveLength(0);
+    });
+
+    it('clears the pings on a pause even with the card open', async () => {
+      const h = withCard();
+      h.ctl.ask(spot('danger'));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      h.ctl.cancel('pause');
+      expect(h.of('clear')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.of('fade')).toHaveLength(0);
+    });
+
+    it('keeps the missing ping of a failed ask for the same time', async () => {
+      const h = harness({ steps: [hangs({ accept: false })] });
+      h.ctl.ask(spot('danger'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(10_000); // not received
+      expect(h.pings('missing')).toEqual([expect.objectContaining({ keep: true })]);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(h.of('fade')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.of('fade')).toHaveLength(1);
+    });
+  });
+
   it('points at the user\'s spot for spot 1 and drops unknown spots', async () => {
     const h = harness({
       steps: [answers([
@@ -573,7 +695,7 @@ describe('AskController', () => {
     h.ctl.ask(spot('generic'));
     await flush();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(h.pings('generic')).toEqual([{ displayId: 1, x: 500, y: 400, id: 'generic', tag: TAG }]);
+    expect(h.pings('generic')).toEqual([{ displayId: 1, x: 500, y: 400, id: 'generic', keep: true, tag: TAG }]);
   });
 
   it('shows only the dots on a tag for a Do it ask, and is silent when the receipt sound is off', async () => {
@@ -824,7 +946,7 @@ describe('AskController', () => {
     });
     h.ctl.ask(spot('assist'));
     await flush();
-    expect(h.pings('assist')).toEqual([{ displayId: 1, x: 500, y: 365, id: 'assist', tag: TAG }]);
+    expect(h.pings('assist')).toEqual([{ displayId: 1, x: 500, y: 365, id: 'assist', keep: true, tag: TAG }]);
     const first = h.requests[0].turns[0];
     const text = first.role === 'user' ? first.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('\n') : '';
     expect(text).toContain('button "Save" box 450,350,100,30');

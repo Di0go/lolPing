@@ -293,6 +293,14 @@ describe('OverlayManager ask wheel', () => {
     ]);
   });
 
+  it('sends a kept teammate emote with keep, for the overlay to hold until it fades', () => {
+    const tag = { name: 'AI', color: 3 };
+    mgr.spawnMateEmote({ displayId: 1, x: 5, y: 6, slug: 'okay', keep: true, tag });
+    expect(sent(0)).toEqual([
+      ['emote:spawn', { owner: 'mate', art: { kind: 'bundled', slug: 'okay' }, x: 5, y: 6, tag, keep: true }],
+    ]);
+  });
+
   it('stamps the teammate\'s pings with the current ask\'s ticket', () => {
     const tag = { name: 'AI', color: 3 };
     mgr.setMateTicket('t1');

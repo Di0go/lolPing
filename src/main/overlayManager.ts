@@ -212,10 +212,13 @@ export class OverlayManager extends EventEmitter {
     this.send(displayId, 'ping:spawn', { ...ping, owner: MATE, ...ticket });
   }
 
-  /** The teammate's emote (a bundled slug). It replaces its earlier one, whichever display that was on. */
-  spawnMateEmote(p: { displayId: number; x: number; y: number; slug: string; tag: PingTag }): void {
+  /** The teammate's emote (a bundled slug), replacing its earlier one on any display. `keep`: as in spawnMate. */
+  spawnMateEmote(p: { displayId: number; x: number; y: number; slug: string; keep?: boolean; tag: PingTag }): void {
     const ticket = this.mateTicket === null ? {} : { ticket: this.mateTicket };
-    this.send(p.displayId, 'emote:spawn', { owner: MATE, art: { kind: 'bundled', slug: p.slug }, x: p.x, y: p.y, tag: p.tag, ...ticket });
+    const keep = p.keep ? { keep: true } : {};
+    this.send(p.displayId, 'emote:spawn', {
+      owner: MATE, art: { kind: 'bundled', slug: p.slug }, x: p.x, y: p.y, tag: p.tag, ...keep, ...ticket,
+    });
     this.clearElsewhere(p.displayId, MATE);
   }
 
