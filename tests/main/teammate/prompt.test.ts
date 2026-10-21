@@ -186,7 +186,7 @@ describe('teammate prompt context', () => {
         { kind: 'text', box: { x: 0, y: 3, w: 101, h: 25 }, text: 'Hello\nworld' },
       ],
     }));
-    expect(body).toContain('Marks near the spots (id, kind, text, centre in overview pixels):');
+    expect(body).toContain('Marks near the spots (kind, text, box in overview pixels):');
     expect(body).toContain("button \"Save 'all'\" box 500,300,100,30");
     expect(body).toContain('text "Hello world" box 0,2,51,13');
   });

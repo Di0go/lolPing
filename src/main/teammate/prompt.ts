@@ -260,7 +260,7 @@ function contextSections(ctx: AskContext): string[] {
       const b = physicalBoxToOverview(ctx.shot, m.box);
       return `${m.kind} "${oneLine(m.text)}" box ${b.x},${b.y},${b.w},${b.h}`;
     });
-    out.push(['Marks near the spots (id, kind, text, centre in overview pixels):', ...lines].join('\n'));
+    out.push(['Marks near the spots (kind, text, box in overview pixels):', ...lines].join('\n'));
   }
   if (ctx.file) out.push(fileSection(ctx.file));
   return out.length > 0 ? [DATA_LINE, ...out] : [];
