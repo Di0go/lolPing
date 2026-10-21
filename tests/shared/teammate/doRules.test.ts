@@ -1,0 +1,141 @@
+import { describe, expect, it } from 'vitest';
+import {
+  allowed,
+  formPreview,
+  neverFill,
+  pastePlan,
+  permissionKey,
+  type FormField,
+} from '../../../src/shared/teammate/doRules';
+
+const field = (over: Partial<FormField> & { id: string }): FormField => ({
+  kind: 'text', label: over.id, group: '', value: '', secure: false, required: false, options: [], ...over,
+});
+
+describe('permissions', () => {
+  it('keys permissions by profile and action', () => {
+    expect(permissionKey('p1', 'paste')).toBe('p1:paste');
+    expect(allowed(['p1:paste', 'p2:open'], 'p1', 'paste')).toBe(true);
+    expect(allowed(['p1:paste', 'p2:open'], 'p1', 'open')).toBe(false);
+    expect(allowed(['p1:paste', 'p2:open'], 'p2', 'paste')).toBe(false);
+    expect(allowed([], 'p1', 'event')).toBe(false);
+  });
+
+  it('never allows fill without the preview', () => {
+    expect(allowed(['p1:fill'], 'p1', 'fill')).toBe(false);
+  });
+});
+
+describe('neverFill', () => {
+  it('never fills a card number, CVV, password or ID field in English or Chinese', () => {
+    const labels = [
+      'Password', 'Confirm password', 'Passcode', 'PIN', 'PIN code', 'Card number', 'Credit card number',
+      'Card No.', 'CVV', 'CVC', 'Security code', 'Expiry date', 'Expiration', 'IBAN', 'Account number',
+      'SSN', 'Social Security number', 'Passport number', 'ID number',
+      '密码', '登录密码', '卡号', '银行卡', '银行卡号', '安全码', '有效期', '身份证', '身份证号', '护照', '证件号码',
+    ];
+    for (const label of labels) expect(neverFill({ label, secure: false }), label).toBe(true);
+  });
+
+  it('never fills a secure field or an autocomplete token for secrets', () => {
+    expect(neverFill({ label: 'Anything', secure: true })).toBe(true);
+    for (const autocomplete of ['cc-number', 'cc-csc', 'cc-exp', 'cc-exp-month', 'cc-exp-year',
+      'current-password', 'new-password', 'one-time-code', 'section-pay billing CC-Number']) {
+      expect(neverFill({ label: 'Field', secure: false, autocomplete }), autocomplete).toBe(true);
+    }
+  });
+
+  it('fills an ordinary name, email and address field', () => {
+    const labels = ['Full name', 'Email', 'Address', 'Shipping address', 'Phone', 'Company', 'Pinterest',
+      'Spinning', '姓名', '邮箱', '地址', '电话'];
+    for (const label of labels) expect(neverFill({ label, secure: false }), label).toBe(false);
+    expect(neverFill({ label: 'Email', secure: false, autocomplete: 'email' })).toBe(false);
+  });
+});
+
+describe('formPreview', () => {
+  it('fills an ordinary field and keeps the model order', () => {
+    const fields = [field({ id: 'a', label: 'Full name' }), field({ id: 'b', label: 'Email' })];
+    const { rows, left } = formPreview(fields, [{ id: 'b', value: 'x@y.z' }, { id: 'a', value: 'Ann' }]);
+    expect(rows).toEqual([
+      { id: 'b', label: 'Email', value: 'x@y.z', checked: true },
+      { id: 'a', label: 'Full name', value: 'Ann', checked: true },
+    ]);
+    expect(left).toEqual([]);
+  });
+
+  it('leaves a never-fill field for the user without a row', () => {
+    const fields = [field({ id: 'a', label: 'Card number' }), field({ id: 'b', label: 'Secret', secure: true })];
+    const { rows, left } = formPreview(fields, [{ id: 'a', value: '4111' }, { id: 'b', value: 'hunter2' }]);
+    expect(rows).toEqual([]);
+    expect(left).toEqual([{ label: 'Card number', reason: 'secure' }, { label: 'Secret', reason: 'secure' }]);
+  });
+
+  it('leaves unknown field ids for the user', () => {
+    const { rows, left } = formPreview([field({ id: 'a' })], [{ id: 'zzz', value: 'x' }]);
+    expect(rows).toEqual([]);
+    expect(left).toEqual([{ label: 'zzz', reason: 'unknown' }]);
+  });
+
+  it('leaves a field kind the writer cannot set', () => {
+    const slider = field({ id: 'a', kind: 'other', label: 'Slider' });
+    const { rows, left } = formPreview([slider], [{ id: 'a', value: '3' }]);
+    expect(rows).toEqual([]);
+    expect(left).toEqual([{ label: 'Slider', reason: 'kind' }]);
+  });
+
+  it('leaves a combo value that is not one of its options', () => {
+    const country = field({ id: 'c', kind: 'combo', label: 'Country', options: ['', 'Canada', 'France'] });
+    const free = field({ id: 'd', kind: 'combo', label: 'City' });
+    const { rows, left } = formPreview([country, free], [
+      { id: 'c', value: 'Spain' }, { id: 'd', value: 'Anywhere' },
+    ]);
+    expect(rows).toEqual([{ id: 'd', label: 'City', value: 'Anywhere', checked: true }]);
+    expect(left).toEqual([{ label: 'Country', reason: 'option' }]);
+    expect(formPreview([country], [{ id: 'c', value: 'France' }]).rows).toHaveLength(1);
+  });
+
+  it('takes on or off for a checkbox and any value for a radio', () => {
+    const box = field({ id: 'k', kind: 'checkbox', label: 'Subscribe' });
+    const radio = field({ id: 'r', kind: 'radio', label: 'Express' });
+    expect(formPreview([box], [{ id: 'k', value: 'on' }]).rows).toHaveLength(1);
+    expect(formPreview([box], [{ id: 'k', value: 'off' }]).rows).toHaveLength(1);
+    expect(formPreview([box], [{ id: 'k', value: 'yes' }]).left).toEqual([{ label: 'Subscribe', reason: 'kind' }]);
+    expect(formPreview([radio], [{ id: 'r', value: 'Express' }]).rows).toHaveLength(1);
+  });
+});
+
+describe('pastePlan', () => {
+  const base = { mode: 'insert', secure: false, sameWindow: true, selectionNow: null, selectionAsked: null } as const;
+
+  it('pastes by clipboard when every check passes', () => {
+    expect(pastePlan(base)).toEqual({ method: 'clipboard' });
+  });
+
+  it('refuses to paste into a secure field', () => {
+    expect(pastePlan({ ...base, secure: true })).toEqual({ method: 'copy', why: 'secure' });
+  });
+
+  it('copies when the foreground window changed', () => {
+    expect(pastePlan({ ...base, sameWindow: false })).toEqual({ method: 'copy', why: 'window' });
+  });
+
+  it('checks secure before the window', () => {
+    expect(pastePlan({ ...base, secure: true, sameWindow: false }).why).toBe('secure');
+  });
+
+  it('replaces only while the selection still holds the asked text', () => {
+    const replace = { ...base, mode: 'replace' } as const;
+    expect(pastePlan({ ...replace, selectionNow: 'teh cat ', selectionAsked: ' teh cat' }))
+      .toEqual({ method: 'clipboard' });
+    expect(pastePlan({ ...replace, selectionNow: 'other', selectionAsked: 'teh cat' }))
+      .toEqual({ method: 'copy', why: 'selection' });
+    expect(pastePlan({ ...replace, selectionNow: null, selectionAsked: 'teh cat' }).why).toBe('selection');
+    expect(pastePlan({ ...replace, selectionNow: '', selectionAsked: '' }).why).toBe('selection');
+    expect(pastePlan({ ...replace, selectionNow: 'x', selectionAsked: null }).why).toBe('selection');
+  });
+
+  it('ignores the selection when inserting', () => {
+    expect(pastePlan({ ...base, selectionNow: 'other', selectionAsked: 'text' })).toEqual({ method: 'clipboard' });
+  });
+});
