@@ -787,7 +787,8 @@ bool browserAddress(const std::string& value, std::string& path, std::string& ad
   if (isDrivePath(v)) {
     local = percentDecoded(v);
   } else if (lowered(v.substr(0, 7)) == "file://") {
-    const std::string rest = percentDecoded(v.substr(7));
+    // A query or fragment (Edge's PDF viewer adds "#page=N") is no part of the path; encoded ones are.
+    const std::string rest = percentDecoded(v.substr(7, v.find_first_of("?#") - 7));
     if (rest.rfind('/', 0) == 0) local = rest.substr(1);  // file:///C:/a
     else if (!rest.empty()) local = "//" + rest;           // file://server/share
     if (!isDrivePath(local) && local.rfind("//", 0) != 0) return false;

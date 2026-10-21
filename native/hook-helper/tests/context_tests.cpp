@@ -561,6 +561,10 @@ static void test_browser_address() {
   CHECK(read("C:/Users/Darren Meng/a.pdf") && path == "C:\\Users\\Darren Meng\\a.pdf" && address.empty());
   CHECK(read("file:///C:/Users/Darren%20Meng/b%25.pdf") && path == "C:\\Users\\Darren Meng\\b%.pdf");
   CHECK(read("FILE:///d:/x.pdf") && path == "d:\\x.pdf");
+  // Edge's PDF viewer adds "#page=N"; an encoded '#' or '?' is part of the name.
+  CHECK(read("file:///C:/a/b.pdf#page=2") && path == "C:\\a\\b.pdf");
+  CHECK(read("file:///C:/a/b%23c%3F.pdf?x=1") && path == "C:\\a\\b#c?.pdf");
+  CHECK(read("file://server/share/c.pdf#page=1") && path == "\\\\server\\share\\c.pdf");
   CHECK(read("file://server/share/c.pdf") && path == "\\\\server\\share\\c.pdf");
   CHECK(read("C:/a/%E4%B8%AD.pdf") && path == "C:\\a\\\xe4\xb8\xad.pdf");
   CHECK(read("example.com/docs/a.pdf") && address == "https://example.com/docs/a.pdf" && path.empty());

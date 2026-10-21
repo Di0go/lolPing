@@ -414,22 +414,60 @@ bool readable(IUIAutomation* uia, IUIAutomationElement* el, bool& secure) {
   return true;
 }
 
-// Whether a text range is in or holds a password field: Chromium's document text shows a field's bullets.
+constexpr int kTextOwnerParents = 16;  // how far up the element holding a range's text pattern is looked for
+
+// The text pattern of `el` or its nearest parent that has one: in Chromium a paragraph's own pattern cannot make a
+// range for a field outside it, the document's can.
+winrt::com_ptr<IUIAutomationTextPattern> textOwnerOf(IUIAutomation* uia, IUIAutomationElement* el) {
+  winrt::com_ptr<IUIAutomationTreeWalker> walker;
+  if (FAILED(uia->get_RawViewWalker(walker.put())) || !walker) return nullptr;
+  winrt::com_ptr<IUIAutomationElement> node;
+  node.copy_from(el);
+  for (int depth = 0; node && depth <= kTextOwnerParents; ++depth) {
+    if (auto text = textPatternOf(node.get())) return text;
+    winrt::com_ptr<IUIAutomationElement> parent;
+    if (FAILED(walker->GetParentElement(node.get(), parent.put()))) return nullptr;
+    node = parent;
+  }
+  return nullptr;
+}
+
+// Whether a text range is in or overlaps a password field: Chromium's document text shows a field's bullets, which
+// give away the password's length. Anything that cannot be checked counts as touching one.
 bool touchesPassword(IUIAutomation* uia, IUIAutomationTextRange* range) {
   winrt::com_ptr<IUIAutomationElement> enclosing;
   bool secure = false;
   if (FAILED(range->GetEnclosingElement(enclosing.put())) || !enclosing || !readable(uia, enclosing.get(), secure)) {
     return true;
   }
-  winrt::com_ptr<IUIAutomationElementArray> children;
-  if (FAILED(range->GetChildren(children.put())) || !children) return false;
+  VARIANT yes;
+  VariantInit(&yes);
+  yes.vt = VT_BOOL;
+  yes.boolVal = VARIANT_TRUE;
+  winrt::com_ptr<IUIAutomationCondition> isPassword;
+  winrt::com_ptr<IUIAutomationElementArray> fields;
+  if (FAILED(uia->CreatePropertyCondition(UIA_IsPasswordPropertyId, yes, isPassword.put())) ||
+      FAILED(enclosing->FindAll(TreeScope_Descendants, isPassword.get(), fields.put())) || !fields) {
+    return true;
+  }
   int count = 0;
-  children->get_Length(&count);
+  if (FAILED(fields->get_Length(&count))) return true;
+  if (count == 0) return false;
+  const auto owner = textOwnerOf(uia, enclosing.get());
+  if (!owner) return true;
   for (int i = 0; i < count; ++i) {
-    winrt::com_ptr<IUIAutomationElement> child;
-    BOOL password = FALSE;
-    if (FAILED(children->GetElement(i, child.put())) || !child) continue;
-    if (FAILED(child->get_CurrentIsPassword(&password)) || password) return true;
+    winrt::com_ptr<IUIAutomationElement> field;
+    winrt::com_ptr<IUIAutomationTextRange> fieldRange;
+    int startVsEnd = 0, endVsStart = 0;
+    if (FAILED(fields->GetElement(i, field.put())) || !field ||
+        FAILED(owner->RangeFromChild(field.get(), fieldRange.put())) || !fieldRange ||
+        FAILED(range->CompareEndpoints(TextPatternRangeEndpoint_Start, fieldRange.get(), TextPatternRangeEndpoint_End,
+                                       &startVsEnd)) ||
+        FAILED(range->CompareEndpoints(TextPatternRangeEndpoint_End, fieldRange.get(), TextPatternRangeEndpoint_Start,
+                                       &endVsStart))) {
+      return true;
+    }
+    if (startVsEnd < 0 && endVsStart > 0) return true;  // the two ranges overlap
   }
   return false;
 }
@@ -480,7 +518,8 @@ void readFocus(IUIAutomation* uia, SystemText& out) {
   if (!text) return;
   if (out.focusValue.empty()) {
     winrt::com_ptr<IUIAutomationTextRange> document;
-    if (SUCCEEDED(text->get_DocumentRange(document.put())) && document) {
+    if (SUCCEEDED(text->get_DocumentRange(document.put())) && document &&
+        !touchesPassword(uia, document.get())) {
       out.focusValue = rangeText(document.get(), kFocusValueMax);
     }
   }
