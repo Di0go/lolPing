@@ -80,7 +80,7 @@ export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean }
     },
     {
       name: 'look',
-      description: 'Get a closer, zoomed view of a rectangle of the overview.',
+      description: "Get a closer, zoomed view of a rectangle of the overview, for a detail you can't read in the images.",
       parameters: {
         type: 'object',
         properties: {

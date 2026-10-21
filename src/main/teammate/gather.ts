@@ -20,7 +20,7 @@ export interface GatherRequest {
   settings: TeammateSettings['context'];
   spots: Point[];
   dir: string;
-  /** Whole picture reads a larger part of the file. */
+  /** Only Whole picture reads the file behind the window: every other ask answers faster without it. */
   allin: boolean;
   /** The foreground window's title: a browser tab showing a PDF names it there. */
   title: string;
@@ -59,13 +59,13 @@ const UNITS: Record<Doc['kind'], FileUnit> = { pdf: 'page', pptx: 'slide', xlsx:
 const sectionRef = (label: string): string => label.replace(/^(?:p\.|slide|sheet|part) /, '');
 
 /**
- * The file text an ask carries up front: about 4 pages around the one on screen, or 30 for Whole picture. Every page
- * is input the model reads before its first word; read_file fetches more when the answer needs it.
+ * The file text a Whole picture ask carries up front: about 30 pages around the one on screen. Every page is input the
+ * model reads before its first word; read_file fetches more when the answer needs it.
  */
-export const fileBudget = (allin: boolean): number => PAGE_CHARS * (allin ? 30 : 4);
+const FILE_BUDGET = PAGE_CHARS * 30;
 
-/** How much file text read_file may give in one ask on top: about 40 pages, or 200 for Whole picture. */
-export const fileReadLimit = (allin: boolean): number => PAGE_CHARS * (allin ? 200 : 40);
+/** How much file text read_file may give in one ask on top: about 200 pages. */
+export const FILE_READ_LIMIT = PAGE_CHARS * 200;
 
 /** A web PDF to fetch: the address ends in `.pdf`, or the tab title names one. Its name comes from the same place. */
 function webPdf(address: string, title: string): { url: string; name: string } | null {
@@ -157,7 +157,7 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
     }
   };
   const { settings } = req;
-  const layers = { marks: settings.marks, text: settings.systemText, file: settings.files };
+  const layers = { marks: settings.marks, text: settings.systemText, file: settings.files && req.allin };
   const read = layers.marks || layers.text || layers.file
     ? await step(() => deps.context.read({ spots: req.spots, radius: MARK_RADIUS, ...layers, dir: req.dir }, signal))
     : null;
@@ -184,7 +184,7 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
     if (doc && doc.sections.length > 0) {
       out.doc = doc;
       const visible = [...(out.system?.spotTexts ?? []), ...out.marks.map((m) => m.text)].join('\n');
-      out.file = located(doc, visible.slice(0, MAX_VISIBLE), fileBudget(req.allin));
+      out.file = located(doc, visible.slice(0, MAX_VISIBLE), FILE_BUDGET);
     }
   }
 

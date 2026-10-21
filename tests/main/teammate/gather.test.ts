@@ -69,7 +69,7 @@ function fakes(opts: FakeOptions = {}) {
 }
 
 const request = (over: Partial<GatherRequest> = {}): GatherRequest => ({
-  settings: ALL_ON, spots: [SPOT], dir: 'tmp/run', allin: false, title: 'report.pdf - Acrobat',
+  settings: ALL_ON, spots: [SPOT], dir: 'tmp/run', allin: true, title: 'report.pdf - Acrobat',
   ...over,
 });
 const signal = (): AbortSignal => new AbortController().signal;
@@ -94,6 +94,12 @@ describe('gather', () => {
     const less = await gather(some.deps, request({ settings: off }), signal());
     expect(some.calls).toEqual(['read:text']);
     expect(less).toMatchObject({ marks: [], file: null, skipped: false });
+
+    // Only Whole picture reads the file behind the window, so no other ask waits for it.
+    const quick = fakes();
+    const spot = await gather(quick.deps, request({ allin: false }), signal());
+    expect(quick.calls).toEqual(['read:marks+text', 'readFile:tmp/run/marks.tsv']);
+    expect(spot).toMatchObject({ file: null, doc: null });
 
     const none = fakes();
     const nothing = { ...ALL_ON, marks: false, systemText: false, files: false };
@@ -137,20 +143,20 @@ describe('gather', () => {
   it('locates the visible part of the file', async () => {
     const f = fakes();
     const got = await gather(f.deps, request(), signal());
-    // Page 3 holds the text at the spot; pages 2, 4 and 5 fit the 4-page budget around it, pages 1 and 6 would not.
-    expect(got.file).toMatchObject({ from: 1, to: 4 });
+    // Page 3 holds the text at the spot; the six short pages all fit the 30-page budget around it.
+    expect(got.file).toMatchObject({ from: 0, to: 5 });
     expect(got.used).toEqual([
-      { kind: 'text' }, { kind: 'marks' }, { kind: 'file', name: 'report.pdf', unit: 'page', from: '2', to: '5' },
+      { kind: 'text' }, { kind: 'marks' }, { kind: 'file', name: 'report.pdf', unit: 'page', from: '1', to: '6' },
     ]);
 
     // One section bigger than the whole budget is cut to it in the prompt; read_file keeps the whole file.
     const big: Doc = {
-      name: 'big.txt', kind: 'text', outline: [], sections: [{ label: 'part 1', text: 'z'.repeat(70_000) }],
+      name: 'big.txt', kind: 'text', outline: [], sections: [{ label: 'part 1', text: 'z'.repeat(100_000) }],
     };
     const huge = fakes({ doc: big });
     const cut = await gather(huge.deps, request(), signal());
-    expect(cut.file?.doc.sections[0].text).toHaveLength(PAGE_CHARS * 4);
-    expect(cut.doc?.sections[0].text).toHaveLength(70_000);
+    expect(cut.file?.doc.sections[0].text).toHaveLength(PAGE_CHARS * 30);
+    expect(cut.doc?.sections[0].text).toHaveLength(100_000);
     expect(cut.used).toContainEqual({ kind: 'file', name: 'big.txt', unit: 'part', from: '1', to: '1' });
 
     // An empty file, or one that can't be read, gives no file layer.
@@ -171,7 +177,7 @@ describe('gather', () => {
     const got = await gather(on.deps, request({ settings }), signal());
     expect(on.fetched).toEqual([web.address]);
     expect(got.file?.doc.name).toBe('q3 report.pdf');
-    expect(got.used).toContainEqual({ kind: 'file', name: 'q3 report.pdf', unit: 'page', from: '2', to: '5' });
+    expect(got.used).toContainEqual({ kind: 'file', name: 'q3 report.pdf', unit: 'page', from: '1', to: '6' });
 
     // An address without .pdf counts when the tab's title names a PDF.
     const titled = fakes({ file: { path: '', address: 'https://example.com/view?id=3', how: 'address' } });

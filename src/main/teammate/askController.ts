@@ -19,10 +19,10 @@ import type { BubbleState, CardState, MateAction, MateView } from '../../shared/
 import type { OverlayManager } from '../overlayManager';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
 import type { Doc } from './files';
-import { fileReadLimit, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
+import { FILE_READ_LIMIT, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
-import { firstTurn, systemPrompt, type AskContext } from './prompt';
+import { aimsExactly, firstTurn, systemPrompt, type AskContext } from './prompt';
 import {
   ProviderError, type Part, type ProviderAdapter, type RawCall, type StreamHandlers, type Turn,
 } from './providers/types';
@@ -123,9 +123,8 @@ interface Run {
   doc: Doc | null;
   used: UsedItem[];
   skipped: boolean;
-  /** File characters `read_file` has given this ask, and the most it may give. */
+  /** File characters `read_file` has given this ask. */
   fileRead: number;
-  fileReadLimit: number;
 }
 
 /** One ask and its answer as the card shows them. */
@@ -237,7 +236,7 @@ export class AskController extends EventEmitter {
       profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
       tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
-      screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, fileReadLimit: 0,
+      screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
     };
     this.run = run;
     this.shown = run;
@@ -379,9 +378,9 @@ export class AskController extends EventEmitter {
     if (!this.alive(run)) return;
     run.screenMarks = layers.marks;
     run.doc = layers.doc;
-    run.used = layers.used;
+    // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
+    run.used = aimsExactly(run.intent.def.id) ? layers.used : layers.used.filter((u) => u.kind !== 'marks');
     run.skipped = layers.skipped;
-    run.fileReadLimit = fileReadLimit(allin);
     const ctx: AskContext = {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
       shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
@@ -556,7 +555,7 @@ export class AskController extends EventEmitter {
         continue;
       }
       again = true;
-      const read = readFileTool(run.doc, call, run.fileRead, run.fileReadLimit);
+      const read = readFileTool(run.doc, call, run.fileRead, FILE_READ_LIMIT);
       run.fileRead = read.served;
       results.set(raw, [{ text: read.text }]);
     }
