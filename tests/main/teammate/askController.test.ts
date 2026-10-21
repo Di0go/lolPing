@@ -459,6 +459,32 @@ describe('AskController', () => {
     expect(last.results[0].id).toBe('l1');
     expect(last.results[0].content).toContainEqual({ image: { mime: 'image/jpeg', data: Buffer.from('zoom2-0.jpg') } });
     expect(h.bubbles().map((b) => b.line)).toEqual(['It says 42.']);
+    // The look's round goes on anyway, so the reminder to end with a line and a card costs nothing.
+    expect(last.results.at(-1)?.content.at(-1)).toEqual({ text: expect.stringMatching(/`say`.*`answer`/) });
+  });
+
+  it('asks once more when a round ends with pings and neither a line nor a card answer', async () => {
+    const h = harness({
+      steps: [
+        answers([call('ping', { type: 'danger', spot: 1 }, 'p')]),
+        answers([call('say', { text: 'B3 is empty.' })]),
+      ],
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.requests).toHaveLength(2);
+    const asked = h.requests[1].turns[2];
+    expect(asked?.role === 'tool' && asked.results[0].content.at(-1))
+      .toEqual({ text: expect.stringMatching(/`say`.*`answer`/) });
+    expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'B3 is empty.' }));
+  });
+
+  it('asks only once more when the model keeps answering with pings alone', async () => {
+    const pingOnly = answers([call('ping', { type: 'danger', spot: 1 }, 'p')]);
+    const h = harness({ steps: [pingOnly, pingOnly, pingOnly] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.requests).toHaveLength(2);
   });
 
   it('continues the thread with push and labels the bubble', async () => {
@@ -942,8 +968,9 @@ describe('AskController', () => {
       text: `${[2, 4, 5, 6].includes(n) ? 'Needle' : 'Hay'}${n} ${'.'.repeat(25_000)}`.slice(0, 25_000),
     }));
     const read: string[] = [];
+    // What read_file gave, without the reminder to say and answer that follows it.
     const toolText = (turn: Turn | undefined): string => (turn?.role === 'tool'
-      ? turn.results.flatMap((r) => r.content.flatMap((c) => ('text' in c ? [c.text] : []))).join('')
+      ? turn.results.map((r) => { const c = r.content[0]; return c && 'text' in c ? c.text : ''; }).join('')
       : '');
     const reads = (args: unknown, then: RawCall[] = []): Step => async (req, h) => {
       if (req.turns.length > 1) read.push(toolText(req.turns.at(-1)));

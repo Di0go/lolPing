@@ -77,6 +77,8 @@ const DONE: Part[] = [{ text: 'Done.' }];
 const NOT_AVAILABLE: Part[] = [{ text: 'Not available.' }];
 const INVALID: Part[] = [{ text: 'Ignored: the arguments were not valid.' }];
 const OVER_LIMIT: Part[] = [{ text: 'Ignored: an answer has at most 6 pings and 1 emote.' }];
+const ANSWER_NUDGE = 'Every ask ends with `say` (the one-line answer) and `answer` (the full answer in Markdown). '
+  + 'Call both in the same round as your pings.';
 
 interface Run {
   machine: AskMachine;
@@ -396,6 +398,7 @@ export class AskController extends EventEmitter {
       if (run.machine.phase === 'sent') this.fail(run, 'notReceived');
     });
 
+    let nudged = false;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       const result = await adapter.turn({ system, turns, tools, model: profile.model }, this.handlers(run), signal);
       if (!this.alive(run)) return;
@@ -406,7 +409,17 @@ export class AskController extends EventEmitter {
       const last = round === MAX_ROUNDS - 1;
       const step = await this.play(run, result.calls, new Set(tools.map((d) => d.name)), last);
       if (!this.alive(run)) return;
-      if (!step.again) break;
+      // Pings alone leave nothing to read. A round that goes on anyway carries the reminder for free; a round that
+      // would end the ask is followed by one more, once.
+      const unanswered = !run.line && run.markdown.length === 0 && !run.text.trim();
+      if (!step.again && (!unanswered || nudged || last)) break;
+      if (!step.again) nudged = true;
+      if (result.calls.length === 0) {
+        turns.push({ role: 'user', parts: [{ text: ANSWER_NUDGE }] });
+        continue;
+      }
+      const lastResult = step.results[step.results.length - 1];
+      if (unanswered && lastResult) lastResult.content = [...lastResult.content, { text: ANSWER_NUDGE }];
       turns.push({ role: 'tool', results: step.results });
     }
     await this.finish(run);
