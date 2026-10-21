@@ -73,8 +73,11 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 @keyframes dots { 0% { content: '' } 25% { content: '.' } 50% { content: '..' } 75% { content: '...' } }
 [data-owner="mate"] { transition: opacity .6s ease-in, scale .6s ease-in; }
 [data-owner="mate"].mate-fade { opacity: 0; scale: .92; }
-/* A kept ping skips the fade at the end of its life: its art stays, still bobbing, until it is removed. */
-.ping.kept .art, .ping.kept .tag, .ping.kept .label { animation-name: none; }
+/* A kept ping skips the fade at the end of its life: its art stays, still bobbing, until it is removed. The tag and
+   label keep their entrance (the first name of each animation list) and drop only `life`. */
+.ping.kept .art { animation-name: none; }
+.ping.kept .tag { animation-name: tagIn, none; }
+.ping.kept .label { animation-name: labelIn, none; }
 /* The receipt for a Do it ask is the teammate's tag alone, centred where the ping would be. */
 .ping.tag-only .tag { top: -10px; }
 @keyframes tagIn { from { transform: translate(-50%, 4px) } }

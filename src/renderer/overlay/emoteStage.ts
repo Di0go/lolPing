@@ -96,7 +96,8 @@ export class EmoteStage {
       img.replaceWith(envelope(bubble(), 0));
     };
     img.addEventListener('error', placeholder, { once: true });
-    // The animation plays once and does not hold a pose: a kept emote ends up as its wheel icon instead.
+    // The baked animations play once and all but one (poro_snax) end on an empty frame, so a kept emote holds its
+    // wheel icon after the animation instead.
     if (keep) {
       live.settle = () => {
         if (swapped || live.gone) return;
@@ -107,7 +108,7 @@ export class EmoteStage {
     }
     this.blob(slug).then(
       (blob) => {
-        if (live.gone) return;
+        if (live.gone || swapped) return; // a late blob must not bring the animation back over the still
         live.url = URL.createObjectURL(blob);
         img.src = live.url;
       },

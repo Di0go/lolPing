@@ -168,6 +168,24 @@ describe('EmoteStage kept emotes', () => {
     }
   });
 
+  it('keeps the icon when the animation arrives after the swap', async () => {
+    vi.useFakeTimers();
+    try {
+      const layer = new FakeElement('div');
+      let arrive: (b: Blob) => void = () => undefined;
+      const stage = new EmoteStage(layer as unknown as HTMLElement, () => new Promise((resolve) => (arrive = resolve)));
+      stage.spawn('mate', { kind: 'bundled', slug: 'facepalm' }, 10, 20, { sizePx: 150, keep: true });
+      await vi.advanceTimersByTimeAsync(3_200);
+      arrive(new Blob(['x']));
+      await vi.advanceTimersByTimeAsync(0);
+      const [still] = layer.find('emote')[0].find('still');
+      expect(still.src).toMatch(/facepalm\.png$/);
+      stage.clear('mate');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still removes an emote that is not kept after its time', async () => {
     vi.useFakeTimers();
     try {
