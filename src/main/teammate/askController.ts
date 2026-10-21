@@ -15,7 +15,9 @@ import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
 import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
-import { applyLimits, parseToolCall, toolDefs, type Target, type ToolCall } from '../../shared/teammate/tools';
+import {
+  applyLimits, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall,
+} from '../../shared/teammate/tools';
 import type { BubbleState, CardState, MateAction, MateView } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
@@ -52,6 +54,8 @@ export interface AskDeps {
   thumbnail: (jpeg: Buffer) => string;
   now: () => number;
   usage: (u: { input: number; output: number }) => void;
+  /** Carries out the copy, event, paste, fill and open calls; without it they are only kept on the run. */
+  actions?: { take(call: ActionCall): void };
   /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
   cursor?: () => Point;
   /** Makes, reads and deletes an ask's capture folder; the file system by default. */
@@ -77,7 +81,9 @@ const BUBBLE_OFFSET = { x: 24, y: -24 };
 const DONE: Part[] = [{ text: 'Done.' }];
 const NOT_AVAILABLE: Part[] = [{ text: 'Not available.' }];
 const INVALID: Part[] = [{ text: 'Ignored: the arguments were not valid.' }];
-const OVER_LIMIT: Part[] = [{ text: 'Ignored: an answer has at most 6 pings and 1 emote.' }];
+const OVER_LIMIT: Part[] = [{
+  text: 'Ignored: an answer has at most 6 pings, 1 emote, 1 paste, 1 fill, 1 event and 3 opens.',
+}];
 const ANSWER_NUDGE = 'Every ask ends with `say` (the one-line answer) and `answer` (the full answer in Markdown). '
   + 'Call both in the same round as your pings.';
 
@@ -111,6 +117,8 @@ interface Run {
   markdown: string[];
   tokens: number | null;
   calls: ToolCall[];
+  /** The action calls taken this ask, when no runner is wired. */
+  actions: ActionCall[];
   /** Says shown while their turn was still streaming: when the turn ends, play() skips each of them once. */
   early: string[];
   pings: number;
@@ -127,6 +135,10 @@ interface Run {
   /** File characters `read_file` has given this ask. */
   fileRead: number;
 }
+
+const isAction = (c: ToolCall): c is ActionCall => (
+  c.tool === 'copy' || c.tool === 'event' || c.tool === 'paste' || c.tool === 'fill' || c.tool === 'open'
+);
 
 /** One ask and its answer as the card shows them. */
 const entryPair = (
@@ -236,7 +248,7 @@ export class AskController extends EventEmitter {
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
       profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
       tokens: null,
-      calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
+      calls: [], actions: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
     };
     this.run = run;
@@ -394,7 +406,10 @@ export class AskController extends EventEmitter {
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
     // The same `file` and intent decide the tools and the prompt's rules for them, so the two never disagree.
-    let tools = toolDefs({ emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id) });
+    let tools = toolDefs({
+      emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id),
+      kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0,
+    });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
     this.deadline(run, RECEIVE_MS, () => {
@@ -557,6 +572,7 @@ export class AskController extends EventEmitter {
     pings.sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
     for (const p of pings) this.placePing(run, p);
     for (const { call } of valid) if (call.tool === 'emote') this.placeEmote(run, call);
+    for (const { call } of valid) if (isAction(call)) this.takeAction(run, call);
     for (const { raw, call } of valid) {
       if (call.tool !== 'read_file') continue;
       // Like look: no round follows the last one to read what it gives.
@@ -581,6 +597,11 @@ export class AskController extends EventEmitter {
       if (!this.alive(run)) break;
     }
     return { again, results: raws.map((raw) => ({ id: raw.id, content: results.get(raw) ?? DONE })) };
+  }
+
+  private takeAction(run: Run, call: ActionCall): void {
+    if (this.deps.actions) this.deps.actions.take(call);
+    else run.actions.push(call);
   }
 
   private async look(run: Run, area: { x: number; y: number; w: number; h: number }): Promise<Part[]> {

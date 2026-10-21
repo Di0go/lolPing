@@ -1,5 +1,7 @@
 import type { PingId } from '../pings';
 import { EMOTE_CATALOG } from '../emoteCatalog';
+import { TABLE_MAX, eventIcs, normalizeTable, type EventFields } from './grab';
+import type { IntentKind } from './intents';
 
 /** Where the model points: one of the user's spots (numbered from 1), or overview pixels that lolPing snaps. */
 export type Target = { spot: number } | { x: number; y: number };
@@ -10,7 +12,16 @@ export type ToolCall =
   | { tool: 'emote'; slug: string; at: Target }
   | { tool: 'answer'; markdown: string }
   | { tool: 'look'; x: number; y: number; w: number; h: number }
-  | { tool: 'read_file'; pages?: { from: number; to: number }; search?: string };
+  | { tool: 'read_file'; pages?: { from: number; to: number }; search?: string }
+  | { tool: 'copy'; text: string }
+  | { tool: 'copy'; table: string[][] }
+  | ({ tool: 'event' } & EventFields)
+  | { tool: 'paste'; text: string; mode: 'insert' | 'replace' }
+  | { tool: 'fill'; fields: { id: string; value: string }[] }
+  | { tool: 'open'; url: string };
+
+/** The calls that put something into the user's world; the action runner carries them out after asking. */
+export type ActionCall = Extract<ToolCall, { tool: 'copy' | 'event' | 'paste' | 'fill' | 'open' }>;
 
 export interface ToolDef {
   name: string;
@@ -25,6 +36,15 @@ const MAX_SAY = 600;
 const MAX_ANSWER = 20_000;
 const MAX_LABEL = 20;
 const MAX_SEARCH = 200;
+const MAX_COPY = 20_000;
+const MAX_PASTE = 20_000;
+const MAX_FILL_FIELDS = 60;
+const MAX_FILL_VALUE = 2_000;
+const MAX_EVENT_TITLE = 200;
+const MAX_EVENT_LOCATION = 200;
+const MAX_EVENT_NOTES = 2_000;
+const MAX_URL = 2_000;
+const MAX_OPENS = 3;
 
 /** The pings the teammate may place. On My Way is lolPing's own receipt and Translate is not a ping meaning. */
 export const MATE_PINGS = [
@@ -38,7 +58,15 @@ const POINT_PROPS = {
   spot: { type: 'integer', description: "Number of one of the user's spots, instead of x and y." },
 };
 
-export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean; look: boolean }): ToolDef[] {
+export function toolDefs(opts: {
+  emotes: boolean;
+  spots: number;
+  file: boolean;
+  look: boolean;
+  kind: IntentKind;
+  /** Form fields were read, so `fill` has ids to use. */
+  form: boolean;
+}): ToolDef[] {
   const spotNote = opts.spots > 0 ? ` The user marked ${opts.spots} spot${opts.spots === 1 ? '' : 's'}.` : '';
   const defs: ToolDef[] = [
     {
@@ -106,6 +134,91 @@ export function toolDefs(opts: { emotes: boolean; spots: number; file: boolean; 
       },
     });
   }
+  if (opts.kind === 'grab' || opts.kind === 'act') {
+    defs.push({
+      name: 'copy',
+      description: 'Put text or a table on the clipboard, after the user agrees. Give `text`, or `table` for a table.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: `The exact text, at most ${MAX_COPY} characters.` },
+          table: {
+            type: 'array',
+            description: `A table as rows of cells, at most ${TABLE_MAX.rows} rows of ${TABLE_MAX.cols} cells.`,
+            items: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    });
+  }
+  if (opts.kind === 'grab') {
+    defs.push({
+      name: 'event',
+      description: 'Offer a calendar event for a date or an event on the screen, after the user agrees. Times are '
+        + 'local, "YYYY-MM-DDTHH:mm". Give just a date, "YYYY-MM-DD", for an all-day event; then `end` is the last '
+        + 'day of the event, inclusive.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: `At most ${MAX_EVENT_TITLE} characters.` },
+          start: { type: 'string', description: '"YYYY-MM-DDTHH:mm", or "YYYY-MM-DD" for an all-day event.' },
+          end: { type: 'string', description: 'The same format as start. Leave it out when the screen gives no end.' },
+          location: { type: 'string', description: `At most ${MAX_EVENT_LOCATION} characters.` },
+          notes: { type: 'string', description: `At most ${MAX_EVENT_NOTES} characters.` },
+        },
+        required: ['title', 'start'],
+      },
+    });
+  }
+  if (opts.kind === 'act') {
+    defs.push({
+      name: 'paste',
+      description: 'Paste text into the text field or editor the user pinged, after the user agrees. Use at most one.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: `The finished text, at most ${MAX_PASTE} characters.` },
+          mode: {
+            type: 'string',
+            enum: ['insert', 'replace'],
+            description: '`insert` at the caret, or `replace` to overwrite the text that is selected.',
+          },
+        },
+        required: ['text', 'mode'],
+      },
+    });
+  }
+  if (opts.kind === 'act' && opts.form) {
+    defs.push({
+      name: 'fill',
+      description: 'Fill form fields from the list of form fields; the user sees them first. Use at most one. A '
+        + 'checkbox value is exactly `on` or `off`. A radio button is chosen by giving its id any value. Never fill a '
+        + 'field marked "secure, never fill".',
+      parameters: {
+        type: 'object',
+        properties: {
+          fields: {
+            type: 'array',
+            description: `At most ${MAX_FILL_FIELDS} fields.`,
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'The id from the form fields list.' },
+                value: { type: 'string', description: `At most ${MAX_FILL_VALUE} characters.` },
+              },
+              required: ['id', 'value'],
+            },
+          },
+        },
+        required: ['fields'],
+      },
+    });
+  }
+  defs.push({
+    name: 'open',
+    description: 'Open a web link in the browser, after the user agrees. Only http and https links.',
+    parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+  });
   return defs;
 }
 
@@ -135,6 +248,61 @@ function pageRange(v: unknown): { from: number; to: number } | null {
   const from = Number(m[1]);
   const to = m[2] === undefined ? from : Number(m[2]);
   return from >= 1 && from <= to ? { from, to } : null;
+}
+
+/** Text that must arrive as given, not trimmed or cut: null when blank, over the limit or not a string. */
+function exactText(v: unknown, max: number): string | null {
+  return typeof v === 'string' && v.trim() !== '' && v.length <= max ? v : null;
+}
+
+/** Trimmed text for an event field: undefined when absent or empty, null when over the limit or not a string. */
+function optionalText(v: unknown, max: number): string | undefined | null {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (t === '') return undefined;
+  return t.length <= max ? t : null;
+}
+
+function fillFields(v: unknown): { id: string; value: string }[] | null {
+  if (!Array.isArray(v) || v.length === 0 || v.length > MAX_FILL_FIELDS) return null;
+  // The last value for an id wins; the Map keeps the id's first place in the list.
+  const byId = new Map<string, string>();
+  for (const f of v as unknown[]) {
+    if (!isRecord(f) || typeof f.id !== 'string' || f.id === '') return null;
+    const value = typeof f.value === 'number' && Number.isFinite(f.value) ? String(f.value) : f.value;
+    if (typeof value !== 'string' || value.length > MAX_FILL_VALUE) return null;
+    byId.set(f.id, value);
+  }
+  return [...byId].map(([id, value]) => ({ id, value }));
+}
+
+function eventCall(a: Record<string, unknown>): ToolCall | null {
+  const title = optionalText(a.title, MAX_EVENT_TITLE);
+  const end = optionalText(a.end, 40);
+  const location = optionalText(a.location, MAX_EVENT_LOCATION);
+  const notes = optionalText(a.notes, MAX_EVENT_NOTES);
+  if (!title || typeof a.start !== 'string' || end === null || location === null || notes === null) return null;
+  const event: EventFields = {
+    title,
+    start: a.start.trim(),
+    ...(end !== undefined ? { end } : {}),
+    ...(location !== undefined ? { location } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+  };
+  // eventIcs is the one judge of the dates (a real day, an end not before the start); the zone doesn't change that.
+  return eventIcs(event, { uid: 'check', now: 0, zoneOffset: () => 0 }) === null ? null : { tool: 'event', ...event };
+}
+
+function webUrl(v: unknown): string | null {
+  const t = typeof v === 'string' ? v.trim() : '';
+  if (t === '' || t.length > MAX_URL) return null;
+  try {
+    const { protocol } = new URL(t);
+    return protocol === 'http:' || protocol === 'https:' ? t : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Turns one model tool call into a ToolCall; anything malformed is null. */
@@ -184,18 +352,51 @@ export function parseToolCall(name: string, args: unknown): ToolCall | null {
       if (!pages && search === null) return null;
       return { tool: 'read_file', ...(pages ? { pages } : {}), ...(search !== null ? { search } : {}) };
     }
+    case 'copy': {
+      // A table wins when both come: a model may add the table's text as well.
+      const table = a.table === undefined ? null : normalizeTable(a.table);
+      if (table) return { tool: 'copy', table };
+      const t = exactText(a.text, MAX_COPY);
+      return t === null ? null : { tool: 'copy', text: t };
+    }
+    case 'paste': {
+      const t = exactText(a.text, MAX_PASTE);
+      const mode = a.mode === undefined ? 'insert' : a.mode;
+      return t !== null && (mode === 'insert' || mode === 'replace') ? { tool: 'paste', text: t, mode } : null;
+    }
+    case 'fill': {
+      const fields = fillFields(a.fields);
+      return fields ? { tool: 'fill', fields } : null;
+    }
+    case 'event':
+      return eventCall(a);
+    case 'open': {
+      const url = webUrl(a.url);
+      return url === null ? null : { tool: 'open', url };
+    }
     default:
       return null;
   }
 }
 
-/** Keeps the first MAX_PINGS pings and MAX_EMOTES emote in arrival order; say and answer always stay. */
+/**
+ * Keeps the first MAX_PINGS pings, MAX_EMOTES emote, one paste, one fill, one event and MAX_OPENS opens in arrival
+ * order; every other call always stays.
+ */
 export function applyLimits(calls: readonly ToolCall[]): ToolCall[] {
   let pings = 0;
   let emotes = 0;
+  let pastes = 0;
+  let fills = 0;
+  let events = 0;
+  let opens = 0;
   return calls.filter((c) => {
     if (c.tool === 'ping') return pings++ < MAX_PINGS;
     if (c.tool === 'emote') return emotes++ < MAX_EMOTES;
+    if (c.tool === 'paste') return pastes++ < 1;
+    if (c.tool === 'fill') return fills++ < 1;
+    if (c.tool === 'event') return events++ < 1;
+    if (c.tool === 'open') return opens++ < MAX_OPENS;
     return true;
   });
 }

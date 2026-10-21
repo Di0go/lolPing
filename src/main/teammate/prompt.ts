@@ -2,6 +2,7 @@ import { EMOTE_CATALOG } from '../../shared/emoteCatalog';
 import { LANGUAGE_NAMES, type Lang } from '../../shared/i18n';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
 import { physicalBoxToOverview, type Shot } from '../../shared/teammate/coords';
+import { neverFill, type FormField } from '../../shared/teammate/doRules';
 import type { ThreadRecord } from '../../shared/teammate/history';
 import type { PingId } from '../../shared/pings';
 import type { intentFor } from '../../shared/teammate/intents';
@@ -29,8 +30,12 @@ export interface AskContext {
   system: SystemTextLayer | null;
   /** The file behind the window, with the sections (inclusive indexes) that go in the prompt. */
   file: { doc: Doc; from: number; to: number } | null;
+  /** The form fields in the window, for `fill`; the values of secure fields are never printed. */
+  fields?: FormField[];
 }
 
+const FIELDS_LISTED = 60;
+const FIELD_LABEL_MAX = 120;
 const THREAD_TOKEN_BUDGET = 6000;
 const CHARS_PER_TOKEN = 4;
 const TOKENS_PER_IMAGE = 800;
@@ -87,10 +92,13 @@ export const TASKS: Readonly<Record<PingId, { name: string; brief: string }>> = 
     name: 'Do it for me',
     brief: 'The user hands this job to you: they want it done, not explained, and not handed back. Work out the job from '
       + 'the spot and the words: reply to the message, fill in the values for the form, fix the code or the text, finish '
-      + 'what was started, or work out the result. Do the whole job yourself and put the finished result in `answer`, '
-      + 'ready to copy: a reply or other text as plain text with nothing before it, code in a code block, form values as '
-      + '"Field: value" lines. The line says what you did, like "Wrote a reply that accepts Friday". Mark what the result '
-      + 'is for with a `visioncleared` ping.',
+      + 'what was started, or work out the result. Do the whole job yourself. When the spot is a text field or an '
+      + 'editor, call `paste` with the finished text: mode `insert` to add it at the caret, or `replace` to rewrite the '
+      + 'text that is selected. When the context lists form fields, call `fill` with the id and value of each field you '
+      + 'can fill; never fill a field marked "secure, never fill". lolPing asks the user before it pastes or fills. '
+      + 'Either way, still put the finished result in `answer`, ready to copy: a reply or other text as plain text '
+      + 'with nothing before it, code in a code block, form values as "Field: value" lines. The line says what you '
+      + 'did, like "Wrote a reply that accepts Friday". Mark what the result is for with a `visioncleared` ping.',
   },
   needvision: {
     name: 'Look it up',
@@ -108,8 +116,10 @@ export const TASKS: Readonly<Record<PingId, { name: string; brief: string }>> = 
     name: 'Grab',
     brief: 'Lift the content at the spot off the screen exactly as it is: text, a table, a date, an address, a number '
       + 'or code. Put it in `answer` ready to copy: text as plain text, a table as a Markdown table, code in a code '
-      + 'block, a date or an event as its fields. Keep it exact. The line says what you grabbed, like "Grabbed the '
-      + 'price table, 4 rows". Ping what you grabbed with `enemyvision`.',
+      + 'block, a date or an event as its fields. Keep it exact. Then call `copy` with the same content so it is on '
+      + 'the user\'s clipboard: `text` for text or code, or `table` (a list of rows, each a list of cells) for a table. '
+      + 'For a date or an event, call `event` with its title, start, end, place and notes instead. The line says what '
+      + 'you grabbed, like "Grabbed the price table, 4 rows". Ping what you grabbed with `enemyvision`.',
   },
   generic: {
     name: 'Ask with words',
@@ -120,8 +130,10 @@ export const TASKS: Readonly<Record<PingId, { name: string; brief: string }>> = 
     name: 'Polish',
     brief: 'Rewrite the text at the spot so it reads better: clearer, with correct grammar and spelling, the same '
       + 'meaning, the same language and the same tone. Start `answer` with the rewrite as plain text, ready to copy, '
-      + 'then a short list of what changed. The line says the main change, like "Tightened it and fixed two typos". '
-      + 'Mark the text you polished with a `visioncleared` ping.',
+      + 'then a short list of what changed. When the text is in an editable field, call `paste` with mode `replace` '
+      + 'and the rewrite, which overwrites the selected text; otherwise call `copy` with the rewrite. The line says '
+      + 'the main change, like "Tightened it and fixed two typos". Mark the text you polished with a `visioncleared` '
+      + 'ping.',
   },
   missingflip: {
     name: 'Translate',
@@ -159,8 +171,9 @@ export function systemPrompt(ctx: AskContext): string {
     '- The app and the window title say what the user is doing.',
     '- Never ask the user a question back or ask for more detail. Take the most likely reading, answer it, and say in '
     + 'the line what you assumed when it was a guess.',
-    "- You can't click, type, paste or copy for the user. When the task is to do something, do all of the work yourself "
-    + 'and give the finished result in `answer`, ready to copy. Never hand the job back to the user.',
+    "- You can't click or type for the user. You can only do what your tools offer (`copy`, `paste`, `fill`, `event`, "
+    + '`open`), and lolPing asks the user before each one. When the task is to do something, do all of the work '
+    + 'yourself and give the finished result in `answer`, ready to copy. Never hand the job back to the user.',
     '',
     'How to answer (the same for every ask):',
     '1. Call `say` with one sentence that is the answer or the result itself, shown in a bubble at the spot. No '
@@ -259,6 +272,16 @@ function focusSection(focus: NonNullable<SystemTextLayer['focus']>): string {
   return focus.value ? `${head}\n${focus.value}` : head;
 }
 
+/** One field per line. A secure field, or one labelled like a card number, shows no value, whatever it holds. */
+function fieldsSection(fields: FormField[]): string {
+  const rows = fields.slice(0, FIELDS_LISTED).map((f) => {
+    const label = oneLine(f.label).slice(0, FIELD_LABEL_MAX);
+    const value = neverFill(f) ? 'secure, never fill' : oneLine(f.value);
+    return `${oneLine(f.id)} | ${f.kind} | ${label} | ${value} | ${f.options.map(oneLine).join('; ')}`;
+  });
+  return ['Form fields (id | kind | label | value | options):', ...rows].join('\n');
+}
+
 function fileSection({ doc, from, to }: NonNullable<AskContext['file']>): string {
   const head = `File: ${doc.name} (${doc.kind}), outline: ${doc.outline.join('; ')}`;
   const shown = doc.sections.slice(Math.max(from, 0), to + 1).map((sec) => `${sec.label}:\n${sec.text}`);
@@ -275,6 +298,7 @@ function contextSections(ctx: AskContext): string[] {
     if (system.focus) out.push(focusSection(system.focus));
     if (system.address) out.push(`Browser address:\n${system.address}`);
   }
+  if (ctx.fields && ctx.fields.length > 0) out.push(fieldsSection(ctx.fields));
   if (ctx.marks.length > 0 && aimsExactly(ctx.intent.def.id)) {
     const lines = ctx.marks.map((m) => {
       const b = physicalBoxToOverview(ctx.shot, m.box);

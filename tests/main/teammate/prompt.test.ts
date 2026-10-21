@@ -6,6 +6,7 @@ import { MATE_PINGS } from '../../../src/shared/teammate/tools';
 import { DEFAULT_TEAMMATE, type IntentOverride, type TeammateSettings } from '../../../src/shared/teammate/settings';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 import type { SystemTextLayer } from '../../../src/shared/teammate/contextProtocol';
+import type { FormField } from '../../../src/shared/teammate/doRules';
 import type { Doc } from '../../../src/main/teammate/files/doc';
 
 const MATE_SET = Object.fromEntries(MATE_PINGS.map((id) => [id, true]));
@@ -305,5 +306,73 @@ describe('teammate prompt context', () => {
     expect(systemPrompt(ctx({ file }))).toContain(
       "Call `read_file` with pages or a search for parts of the file you weren't given.",
     );
+  });
+});
+
+describe('teammate prompt action briefs', () => {
+  const field = (over: Partial<FormField>): FormField => ({
+    id: 'f1', kind: 'text', label: 'Name', group: '', value: '', secure: false, required: false, options: [], ...over,
+  });
+
+  it('lists form fields without the value of a secure one', () => {
+    const body = bodyOf(ctx({
+      intent: intentFor(DEFAULT_TEAMMATE, 'omw', 'en'),
+      fields: [
+        field({ id: 'f1', label: 'Full name', value: 'Sam Lee' }),
+        field({ id: 'f2', kind: 'combo', label: 'Country', value: 'Peru', options: ['Chile', 'Peru'] }),
+        field({ id: 'f3', label: 'Password', value: 'hunter2', secure: true }),
+        field({ id: 'f4', label: 'Card number', value: '4111111111111111' }),
+        field({ id: 'f5', label: '身份证号', value: '110101199001011234' }),
+        field({ id: 'f6', kind: 'checkbox', label: 'Subscribe', value: 'off' }),
+      ],
+    }));
+    expect(body).toContain('Form fields (id | kind | label | value | options):');
+    expect(body).toContain('f1 | text | Full name | Sam Lee |');
+    expect(body).toContain('f2 | combo | Country | Peru | Chile; Peru');
+    expect(body).toContain('f3 | text | Password | secure, never fill |');
+    expect(body).toContain('f4 | text | Card number | secure, never fill |');
+    expect(body).toContain('f5 | text | 身份证号 | secure, never fill |');
+    expect(body).toContain('f6 | checkbox | Subscribe | off |');
+    for (const secret of ['hunter2', '4111111111111111', '110101199001011234']) expect(body).not.toContain(secret);
+    expect(body).toContain(DATA_LINE);
+  });
+
+  it('keeps each field on one line and lists at most 60, with labels cut to 120 characters', () => {
+    const many = Array.from({ length: 70 }, (_, i) => field({ id: `f${i}`, label: 'L'.repeat(200) }));
+    const body = bodyOf(ctx({ fields: many }));
+    expect(body).toContain('f59 | text |');
+    expect(body).not.toContain('f60 | text |');
+    expect(body).toContain(`| ${'L'.repeat(120)} |`);
+    expect(body).not.toContain('L'.repeat(121));
+    const lines = bodyOf(ctx({ fields: [field({ label: 'a\nb', value: 'x\ny' })] }));
+    expect(lines).toContain('f1 | text | a b | x y |');
+  });
+
+  it('leaves the form section out when no fields were read', () => {
+    expect(bodyOf(ctx())).not.toContain('Form fields');
+    expect(bodyOf(ctx({ fields: [] }))).not.toContain('Form fields');
+  });
+
+  it('asks Do it to paste the finished text', () => {
+    const brief = TASKS.omw.brief;
+    expect(brief).toContain('call `paste` with the finished text');
+    expect(brief).toContain('mode `insert`');
+    expect(brief).toContain('`replace`');
+    expect(brief).toContain('call `fill`');
+    expect(brief).toContain('secure, never fill');
+    expect(brief).toContain('in `answer`');
+    expect(systemPrompt(ctx({ intent: intentFor(DEFAULT_TEAMMATE, 'omw', 'en') }))).toContain(brief);
+  });
+
+  it('asks Grab to copy or add an event and Polish to paste a replacement', () => {
+    expect(TASKS.enemyvision.brief).toContain('`copy`');
+    expect(TASKS.enemyvision.brief).toContain('`table`');
+    expect(TASKS.enemyvision.brief).toContain('`event`');
+    expect(TASKS.visioncleared.brief).toContain('`paste` with mode `replace`');
+    expect(TASKS.visioncleared.brief).toContain('`copy`');
+  });
+
+  it('no longer says the teammate cannot paste or copy', () => {
+    expect(systemPrompt(ctx())).not.toMatch(/can't click, type, paste or copy/);
   });
 });

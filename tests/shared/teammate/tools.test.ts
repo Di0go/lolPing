@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { applyLimits, parseToolCall, toolDefs, type ToolCall } from '../../../src/shared/teammate/tools';
 import { EMOTE_CATALOG } from '../../../src/shared/emoteCatalog';
 
+const OFF = { emotes: false, spots: 1, file: false, look: false, kind: 'answer', form: false } as const;
+type Opts = Parameters<typeof toolDefs>[0];
+const names = (o: Partial<Opts> = {}): string[] => toolDefs({ ...OFF, ...o }).map((d) => d.name);
 const ping = (n: number): ToolCall => ({ tool: 'ping', type: 'danger', at: { x: n, y: n } });
 
 describe('tools', () => {
@@ -58,10 +61,9 @@ describe('tools', () => {
   });
 
   it('offers read_file only with a file', () => {
-    const names = (file: boolean) => toolDefs({ emotes: true, spots: 1, file, look: true }).map((d) => d.name);
-    expect(names(true)).toContain('read_file');
-    expect(names(false)).not.toContain('read_file');
-    const ping = toolDefs({ emotes: false, spots: 1, file: false, look: true }).find((d) => d.name === 'ping');
+    expect(names({ file: true })).toContain('read_file');
+    expect(names({ file: false })).not.toContain('read_file');
+    const ping = toolDefs({ ...OFF, look: true }).find((d) => d.name === 'ping');
     const props = Object.keys((ping?.parameters.properties ?? {}) as object);
     expect(props).toEqual(expect.arrayContaining(['x', 'y', 'spot']));
     expect(props).not.toContain('mark');
@@ -111,17 +113,146 @@ describe('tools', () => {
   });
 
   it('offers look only when the ask may use it', () => {
-    expect(toolDefs({ emotes: false, spots: 1, file: false, look: false }).map((t) => t.name))
-      .toEqual(['say', 'ping', 'answer']);
+    expect(names()).toEqual(['say', 'ping', 'answer', 'open']);
   });
 
   it('leaves emote out of the tool list when emotes are off', () => {
-    expect(toolDefs({ emotes: false, spots: 1, file: false, look: true }).map((t) => t.name))
-      .toEqual(['say', 'ping', 'answer', 'look']);
-    const on = toolDefs({ emotes: true, spots: 1, file: false, look: true });
+    expect(names({ look: true })).toEqual(['say', 'ping', 'answer', 'look', 'open']);
+    const on = toolDefs({ ...OFF, emotes: true, look: true });
     expect(on.map((t) => t.name)).toContain('emote');
     const params = on.find((t) => t.name === 'ping')?.parameters as { properties: { type: { enum: string[] } } };
     expect(params.properties.type.enum).not.toContain('omw');
     expect(params.properties.type.enum).not.toContain('missingflip');
+  });
+
+  it('parses copy text and copy table', () => {
+    expect(parseToolCall('copy', { text: 'Grabbed\n  text' })).toEqual({ tool: 'copy', text: 'Grabbed\n  text' });
+    expect(parseToolCall('copy', { table: [['a', 'b'], ['1']] })).toEqual({
+      tool: 'copy', table: [['a', 'b'], ['1', '']],
+    });
+    expect(parseToolCall('copy', { text: 'x', table: [['a']] })).toEqual({ tool: 'copy', table: [['a']] });
+    expect(parseToolCall('copy', { text: '   ' })).toBeNull();
+    expect(parseToolCall('copy', { text: 'a'.repeat(20_001) })).toBeNull();
+    expect(parseToolCall('copy', { text: 'a'.repeat(20_000) })).toMatchObject({ tool: 'copy' });
+    expect(parseToolCall('copy', { table: [] })).toBeNull();
+    expect(parseToolCall('copy', { table: Array.from({ length: 51 }, () => ['x']) })).toBeNull();
+    expect(parseToolCall('copy', {})).toBeNull();
+  });
+
+  it('parses paste with a mode and drops text over 20,000 characters', () => {
+    expect(parseToolCall('paste', { text: '  Hi\n', mode: 'replace' })).toEqual({
+      tool: 'paste', text: '  Hi\n', mode: 'replace',
+    });
+    expect(parseToolCall('paste', { text: 'Hi' })).toEqual({ tool: 'paste', text: 'Hi', mode: 'insert' });
+    expect(parseToolCall('paste', { text: 'Hi', mode: 'append' })).toBeNull();
+    expect(parseToolCall('paste', { text: '\n' })).toBeNull();
+    expect(parseToolCall('paste', { text: 'a'.repeat(20_001), mode: 'insert' })).toBeNull();
+  });
+
+  it('parses fill, keeping the last value for an id listed twice', () => {
+    const twice = { fields: [{ id: 'a', value: '1' }, { id: 'b', value: 'on' }, { id: 'a', value: '2' }] };
+    expect(parseToolCall('fill', twice)).toEqual({
+      tool: 'fill', fields: [{ id: 'a', value: '2' }, { id: 'b', value: 'on' }],
+    });
+    expect(parseToolCall('fill', { fields: [{ id: 'n', value: 3 }, { id: 'e', value: '' }] })).toEqual({
+      tool: 'fill', fields: [{ id: 'n', value: '3' }, { id: 'e', value: '' }],
+    });
+    expect(parseToolCall('fill', '{"fields":[{"id":"a","value":"x"}]}')).toMatchObject({ tool: 'fill' });
+    expect(parseToolCall('fill', { fields: [] })).toBeNull();
+    expect(parseToolCall('fill', { fields: [{ id: '', value: 'x' }] })).toBeNull();
+    expect(parseToolCall('fill', { fields: [{ id: 'a' }] })).toBeNull();
+    expect(parseToolCall('fill', { fields: 'a' })).toBeNull();
+    const many = Array.from({ length: 61 }, (_, i) => ({ id: `f${i}`, value: 'x' }));
+    expect(parseToolCall('fill', { fields: many })).toBeNull();
+    expect(parseToolCall('fill', { fields: many.slice(0, 60) })).toMatchObject({ tool: 'fill' });
+  });
+
+  it('drops a fill with a value over 2,000 characters but keeps the rest of the answer', () => {
+    expect(parseToolCall('fill', { fields: [{ id: 'a', value: 'x'.repeat(2001) }] })).toBeNull();
+    expect(parseToolCall('fill', { fields: [{ id: 'a', value: 'x'.repeat(2000) }] })).toMatchObject({ tool: 'fill' });
+    const calls = [
+      parseToolCall('fill', { fields: [{ id: 'a', value: 'x'.repeat(2001) }] }),
+      parseToolCall('say', { text: 'Filled it' }),
+      parseToolCall('answer', { markdown: 'Name: Sam' }),
+    ].filter((c): c is ToolCall => c !== null);
+    expect(applyLimits(calls).map((c) => c.tool)).toEqual(['say', 'answer']);
+  });
+
+  it('parses event and drops one that is invalid or over its limits', () => {
+    expect(parseToolCall('event', { title: ' Dinner ', start: '2026-11-05T19:00', end: '2026-11-05T21:00' })).toEqual({
+      tool: 'event', title: 'Dinner', start: '2026-11-05T19:00', end: '2026-11-05T21:00',
+    });
+    expect(parseToolCall('event', {
+      title: 'Trip', start: '2026-11-05', end: '2026-11-07', location: 'Lisbon', notes: 'Bring a coat', extra: 1,
+    })).toEqual({
+      tool: 'event', title: 'Trip', start: '2026-11-05', end: '2026-11-07', location: 'Lisbon', notes: 'Bring a coat',
+    });
+    expect(parseToolCall('event', { title: 'A', start: '2026-11-05', end: '', location: '' })).toEqual({
+      tool: 'event', title: 'A', start: '2026-11-05',
+    });
+    expect(parseToolCall('event', { title: '', start: '2026-11-05' })).toBeNull();
+    expect(parseToolCall('event', { title: 'A', start: 'tomorrow' })).toBeNull();
+    expect(parseToolCall('event', { title: 'A', start: '2026-02-30' })).toBeNull();
+    expect(parseToolCall('event', { title: 'A', start: '2026-11-05T10:00', end: '2026-11-05T09:00' })).toBeNull();
+    expect(parseToolCall('event', { title: 'a'.repeat(201), start: '2026-11-05' })).toBeNull();
+    expect(parseToolCall('event', { title: 'a'.repeat(200), start: '2026-11-05' })).toMatchObject({ tool: 'event' });
+    expect(parseToolCall('event', { title: 'A', start: '2026-11-05', location: 'l'.repeat(201) })).toBeNull();
+    expect(parseToolCall('event', { title: 'A', start: '2026-11-05', notes: 'n'.repeat(2001) })).toBeNull();
+    expect(parseToolCall('event', { title: 'A', start: '2026-11-05', notes: 'n'.repeat(2000) })).toMatchObject({
+      tool: 'event',
+    });
+  });
+
+  it('accepts only http and https URLs for open', () => {
+    expect(parseToolCall('open', { url: ' https://example.com/a?b=1 ' })).toEqual({
+      tool: 'open', url: 'https://example.com/a?b=1',
+    });
+    expect(parseToolCall('open', { url: 'http://localhost:3000' })).toMatchObject({ tool: 'open' });
+    for (const url of [
+      'file:///C:/Windows/System32/calc.exe', 'javascript:alert(1)', 'ms-settings:privacy', 'mailto:a@b.c',
+      'data:text/html,hi', 'example.com', '//example.com', '', 'https://', 'C:\\Windows\\notepad.exe',
+    ]) expect(parseToolCall('open', { url })).toBeNull();
+    expect(parseToolCall('open', { url: `https://example.com/${'a'.repeat(2000)}` })).toBeNull();
+    expect(parseToolCall('open', { url: 5 })).toBeNull();
+  });
+
+  it('offers paste and fill only for act asks', () => {
+    for (const kind of ['answer', 'continue', 'guide', 'grab', 'words', 'save'] as const) {
+      expect(names({ kind, form: true })).not.toContain('paste');
+      expect(names({ kind, form: true })).not.toContain('fill');
+    }
+    expect(names({ kind: 'act' })).toContain('paste');
+    expect(names({ kind: 'act', form: true })).toEqual(expect.arrayContaining(['paste', 'fill']));
+  });
+
+  it('offers fill only when form fields were read', () => {
+    expect(names({ kind: 'act', form: false })).not.toContain('fill');
+    expect(names({ kind: 'act', form: true })).toContain('fill');
+  });
+
+  it('offers copy for grab and act, event for grab, and open for every kind', () => {
+    for (const kind of ['answer', 'continue', 'guide', 'act', 'grab', 'words', 'save'] as const) {
+      const offered = names({ kind });
+      expect(offered).toContain('open');
+      expect(offered.includes('copy')).toBe(kind === 'grab' || kind === 'act');
+      expect(offered.includes('event')).toBe(kind === 'grab');
+    }
+  });
+
+  it('tells the model how checkboxes, radios and all-day events work', () => {
+    const fill = toolDefs({ ...OFF, kind: 'act', form: true }).find((d) => d.name === 'fill');
+    expect(fill?.description).toMatch(/`on` or `off`/);
+    expect(fill?.description).toMatch(/radio/);
+    const event = toolDefs({ ...OFF, kind: 'grab' }).find((d) => d.name === 'event');
+    expect(event?.description).toMatch(/last day/);
+  });
+
+  it('refuses a second paste in one answer', () => {
+    const paste = (text: string): ToolCall => ({ tool: 'paste', text, mode: 'insert' });
+    const fill: ToolCall = { tool: 'fill', fields: [{ id: 'a', value: 'x' }] };
+    const event: ToolCall = { tool: 'event', title: 'A', start: '2026-11-05' };
+    const open = (n: number): ToolCall => ({ tool: 'open', url: `https://example.com/${n}` });
+    const calls = [paste('one'), paste('two'), fill, fill, event, event, open(1), open(2), open(3), open(4)];
+    expect(applyLimits(calls)).toEqual([calls[0], calls[2], calls[4], calls[6], calls[7], calls[8]]);
   });
 });

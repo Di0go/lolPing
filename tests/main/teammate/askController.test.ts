@@ -11,7 +11,7 @@ import { zoomRect, type Rect } from '../../../src/shared/teammate/coords';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 import { bubbleMs } from '../../../src/shared/teammate/line';
 import { DEFAULT_TEAMMATE, type BuiltinProfile, type TeammateSettings } from '../../../src/shared/teammate/settings';
-import type { ToolDef } from '../../../src/shared/teammate/tools';
+import type { ActionCall, ToolDef } from '../../../src/shared/teammate/tools';
 import type { BubbleState, CardState } from '../../../src/shared/teammateIpc';
 
 /** One physical display at 200 %: overlay CSS px and DIPs are half the physical px; the overview is half too. */
@@ -67,6 +67,8 @@ interface HarnessOptions {
   onAdapter?: (key: string) => void;
   /** What the context helper and the file readers find; tests may change it between asks. */
   screen?: Partial<Screen>;
+  /** Wires an action runner that records the calls it is given. */
+  recordActions?: boolean;
 }
 
 interface Screen {
@@ -90,6 +92,7 @@ function harness(opts: HarnessOptions = {}) {
   const adapters: string[] = [];
   const tickets: string[] = [];
   const appends: Array<{ threadId: string | null; line: string; markdown: string }> = [];
+  const taken: ActionCall[] = [];
   const states: boolean[] = [];
   let current: ThreadRecord | null = null;
   let captures = 0;
@@ -225,6 +228,7 @@ function harness(opts: HarnessOptions = {}) {
     now: () => Date.now() + skew,
     usage: () => undefined,
     cursor: () => ({ x: 1200, y: 900 }),
+    ...(opts.recordActions ? { actions: { take: (c: ActionCall) => void taken.push(c) } } : {}),
     files: {
       read: async (p) => Buffer.from(p),
       makeDir: async (d) => void disk.add(d),
@@ -238,7 +242,7 @@ function harness(opts: HarnessOptions = {}) {
 
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
-    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen,
+    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen, taken,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -943,6 +947,122 @@ describe('AskController', () => {
     const last = second[second.length - 1];
     expect(last.role === 'tool' && last.results.map((r) => r.id)).toEqual(['p', 'e1', 'e2', 's']);
     expect(last.role === 'tool' && last.results[0].content).toEqual([{ text: 'Not available.' }]);
+  });
+
+  describe('action tools', () => {
+    const toolNames = (h: ReturnType<typeof harness>): string[] => h.requests[0].tools.map((d) => d.name);
+    const results = (turns: Turn[]): Array<{ id: string; content: unknown }> => {
+      const last = turns[turns.length - 1];
+      return last.role === 'tool' ? last.results : [];
+    };
+
+    it('offers each ask the action tools of its kind', async () => {
+      const said = answers([call('say', { text: 'Ok.' })]);
+      const h = harness({ steps: [said, said, said] });
+      h.ctl.ask(spot('missing'));
+      await flush();
+      h.ctl.ask(spot('enemyvision', 1300, 900));
+      await flush();
+      h.ctl.ask(spot('omw', 1500, 900));
+      await flush();
+      const names = h.requests.map((r) => r.tools.map((d) => d.name));
+      expect(names[0]).toEqual(expect.arrayContaining(['open']));
+      expect(names[0]).not.toEqual(expect.arrayContaining(['copy']));
+      expect(names[1]).toEqual(expect.arrayContaining(['copy', 'event', 'open']));
+      expect(names[1]).not.toContain('paste');
+      expect(names[2]).toEqual(expect.arrayContaining(['copy', 'paste', 'open']));
+      expect(names[2]).not.toContain('fill');
+      expect(names[2]).not.toContain('event');
+    });
+
+    it('hands each valid action call to the runner once and tells the model Done', async () => {
+      let second: Turn[] = [];
+      const h = harness({
+        recordActions: true,
+        steps: [
+          answers([
+            call('paste', { text: 'Friday works.', mode: 'insert' }, 'p'),
+            call('copy', { text: 'Friday works.' }, 'c'),
+            call('open', { url: 'https://example.com' }, 'o'),
+            call('say', { text: 'Wrote a reply.' }, 's'),
+            // Not offered to Do it without form fields: its result brings a second round, which shows the others.
+            call('fill', { fields: [{ id: 'a', value: 'x' }] }, 'f'),
+          ]),
+          async (req) => {
+            second = [...req.turns];
+            return { text: '', calls: [] };
+          },
+        ],
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      expect(h.taken).toEqual([
+        { tool: 'paste', text: 'Friday works.', mode: 'insert' },
+        { tool: 'copy', text: 'Friday works.' },
+        { tool: 'open', url: 'https://example.com' },
+      ]);
+      const done = [{ text: 'Done.' }];
+      expect(results(second).map((r) => r.content)).toEqual([done, done, done, done, [{ text: 'Not available.' }]]);
+    });
+
+    it('refuses a call to a tool the ask was not given, and passes nothing to the runner', async () => {
+      let second: Turn[] = [];
+      const h = harness({
+        recordActions: true,
+        steps: [
+          answers([
+            call('paste', { text: 'x', mode: 'insert' }, 'p'),
+            call('fill', { fields: [{ id: 'a', value: 'x' }] }, 'f'),
+            call('event', { title: 'A', start: '2026-11-05' }, 'e'),
+            call('say', { text: 'Ok.' }, 's'),
+          ]),
+          async (req) => {
+            second = [...req.turns];
+            return { text: '', calls: [] };
+          },
+        ],
+      });
+      h.ctl.ask(spot('missing'));
+      await flush();
+      expect(h.taken).toEqual([]);
+      expect(results(second).map((r) => r.content)).toEqual([
+        ...Array(3).fill([{ text: 'Not available.' }]),
+        [{ text: 'Done.' }],
+      ]);
+    });
+
+    it('refuses a second paste in one answer and runs only the first', async () => {
+      let second: Turn[] = [];
+      const h = harness({
+        recordActions: true,
+        steps: [
+          answers([
+            call('paste', { text: 'one', mode: 'insert' }, 'p1'),
+            call('paste', { text: 'two', mode: 'insert' }, 'p2'),
+            call('fill', { fields: [{ id: 'a', value: 'x' }] }, 'f'),
+          ]),
+          async (req) => {
+            second = [...req.turns];
+            return { text: '', calls: [] };
+          },
+        ],
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      expect(h.taken).toEqual([{ tool: 'paste', text: 'one', mode: 'insert' }]);
+      expect(results(second).map((r) => r.id)).toEqual(['p1', 'p2', 'f']);
+      expect(JSON.stringify(results(second)[1].content)).toContain('Ignored');
+    });
+
+    it('keeps action calls without a runner and still answers', async () => {
+      const h = harness({
+        steps: [answers([call('copy', { text: 'x' }, 'c'), call('say', { text: 'Grabbed it.' }, 's')])],
+      });
+      h.ctl.ask(spot('enemyvision'));
+      await flush();
+      expect(h.bubbles().some((b) => JSON.stringify(b).includes('Grabbed it.'))).toBe(true);
+      expect(toolNames(h)).toContain('copy');
+    });
   });
 
   it('removes the run folder even when the ask is cancelled while the capture runs', async () => {
