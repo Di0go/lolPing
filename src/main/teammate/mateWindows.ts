@@ -35,11 +35,13 @@ interface Slot {
   /** The words box has asked or cancelled: nothing more comes from it. */
   ended: boolean;
   leaveTimer: ReturnType<typeof setTimeout> | null;
+  /** The card has had keyboard focus: hiding it would keep the foreground, so it is closed instead. */
+  hadFocus: boolean;
 }
 
 const emptySlot = (view: MateView): Slot => ({
   win: null, loaded: false, state: null, shown: false, at: { x: 0, y: 0 }, size: { ...START_SIZE[view] }, ended: false,
-  leaveTimer: null,
+  leaveTimer: null, hadFocus: false,
 });
 
 /**
@@ -84,6 +86,11 @@ export class MateWindows extends EventEmitter {
 
   hideCard(): void {
     this.leave('card', 'fast');
+  }
+
+  /** Whether the open card, or the one just closed, has had keyboard focus. Cleared when the next card opens. */
+  cardHadFocus(): boolean {
+    return this.slots.card.hadFocus;
   }
 
   /**
@@ -185,8 +192,11 @@ export class MateWindows extends EventEmitter {
     slot.state = s;
     slot.shown = true;
     slot.at = at;
-    const w = slot.win && !slot.win.isDestroyed()
-      ? slot.win
+    const open = slot.win && !slot.win.isDestroyed() ? slot.win : null;
+    // A card window that is still open may hold the focus; a new one starts without it.
+    if (!open) slot.hadFocus = false;
+    const w = open
+      ? open
       // The card can be clicked into for the reply box; the bubble never takes the keyboard.
       : this.create(view, slot, { focusable: view === 'card', ...this.popupOptions() });
     w.setBounds(this.rect(slot));
@@ -230,8 +240,17 @@ export class MateWindows extends EventEmitter {
     if (slot.leaveTimer) clearTimeout(slot.leaveTimer);
     slot.leaveTimer = setTimeout(() => {
       slot.leaveTimer = null;
-      if (!slot.shown && !w.isDestroyed()) w.hide();
+      if (slot.shown || w.isDestroyed()) return;
+      // A hidden window the user clicked into keeps the foreground; only closing hands the keyboard back (Windows).
+      if (view === 'card' && slot.hadFocus) return this.closeCard(slot, w);
+      w.hide();
     }, LEAVE_MS[how]);
+  }
+
+  /** Closing is asynchronous: the slot is replaced now, so a card shown meanwhile gets its own window. */
+  private closeCard(slot: Slot, w: BrowserWindow): void {
+    if (this.slots.card === slot) this.slots.card = { ...emptySlot('card'), hadFocus: true };
+    w.close();
   }
 
   private endWords(slot: Slot, action: MateAction): void {
@@ -270,6 +289,11 @@ export class MateWindows extends EventEmitter {
       w.setAlwaysOnTop(true, 'screen-saver'); // above the overlay and a game's borderless window
       if (IS_LINUX) w.setVisibleOnAllWorkspaces(true);
       if (IS_MAC) w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+    }
+    if (view === 'card') {
+      w.on('focus', () => {
+        slot.hadFocus = true;
+      });
     }
     w.on('closed', () => {
       if (slot.leaveTimer) clearTimeout(slot.leaveTimer);

@@ -229,6 +229,97 @@ describe('MateWindows', () => {
   });
 });
 
+describe('MateWindows card focus', () => {
+  const openCard = (): (typeof h.windows)[number] => {
+    mate.showCard({ x: 10, y: 10 }, card);
+    const w = h.windows[h.windows.length - 1];
+    w.webContents.emit('did-finish-load');
+    return w;
+  };
+
+  it('closes a card that had focus instead of hiding it', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = openCard();
+      w.emit('focus');
+      mate.hideCard();
+      expect(mate.cardHadFocus()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(w.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hides a card that never had focus', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = openCard();
+      mate.hideCard();
+      expect(mate.cardHadFocus()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(w.destroyed).toBe(false);
+      expect(w.visible).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens a fresh card after one was closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = openCard();
+      first.emit('focus');
+      mate.hideCard();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(first.destroyed).toBe(true);
+      const second = openCard();
+      expect(second).not.toBe(first);
+      expect(second.visible).toBe(true);
+      expect(second.destroyed).toBe(false);
+      expect(mate.cardHadFocus()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the focus note when the card is shown again during its leave motion', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = openCard();
+      w.emit('focus');
+      mate.hideCard();
+      await vi.advanceTimersByTimeAsync(100);
+      mate.showCard({ x: 10, y: 10 }, card);
+      expect(h.windows).toHaveLength(1);
+      expect(mate.cardHadFocus()).toBe(true);
+      mate.hideCard();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(w.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a card opened while the focused one is still closing', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = openCard();
+      first.emit('focus');
+      mate.hideCard();
+      await vi.advanceTimersByTimeAsync(200); // the leave motion is over, close() has only been asked for
+      const second = openCard();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(first.destroyed).toBe(true);
+      expect(second.destroyed).toBe(false);
+      expect(second.visible).toBe(true);
+      expect(mate.cardHadFocus()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('MateWindows capture exclusion', () => {
   it('keeps every teammate window out of a capture on Windows and lets them back in after', () => {
     mate.showBubble({ x: 10, y: 10 }, bubble);
