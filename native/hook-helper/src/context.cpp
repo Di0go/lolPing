@@ -648,10 +648,14 @@ std::string cutText(const std::string& text, size_t maxChars) {
 
 namespace {
 
-// Extensions that name a document in a title: what the file layer can read, plus common text and code files.
-constexpr const char* kFileExtensions[] = {"pdf", "docx", "doc", "pptx", "ppt",  "xlsx", "xls",  "csv",
-                                           "txt", "md",   "rtf", "epub", "json", "ts",   "js",   "py",
-                                           "c",   "cpp",  "h",   "java", "go",   "rs",   "html", "css"};
+// Extensions that name a document in a title: Office, PDF and e-book files, plus every extension the file layer
+// reads as text (TEXT_EXTENSIONS in src/main/teammate/files/text.ts; keep the two lists in step).
+constexpr const char* kFileExtensions[] = {
+    "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "rtf", "epub",
+    "txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "log", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf",
+    "srt", "vtt", "tex", "rst", "html", "htm", "css",
+    "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "java", "kt", "c", "h", "cpp", "hpp", "cs", "go", "rs",
+    "rb", "php", "swift", "sh", "bat", "ps1", "sql"};
 
 bool isSpace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 

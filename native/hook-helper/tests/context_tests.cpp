@@ -572,6 +572,11 @@ static void test_file_name_from_a_window_title() {
   CHECK(fileNameFromTitle("My Notes.md") == "My Notes.md");
   CHECK(fileNameFromTitle("a.js and b.py open") == "b.py");
   CHECK(fileNameFromTitle("C:\\a\\b.txt - Notepad++") == "b.txt");
+  // Every extension the file layer reads as text names a file, not only the common ones.
+  CHECK(fileNameFromTitle("App.tsx - web - Visual Studio Code") == "App.tsx");
+  CHECK(fileNameFromTitle("deploy.sh - scripts - Visual Studio Code") == "deploy.sh");
+  CHECK(fileNameFromTitle("values.yaml - chart - Visual Studio Code") == "values.yaml");
+  CHECK(fileNameFromTitle("Program.cs - app - Visual Studio Code") == "Program.cs");
   CHECK(fileNameFromTitle("Settings").empty());
   CHECK(fileNameFromTitle("").empty());
   // ".pdfx" is not ".pdf", and an extension alone is no name.

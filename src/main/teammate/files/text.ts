@@ -1,7 +1,10 @@
 import { PAGE_CHARS } from '../../../shared/teammate/locate';
 import { FileReadError, MAX_OUTLINE, type Doc } from './doc';
 
-/** Text-like extensions the teammate reads as plain text (lower case, with the dot). */
+/**
+ * Text-like extensions the teammate reads as plain text (lower case, with the dot). The context helper's
+ * kFileExtensions (native/hook-helper/src/context.cpp) lists them too, to find a file by a window title: keep both.
+ */
 export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
   '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl', '.log', '.xml', '.yaml', '.yml', '.toml', '.ini',
   '.cfg', '.conf', '.srt', '.vtt', '.tex', '.rst', '.html', '.htm', '.css',
