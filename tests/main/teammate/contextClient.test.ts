@@ -98,52 +98,36 @@ describe('ContextClient', () => {
     await expect(c.capture({ display, spots: [], dir: tempDir() }, signal())).rejects.toMatchObject({ code: 'permission' });
   });
 
-  it('sends marks for the capture it names', async () => {
+  it('reads every layer it asks for in one request', async () => {
     const { c } = client(['ok']);
     const dir = tempDir();
-    const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
-    const req = { of: shot.captureId, spots: [{ x: 100.4, y: 200 }], radius: 600, ocr: true, controls: true, dir };
-    const found = await c.marks(req, signal());
-    expect(found).toMatchObject({ count: 1, exiting: false });
-    expect(readFileSync(found.path, 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
-    const sent: unknown = JSON.parse(readFileSync(join(dir, 'marks-command.json'), 'utf8'));
-    expect(sent).toMatchObject({
-      type: 'marks', of: shot.captureId, spots: '100,200', radius: 600, ocr: true, controls: true,
-    });
-    // The helper releases a grab once marks have read it: a second marks for that capture is refused.
-    await expect(c.marks(req, signal())).rejects.toMatchObject({ code: 'bad' });
+    const req = { spots: [{ x: 100.4, y: 200 }], radius: 600, marks: true, text: true, file: true, dir };
+    const got = await c.read(req, signal());
+    expect(got.status).toEqual({ marks: 'ok', text: 'ok', file: 'ok' });
+    expect(got.marks?.count).toBe(1);
+    expect(readFileSync(got.marks?.path ?? '', 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
+    expect(got.text).toEqual({ selection: 'chosen', spotTexts: ['under the spot'], focus: null, address: '' });
+    expect(got.file).toEqual({ path: 'C:/docs/a.txt', address: '', how: 'title' });
+    const sent: unknown = JSON.parse(readFileSync(join(dir, 'read-command.json'), 'utf8'));
+    expect(sent).toMatchObject({ type: 'read', spots: '100,200', radius: 600, marks: true, text: true, file: true });
   });
 
-  it('reads the system text and the file behind the window', async () => {
+  it('leaves out the layers it does not ask for', async () => {
     const { c } = client(['ok']);
-    await expect(c.systemText([{ x: 1, y: 2 }], signal())).resolves.toEqual({
-      selection: 'chosen', spotTexts: ['under the spot'], focus: null, address: '',
-    });
-    await expect(c.fileOf(signal())).resolves.toEqual({ path: 'C:/docs/a.txt', address: '', how: 'title' });
+    const got = await c.read({ spots: [], radius: 600, marks: false, text: true, file: false, dir: tempDir() }, signal());
+    expect(got.status).toEqual({ marks: 'off', text: 'ok', file: 'off' });
+    expect(got.marks).toBeNull();
+    expect(got.file).toBeNull();
   });
 
-  it('starts a new helper after a slow reply', async () => {
+  it('keeps what a helper read on its way out, and starts a new helper after it', async () => {
     const { c, starts } = client(['slow', 'ok']);
-    const dir = tempDir();
-    const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
-    await expect(c.systemText([{ x: 1, y: 2 }], signal())).rejects.toMatchObject({ code: 'slow' });
+    const req = { spots: [{ x: 100, y: 200 }], radius: 600, marks: true, text: true, file: true, dir: tempDir() };
+    const got = await c.read(req, signal());
+    expect(got.status).toEqual({ marks: 'ok', text: 'ok', file: 'slow' });
+    expect(got.marks?.count).toBe(1);
+    expect(got.file).toBeNull();
     // The old helper is on its way out and reads nothing more: this request must go to a fresh one.
-    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad' });
-    expect(starts()).toBe(2);
-    // The grab went with the old helper, so marks for its capture are refused.
-    const req = { of: shot.captureId, spots: [{ x: 100, y: 200 }], radius: 600, ocr: true, controls: true, dir };
-    await expect(c.marks(req, signal())).rejects.toMatchObject({ code: 'bad' });
-  });
-
-  it('keeps the marks a helper sent on its way out, and starts a new helper after them', async () => {
-    const { c, starts } = client(['partial', 'ok']);
-    const dir = tempDir();
-    const shot = await c.capture({ display, spots: [{ x: 100, y: 200 }], dir }, signal());
-    const req = { of: shot.captureId, spots: [{ x: 100, y: 200 }], radius: 600, ocr: true, controls: true, dir };
-    const found = await c.marks(req, signal());
-    expect(found).toMatchObject({ count: 1, exiting: true });
-    expect(readFileSync(found.path, 'utf8')).toBe('button\t900\t700\t200\t60\tSave\n');
-    // The old helper reads nothing more: this request must go to a fresh one.
     await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad' });
     expect(starts()).toBe(2);
   });

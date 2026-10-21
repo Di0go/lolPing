@@ -145,18 +145,15 @@ Command parseCapture(const Fields& m, const std::string& id) {
   return c;
 }
 
-Command parseMarks(const Fields& m, const std::string& id) {
+Command parseRead(const Fields& m, const std::string& id) {
   Command c;
-  c.kind = Command::Kind::Marks;
+  c.kind = Command::Kind::Read;
   c.id = id;
-  MarksRequest& r = c.marks;
-  const auto of = m.find("of");
-  if (of == m.end() || !validId(of->second)) return bad(id, "of must name a capture");
-  r.of = of->second;
+  ReadRequest& r = c.read;
   if (const std::string why = spotsField(m, r.spots); !why.empty()) return bad(id, why);
   if (!intField(m, "radius", 0, 32768, r.radius)) return bad(id, "radius out of range");
-  if (!boolField(m, "ocr", r.ocr) || !boolField(m, "controls", r.controls)) {
-    return bad(id, "ocr and controls must be true or false");
+  if (!boolField(m, "marks", r.marks) || !boolField(m, "text", r.text) || !boolField(m, "file", r.file)) {
+    return bad(id, "marks, text and file must be true or false");
   }
   if (const std::string why = dirField(m, r.dir); !why.empty()) return bad(id, why);
   return c;
@@ -256,7 +253,7 @@ void drawSpots(Image& img, const std::vector<Point>& spots, const Rect& area) {
   }
 }
 
-std::string handleCapture(const Command& cmd, const ContextPlatform& platform, LastGrab& last) {
+std::string handleCapture(const Command& cmd, const ContextPlatform& platform) {
   const CaptureRequest& r = cmd.capture;
   Failure fail;
   Image full;
@@ -292,9 +289,6 @@ std::string handleCapture(const Command& cmd, const ContextPlatform& platform, L
     zooms += (i == 0 ? "" : ";") + path;
     zoomRects += (i == 0 ? "" : ";") + rectText(z);
   }
-  last.id = cmd.id;
-  last.display = r.display;
-  last.image = std::make_shared<const Image>(std::move(full));
   return "{\"type\":\"captured\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"overview\":\"" + jsonEscape(overviewPath) +
          "\",\"ow\":" + std::to_string(ow) + ",\"oh\":" + std::to_string(oh) + ",\"zooms\":\"" + jsonEscape(zooms) +
          "\",\"zoomRects\":\"" + zoomRects + "\"}";
@@ -317,42 +311,6 @@ std::function<void()> bindProbe(const std::shared_ptr<Probe<Out>>& job, Call cal
   return [job, call] { job->ok = call(job->out, job->fail); };
 }
 
-Reply slowReply(const std::string& id) {
-  return Reply{formatError(id, "slow", "the system took too long to answer"), true};
-}
-
-// The bounding box of the (at least one) spots +/- radius, clipped to the display, in the grab's pixels.
-Rect ocrArea(const std::vector<Point>& spots, int radius, const LastGrab& grab) {
-  const Rect& d = grab.display;
-  int x0 = spots[0].x - radius, y0 = spots[0].y - radius, x1 = spots[0].x + radius, y1 = spots[0].y + radius;
-  for (const Point& p : spots) {
-    x0 = std::min(x0, p.x - radius);
-    y0 = std::min(y0, p.y - radius);
-    x1 = std::max(x1, p.x + radius);
-    y1 = std::max(y1, p.y + radius);
-  }
-  const double sx = static_cast<double>(grab.image->w) / d.w;
-  const double sy = static_cast<double>(grab.image->h) / d.h;
-  const auto px = [&](int v, int origin, int size, double s, int limit) {
-    return clampInt(static_cast<int>(std::lround((clampInt(v, origin, origin + size) - origin) * s)), 0, limit);
-  };
-  const int left = px(x0, d.x, d.w, sx, grab.image->w), right = px(x1, d.x, d.w, sx, grab.image->w);
-  const int top = px(y0, d.y, d.h, sy, grab.image->h), bottom = px(y1, d.y, d.h, sy, grab.image->h);
-  return Rect{left, top, std::max(0, right - left), std::max(0, bottom - top)};
-}
-
-// A box in the grab's pixels → request units.
-Rect toRequest(const Rect& box, const LastGrab& grab) {
-  const Rect& d = grab.display;
-  const double sx = static_cast<double>(grab.image->w) / d.w;
-  const double sy = static_cast<double>(grab.image->h) / d.h;
-  const int x0 = d.x + static_cast<int>(std::lround(box.x / sx));
-  const int y0 = d.y + static_cast<int>(std::lround(box.y / sy));
-  const int x1 = d.x + static_cast<int>(std::lround((box.x + box.w) / sx));
-  const int y1 = d.y + static_cast<int>(std::lround((box.y + box.h) / sy));
-  return Rect{x0, y0, std::max(1, x1 - x0), std::max(1, y1 - y0)};
-}
-
 // The path is UTF-8; on Windows a narrow path would be read in the ANSI code page instead.
 bool writeTextFile(const std::string& path, const std::string& text) {
   std::u8string u8;
@@ -363,108 +321,100 @@ bool writeTextFile(const std::string& path, const std::string& text) {
   return !out.fail();
 }
 
-Reply handleMarks(const Command& cmd, const ContextPlatform& platform, LastGrab& kept, int budgetMs) {
-  const MarksRequest& r = cmd.marks;
-  if (!kept.image || kept.id != r.of) return Reply{formatError(cmd.id, "bad", "that capture is gone")};
-  // One marks command per capture: the full-resolution grab is released now, not held until the next capture.
-  const LastGrab last = std::move(kept);
-  kept = LastGrab{};
-  std::vector<RawMark> marks;
-  bool tried = false, found = false;
-  Failure firstFail;
-  const auto keep = [&](const Probe<std::vector<RawMark>>& job, bool scaled) {
-    tried = true;
-    if (!job.ok) {
-      if (firstFail.message.empty()) firstFail = job.fail;
-      return;
-    }
-    found = true;
-    for (RawMark m : job.out) {
-      if (scaled) m.box = toRequest(m.box, last);
-      marks.push_back(std::move(m));
-    }
-  };
-  // Both probes run side by side under one deadline, so the command fits the client's timeout.
-  std::vector<std::function<void()>> probes;
-  std::shared_ptr<Probe<std::vector<RawMark>>> ocrJob, controlsJob;
-  const Rect area = r.spots.empty() ? Rect{} : ocrArea(r.spots, r.radius, last);
-  if (r.ocr && area.w > 0 && area.h > 0) {
-    ocrJob = std::make_shared<Probe<std::vector<RawMark>>>();
-    const auto ocr = platform.ocr;
-    const std::shared_ptr<const Image> image = last.image;
-    probes.push_back(bindProbe(ocrJob, [ocr, image, area](std::vector<RawMark>& out, Failure& f) {
-      return ocr(*image, area, out, f);
-    }));
-  }
-  if (r.controls && !r.spots.empty()) {
-    controlsJob = std::make_shared<Probe<std::vector<RawMark>>>();
-    const auto controls = platform.controls;
-    const std::vector<Point> spots = r.spots;
-    const int radius = r.radius;
-    probes.push_back(bindProbe(controlsJob, [controls, spots, radius](std::vector<RawMark>& out, Failure& f) {
-      return controls(spots, radius, out, f);
-    }));
-  }
-  std::vector<bool> finished;
-  const bool allDone = probes.empty() || runAllWithBudget(probes, budgetMs, &finished);
-  // A probe still running is left out: what the others found in time is still sent, then the helper exits.
-  if (ocrJob && (allDone || finished[0])) keep(*ocrJob, true);
-  if (controlsJob && (allDone || finished[ocrJob ? 1 : 0])) keep(*controlsJob, false);
-  if (!allDone && !found) return slowReply(cmd.id);
-  // One probe coming up empty-handed leaves its marks out; only nothing at all is an error.
-  if (tried && !found) return Reply{formatError(cmd.id, firstFail.code, firstFail.message)};
-  const std::string path = joinPath(r.dir, "marks-" + cmd.id + ".tsv");
-  if (!writeTextFile(path, marksFileText(marks))) {
-    return allDone ? Reply{formatError(cmd.id, "capture", "could not write the marks file")} : slowReply(cmd.id);
-  }
-  return Reply{"{\"type\":\"marks\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"path\":\"" + jsonEscape(path) +
-                   "\",\"count\":" + std::to_string(marks.size()) + (allDone ? "" : ",\"exiting\":true") + "}",
-               !allDone};
-}
-
-Reply handleSystemText(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
-  const auto job = std::make_shared<Probe<SystemText>>();
-  const auto systemText = platform.systemText;
-  const std::vector<Point> spots = cmd.spots;
-  if (!runWithBudget(bindProbe(job, [systemText, spots](SystemText& out, Failure& f) {
-        return systemText(spots, out, f);
-      }), budgetMs)) {
-    return slowReply(cmd.id);
-  }
-  if (!job->ok) return Reply{formatError(cmd.id, job->fail.code, job->fail.message)};
-  const SystemText& t = job->out;
-  std::string spotTexts;
-  for (size_t i = 0; i < cmd.spots.size(); ++i) {
-    std::string text = i < t.spotTexts.size() ? t.spotTexts[i] : std::string();
-    std::replace(text.begin(), text.end(), kRecordSep, ' ');
-    if (i > 0) spotTexts += kRecordSep;
-    spotTexts += text;
-  }
-  // A password field's value never leaves the helper, whatever the probe read.
-  const std::string value = t.focusSecure ? std::string() : t.focusValue;
-  return Reply{"{\"type\":\"systemText\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"selection\":\"" +
-               jsonEscape(t.selection) + "\",\"spotTexts\":\"" + jsonEscape(spotTexts) + "\",\"focusKind\":\"" +
-               jsonEscape(t.focusKind) + "\",\"focusLabel\":\"" + jsonEscape(t.focusLabel) + "\",\"focusValue\":\"" +
-               jsonEscape(value) + "\",\"focusSecure\":" + (t.focusSecure ? "true" : "false") + ",\"address\":\"" +
-               jsonEscape(t.address) + "\"}"};
-}
-
 struct FileInfo {
   std::string path, address, how = "none";
 };
 
-Reply handleFileOf(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
-  const auto job = std::make_shared<Probe<FileInfo>>();
-  const auto fileOf = platform.fileOf;
-  if (!runWithBudget(bindProbe(job, [fileOf](FileInfo& out, Failure& f) {
-        return fileOf(out.path, out.address, out.how, f);
-      }), budgetMs)) {
-    return slowReply(cmd.id);
+// A layer's outcome in the read reply: off (not asked), ok, slow (still running at the budget) or a failure code.
+template <typename Out>
+std::string layerStatus(bool asked, bool finished, const Probe<Out>& job) {
+  if (!asked) return "off";
+  if (!finished) return "slow";
+  return job.ok ? "ok" : job.fail.code;
+}
+
+Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
+  const ReadRequest& r = cmd.read;
+  const auto marksJob = std::make_shared<Probe<std::vector<RawMark>>>();
+  const auto textJob = std::make_shared<Probe<SystemText>>();
+  const auto fileJob = std::make_shared<Probe<FileInfo>>();
+  const bool wantMarks = r.marks && !r.spots.empty();
+  // The layers run at once under one deadline: the slowest, not the sum, sets how long an ask waits. On a fresh
+  // helper, UI Automation fails a controls walk that runs beside the system text probe (E_FAIL), so the quick text
+  // probe goes first on the walk's own thread.
+  std::vector<std::function<void()>> probes;
+  size_t screenAt = 0, fileAt = 0;
+  if (wantMarks || r.text) {
+    screenAt = probes.size();
+    const auto controls = platform.controls;
+    const auto systemText = platform.systemText;
+    const std::vector<Point> spots = r.spots;
+    const int radius = r.radius;
+    const bool text = r.text;
+    // In a browser the file probe reads the address bar anyway; reading it twice was most of the text probe's time.
+    const bool withAddress = !r.file;
+    probes.push_back([marksJob, textJob, controls, systemText, spots, radius, text, withAddress, wantMarks] {
+      if (text) textJob->ok = systemText(spots, withAddress, textJob->out, textJob->fail);
+      if (wantMarks) marksJob->ok = controls(spots, radius, marksJob->out, marksJob->fail);
+    });
   }
-  if (!job->ok) return Reply{formatError(cmd.id, job->fail.code, job->fail.message)};
-  const FileInfo& file = job->out;
-  return Reply{"{\"type\":\"fileOf\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"path\":\"" + jsonEscape(file.path) +
-               "\",\"address\":\"" + jsonEscape(file.address) + "\",\"how\":\"" + jsonEscape(file.how) + "\"}"};
+  if (r.file) {
+    fileAt = probes.size();
+    const auto fileOf = platform.fileOf;
+    probes.push_back(bindProbe(fileJob, [fileOf](FileInfo& out, Failure& f) {
+      return fileOf(out.path, out.address, out.how, f);
+    }));
+  }
+  std::vector<bool> finished;
+  const bool allDone = probes.empty() || runAllWithBudget(probes, budgetMs, &finished);
+  const auto inTime = [&](bool asked, size_t at) { return asked && (allDone || finished[at]); };
+
+  std::string marks = layerStatus(wantMarks, inTime(wantMarks, screenAt), *marksJob);
+  std::string marksPath;
+  size_t count = 0;
+  if (marks == "ok") {
+    marksPath = joinPath(r.dir, "marks-" + cmd.id + ".tsv");
+    count = marksJob->out.size();
+    if (!writeTextFile(marksPath, marksFileText(marksJob->out))) {
+      marks = "capture";
+      marksPath.clear();
+      count = 0;
+    }
+  }
+  const std::string text = layerStatus(r.text, inTime(r.text, screenAt), *textJob);
+  const std::string file = layerStatus(r.file, inTime(r.file, fileAt), *fileJob);
+  if (text == "ok" && file == "ok" && fileJob->out.how == "address") {
+    const FileInfo& f = fileJob->out;
+    textJob->out.address = cutText(f.path.empty() ? f.address : f.path, kAddressMax);
+  }
+
+  std::string line = "{\"type\":\"read\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"marks\":\"" + marks +
+                     "\",\"marksPath\":\"" + jsonEscape(marksPath) + "\",\"count\":" + std::to_string(count) +
+                     ",\"text\":\"" + text + "\"";
+  if (text == "ok") {
+    const SystemText& t = textJob->out;
+    std::string spotTexts;
+    for (size_t i = 0; i < r.spots.size(); ++i) {
+      std::string s = i < t.spotTexts.size() ? t.spotTexts[i] : std::string();
+      std::replace(s.begin(), s.end(), kRecordSep, ' ');
+      if (i > 0) spotTexts += kRecordSep;
+      spotTexts += s;
+    }
+    // A password field's value never leaves the helper, whatever the probe read.
+    const std::string value = t.focusSecure ? std::string() : t.focusValue;
+    line += ",\"selection\":\"" + jsonEscape(t.selection) + "\",\"spotTexts\":\"" + jsonEscape(spotTexts) +
+            "\",\"focusKind\":\"" + jsonEscape(t.focusKind) + "\",\"focusLabel\":\"" + jsonEscape(t.focusLabel) +
+            "\",\"focusValue\":\"" + jsonEscape(value) + "\",\"focusSecure\":" + (t.focusSecure ? "true" : "false") +
+            ",\"address\":\"" + jsonEscape(t.address) + "\"";
+  }
+  line += ",\"file\":\"" + file + "\"";
+  if (file == "ok") {
+    const FileInfo& f = fileJob->out;
+    line += ",\"filePath\":\"" + jsonEscape(f.path) + "\",\"fileAddress\":\"" + jsonEscape(f.address) +
+            "\",\"how\":\"" + jsonEscape(f.how) + "\"";
+  }
+  // What finished in time is sent; a probe still running makes the helper exit after this reply.
+  return Reply{line + "}", !allDone};
 }
 
 }  // namespace
@@ -483,16 +433,12 @@ Command parseCommand(const std::string& line) {
   const std::string id = idIt == m.end() ? std::string() : idIt->second;
   if (!validId(id)) return bad("", "id must be 1 to 64 letters, digits, '-' or '_'");
   if (type->second == "capture") return parseCapture(m, id);
-  if (type->second == "marks") return parseMarks(m, id);
+  if (type->second == "read") return parseRead(m, id);
   Command c;
   c.id = id;
   if (type->second == "foreground") c.kind = Command::Kind::Foreground;
   else if (type->second == "ping") c.kind = Command::Kind::Ping;
-  else if (type->second == "fileOf") c.kind = Command::Kind::FileOf;
-  else if (type->second == "systemText") {
-    c.kind = Command::Kind::SystemText;
-    if (const std::string why = spotsField(m, c.spots); !why.empty()) return bad(id, why);
-  } else return bad(id, "unknown type");
+  else return bad(id, "unknown type");
   return c;
 }
 
@@ -545,12 +491,12 @@ std::string formatError(const std::string& id, const std::string& code, const st
          jsonEscape(message) + "\"}";
 }
 
-Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last, int budgetMs) {
+Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int budgetMs) {
   try {
     switch (cmd.kind) {
       case Command::Kind::Bad: return Reply{formatError(cmd.id, "bad", cmd.error)};
       case Command::Kind::Ping: return Reply{"{\"type\":\"pong\",\"id\":\"" + jsonEscape(cmd.id) + "\"}"};
-      case Command::Kind::Capture: return Reply{handleCapture(cmd, platform, last)};
+      case Command::Kind::Capture: return Reply{handleCapture(cmd, platform)};
       case Command::Kind::Foreground: {
         std::string app, title;
         Failure fail;
@@ -558,72 +504,13 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGra
         return Reply{"{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
                      "\",\"title\":\"" + jsonEscape(title) + "\"}"};
       }
-      case Command::Kind::Marks: return handleMarks(cmd, platform, last, budgetMs);
-      case Command::Kind::SystemText: return handleSystemText(cmd, platform, budgetMs);
-      case Command::Kind::FileOf: return handleFileOf(cmd, platform, budgetMs);
+      case Command::Kind::Read: return handleRead(cmd, platform, budgetMs);
       case Command::Kind::Shutdown: break;
     }
   } catch (const std::exception& e) {  // a huge display can run out of memory; the helper stays up
     return Reply{formatError(cmd.id, "capture", e.what())};
   }
   return Reply{formatError(cmd.id, "bad", "nothing to do")};
-}
-
-namespace {
-
-// The code point a UTF-8 string starts with, or 0 when it is empty or does not start with a whole character.
-char32_t firstCodePoint(const std::string& s) {
-  if (s.empty()) return 0;
-  const auto b = [&s](size_t i) { return static_cast<unsigned char>(s[i]); };
-  const unsigned char lead = b(0);
-  const size_t n = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3 : (lead >> 3) == 0x1E ? 4 : 0;
-  if (n == 0 || s.size() < n) return 0;
-  char32_t c = n == 1 ? lead : lead & (0x7F >> n);
-  for (size_t i = 1; i < n; ++i) {
-    if ((b(i) & 0xC0) != 0x80) return 0;
-    c = (c << 6) | (b(i) & 0x3F);
-  }
-  return c;
-}
-
-// The code point a UTF-8 string ends with, or 0.
-char32_t lastCodePoint(const std::string& s) {
-  size_t start = s.size();
-  while (start > 0 && s.size() - start < 4) {
-    --start;
-    if ((static_cast<unsigned char>(s[start]) & 0xC0) != 0x80) break;
-  }
-  return start < s.size() ? firstCodePoint(s.substr(start)) : 0;
-}
-
-// Han and kana: OCR splits these into words of a character or so, written with no space between them.
-bool isCjkLetter(char32_t c) {
-  return (c >= 0x3040 && c <= 0x30FF) ||    // Hiragana, Katakana
-         (c >= 0x31F0 && c <= 0x31FF) ||    // Katakana phonetic extensions
-         (c >= 0x3400 && c <= 0x4DBF) ||    // Han extension A
-         (c >= 0x4E00 && c <= 0x9FFF) ||    // Han
-         (c >= 0xF900 && c <= 0xFAFF) ||    // Han compatibility
-         (c >= 0xFF66 && c <= 0xFF9F) ||    // half-width Katakana
-         (c >= 0x20000 && c <= 0x3FFFF);    // Han extensions B and later
-}
-
-// CJK punctuation and full-width forms take no space on either side.
-bool isCjkMark(char32_t c) { return (c >= 0x3000 && c <= 0x303F) || (c >= 0xFF00 && c <= 0xFF65); }
-
-}  // namespace
-
-std::string joinOcrWords(const std::vector<std::string>& words) {
-  std::string line;
-  for (const std::string& word : words) {
-    if (word.empty()) continue;
-    if (!line.empty()) {
-      const char32_t a = lastCodePoint(line), b = firstCodePoint(word);
-      const bool tight = isCjkMark(a) || isCjkMark(b) || (isCjkLetter(a) && isCjkLetter(b));
-      if (!tight) line += ' ';
-    }
-    line += word;
-  }
-  return line;
 }
 
 std::string marksFileText(const std::vector<RawMark>& marks) {
@@ -870,14 +757,13 @@ bool runAllWithBudget(const std::vector<std::function<void()>>& probes, int budg
 
 int runContextLoop(std::istream& in, const std::function<bool(const std::string&)>& write,
                    const ContextPlatform& platform, int budgetMs) {
-  LastGrab last;
   std::string line;
   while (std::getline(in, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.find_first_not_of(" \t") == std::string::npos) continue;
     const Command cmd = parseCommand(line);
     if (cmd.kind == Command::Kind::Shutdown) return 0;
-    const Reply reply = handleCommand(cmd, platform, last, budgetMs);
+    const Reply reply = handleCommand(cmd, platform, budgetMs);
     if (!write(reply.line)) return 0;  // lolPing is gone
     if (reply.exitAfter) return kExitNow;
   }

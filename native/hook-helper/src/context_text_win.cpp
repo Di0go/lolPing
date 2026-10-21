@@ -1,5 +1,4 @@
-// Windows text probes: OCR of the kept grab by Windows.Media.Ocr, named controls near the spots by UI Automation,
-// the system's own text (selection, focus, text under the spots, browser address) and the file behind the window.
+// Windows text probes: named controls and text near the spots by UI Automation, the system's own text (selection, focus, text under the spots, browser address) and the file behind the window.
 // Each runs on its own fresh thread (context.h), so each joins the MTA itself and never uninitializes: an abandoned
 // thread may still be inside a call when the helper exits.
 #define NOMINMAX
@@ -16,7 +15,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -31,11 +29,6 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.Globalization.h>
-#include <winrt/Windows.Graphics.Imaging.h>
-#include <winrt/Windows.Media.Ocr.h>
-#include <winrt/Windows.Storage.Streams.h>
-#include <winrt/Windows.System.UserProfile.h>
 #pragma warning(pop)
 
 #include "context.h"
@@ -43,35 +36,15 @@
 namespace lp::ctx {
 namespace {
 
-using winrt::Windows::Graphics::Imaging::BitmapAlphaMode;
-using winrt::Windows::Graphics::Imaging::BitmapPixelFormat;
-using winrt::Windows::Graphics::Imaging::SoftwareBitmap;
-using winrt::Windows::Media::Ocr::OcrEngine;
-
 constexpr size_t kMaxControls = 400;
-// The controls walk stops here with what it has, short of the 1.5 s probe budget, so a big page still gives marks.
-constexpr std::chrono::milliseconds kWalkBudget{1100};
+// The controls walk stops here with what it has, short of the 1 s probe budget, so a big page still gives marks.
+constexpr std::chrono::milliseconds kWalkBudget{800};
 using Clock = std::chrono::steady_clock;
 
 std::string failed(const char* what, HRESULT code) {
   char buf[96];
   std::snprintf(buf, sizeof(buf), "%s failed (0x%08lx)", what, static_cast<unsigned long>(code));
   return buf;
-}
-
-// The user's first Chinese or Japanese language, when OCR has it, else the first OCR language of the profile. An
-// English-first profile would otherwise read Chinese text as Latin noise.
-OcrEngine engineForUser() {
-  for (const winrt::hstring& tag : winrt::Windows::System::UserProfile::GlobalizationPreferences::Languages()) {
-    const std::wstring_view t(tag);
-    const bool cjk = t.size() >= 2 && (_wcsnicmp(t.data(), L"zh", 2) == 0 || _wcsnicmp(t.data(), L"ja", 2) == 0) &&
-                     (t.size() == 2 || t[2] == L'-');
-    if (!cjk) continue;
-    const winrt::Windows::Globalization::Language language(tag);
-    if (!OcrEngine::IsLanguageSupported(language)) continue;
-    if (OcrEngine engine = OcrEngine::TryCreateFromLanguage(language)) return engine;
-  }
-  return OcrEngine::TryCreateFromUserProfileLanguages();
 }
 
 // lolPing's main process started this helper and owns lolPing's windows.
@@ -119,8 +92,8 @@ const char* kindOf(CONTROLTYPEID type) {
     case UIA_ListItemControlTypeId:
     case UIA_TreeItemControlTypeId:
     case UIA_DataItemControlTypeId: return "item";
-    // Text repeats what OCR reads; the others are containers whose names say little about a place.
-    case UIA_TextControlTypeId:
+    case UIA_TextControlTypeId: return "text";
+    // Containers, whose names say little about a place.
     case UIA_PaneControlTypeId:
     case UIA_GroupControlTypeId:
     case UIA_DocumentControlTypeId:
@@ -175,71 +148,6 @@ HWND topWindowAt(IUIAutomation* uia, IUIAutomationTreeWalker* walker, IUIAutomat
 }
 
 }  // namespace
-
-bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const Image&, int, int, Image&)>& resize,
-              std::vector<RawMark>& out, Failure& fail) {
-  try {
-    winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    const OcrEngine engine = engineForUser();
-    if (!engine) {
-      fail.message = "no OCR language";
-      return false;
-    }
-    Image crop;
-    crop.w = area.w;
-    crop.h = area.h;
-    crop.px.resize(static_cast<size_t>(area.w) * area.h * 4);
-    for (int y = 0; y < area.h; ++y) {
-      const uint8_t* row = &img.px[(static_cast<size_t>(area.y + y) * img.w + area.x) * 4];
-      std::memcpy(&crop.px[static_cast<size_t>(y) * area.w * 4], row, static_cast<size_t>(area.w) * 4);
-    }
-    // OCR refuses images over its limit: read a scaled-down copy and scale the boxes back.
-    const double maxSide = static_cast<double>(OcrEngine::MaxImageDimension());
-    const double scale = std::min({1.0, maxSide / area.w, maxSide / area.h});
-    if (scale < 1.0) {
-      Image smaller;
-      const int w = std::max(1, static_cast<int>(area.w * scale));
-      const int h = std::max(1, static_cast<int>(area.h * scale));
-      if (!resize(crop, w, h, smaller)) {
-        fail.message = "could not scale the area for OCR";
-        return false;
-      }
-      crop = std::move(smaller);
-    }
-    const uint32_t bytes = static_cast<uint32_t>(crop.px.size());
-    winrt::Windows::Storage::Streams::Buffer buffer(bytes);
-    std::memcpy(buffer.data(), crop.px.data(), bytes);
-    buffer.Length(bytes);
-    const SoftwareBitmap bitmap = SoftwareBitmap::CreateCopyFromBuffer(buffer, BitmapPixelFormat::Bgra8, crop.w, crop.h,
-                                                                       BitmapAlphaMode::Premultiplied);
-    const double sx = static_cast<double>(area.w) / crop.w, sy = static_cast<double>(area.h) / crop.h;
-    for (const auto& line : engine.RecognizeAsync(bitmap).get().Lines()) {
-      std::vector<std::string> words;
-      float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-      bool any = false;
-      for (const auto& word : line.Words()) {
-        words.push_back(winrt::to_string(word.Text()));
-        const auto r = word.BoundingRect();
-        x0 = any ? std::min(x0, r.X) : r.X;
-        y0 = any ? std::min(y0, r.Y) : r.Y;
-        x1 = any ? std::max(x1, r.X + r.Width) : r.X + r.Width;
-        y1 = any ? std::max(y1, r.Y + r.Height) : r.Y + r.Height;
-        any = true;
-      }
-      const std::string text = joinOcrWords(words);
-      if (!any || text.empty()) continue;
-      const int left = area.x + static_cast<int>(std::floor(x0 * sx));
-      const int top = area.y + static_cast<int>(std::floor(y0 * sy));
-      const int right = area.x + static_cast<int>(std::ceil(x1 * sx));
-      const int bottom = area.y + static_cast<int>(std::ceil(y1 * sy));
-      out.push_back(RawMark{"text", Rect{left, top, std::max(1, right - left), std::max(1, bottom - top)}, text});
-    }
-    return true;
-  } catch (const winrt::hresult_error& e) {
-    fail.message = failed("OCR", e.code());
-    return false;
-  }
-}
 
 bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail) {
   const Clock::time_point deadline = Clock::now() + kWalkBudget;
@@ -808,12 +716,13 @@ bool fromTitle(DWORD pid, const std::wstring& title, std::wstring& out) {
 
 }  // namespace
 
-bool systemTextAt(const std::vector<Point>& spots, SystemText& out, Failure& fail) {
+bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail) {
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     const auto uia = winrt::create_instance<IUIAutomation>(CLSID_CUIAutomation);
     for (const Point& spot : spots) out.spotTexts.push_back(spotText(uia.get(), spot));
     readFocus(uia.get(), out);
+    if (!withAddress) return true;
     const HWND front = GetForegroundWindow();
     const WindowProcess proc = front ? processOf(front) : WindowProcess{};
     std::string path, address;

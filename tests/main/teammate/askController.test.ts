@@ -72,8 +72,8 @@ interface HarnessOptions {
 }
 
 interface Screen {
-  /** `hangs`: no answer until the ask is aborted. */
-  system: SystemTextLayer | Error | 'hangs';
+  /** `slow`: the helper ran over its budget on it; `hangs`: no answer until the ask is aborted. */
+  system: SystemTextLayer | 'slow' | 'hangs';
   /** The helper's marks file. */
   marksFile: string;
   /** The file behind the window; null: none. */
@@ -99,8 +99,6 @@ function harness(opts: HarnessOptions = {}) {
   const disk = new Set<string>();
   const dirs: string[] = [];
   const screen: Screen = { system: NO_TEXT, marksFile: '', doc: null, ...opts.screen };
-  /** The capture whose grab the helper keeps; a slow probe ends the helper and the grab with it. */
-  let grab: string | null = null;
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -129,33 +127,29 @@ function harness(opts: HarnessOptions = {}) {
           });
         }
         skew = opts.skewAfterCapture ?? 0;
-        grab = `c${captures}`;
         return {
-          captureId: `c${captures}`,
           overviewPath: `ov${captures}.jpg`,
           overview: { w: 1600, h: 1000 },
           zooms: req.spots.map((p, i) => ({ path: `zoom${captures}-${i}.jpg`, rect: zoomRect(req.display, p) })),
         };
       },
-      systemText: async (_spots, signal) => {
+      read: async (req, signal) => {
         const { system } = screen;
-        if (system === 'hangs') {
+        if (req.text && system === 'hangs') {
           return new Promise((_resolve, reject) => {
             signal.addEventListener('abort', () => reject(new ContextError('aborted', 'cancelled')), { once: true });
           });
         }
-        if (system instanceof ContextError && system.code === 'slow') grab = null;
-        if (system instanceof Error) throw system;
-        return system;
+        const text = !req.text ? 'off' : system === 'slow' ? 'slow' : 'ok';
+        return {
+          status: { marks: req.marks ? 'ok' : 'off', text, file: req.file ? 'ok' : 'off' },
+          marks: req.marks ? { path: `${req.dir}/marks.tsv`, count: 1 } : null,
+          text: typeof system === 'object' && req.text ? system : null,
+          file: !req.file ? null : screen.doc
+            ? { path: `C:/docs/${screen.doc.name}`, address: '', how: 'title' }
+            : { path: '', address: '', how: 'none' },
+        };
       },
-      marks: async (req) => {
-        if (req.of !== grab) throw new ContextError('bad', 'that capture is gone');
-        grab = null; // the helper releases the grab once marks have read it
-        return { path: `${req.dir}/marks.tsv`, count: 1, exiting: false };
-      },
-      fileOf: async () => (screen.doc
-        ? { path: `C:/docs/${screen.doc.name}`, address: '', how: 'title' }
-        : { path: '', address: '', how: 'none' }),
     },
     readers: {
       readFile: async () => screen.marksFile,
@@ -1016,9 +1010,9 @@ describe('AskController', () => {
       'screen', 'selection', 'text on screen', 'address', 'controls', 'paper.pdf p. 3–4',
     ]);
 
-    // The system text is too slow: the marks, read before it from the grab, stay. Without the screen text the file
-    // is found by the button's text alone, which matches nothing: its start.
-    h.screen.system = new ContextError('slow', 'the system took too long to answer');
+    // The system text is too slow: the marks, read beside it, stay. Without the screen text the file is found by the
+    // button's text alone, which matches nothing: its start.
+    h.screen.system = 'slow';
     h.ctl.ask(spot('missing', 1300, 900));
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });

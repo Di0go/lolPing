@@ -3,8 +3,8 @@ import { createInterface } from 'node:readline';
 import type { Point } from '../../shared/ipc';
 import type { Shot } from '../../shared/teammate/coords';
 import {
-  captureCommand, fileOfCommand, marksCommand, parseContextLine, serializeContextCommand, systemTextCommand,
-  type ContextCommand, type ContextErrorCode, type ContextReply, type FileHow, type SystemTextLayer,
+  captureCommand, parseContextLine, readCommand, serializeContextCommand, type ContextCommand, type ContextErrorCode,
+  type ContextReply, type ReadResult,
 } from '../../shared/teammate/contextProtocol';
 
 /** `timeout`: no reply in time (the helper was restarted); `exited`: it died or never started; `stopped`: stop() ran. */
@@ -28,8 +28,6 @@ export interface ContextClientOptions {
 }
 
 export interface Capture {
-  /** The helper keeps this capture's grab under this id, for `marks`. */
-  captureId: string;
   overviewPath: string;
   overview: Shot['overview'];
   zooms: { path: string; rect: Shot['zooms'][number] }[];
@@ -61,32 +59,20 @@ export class ContextClient {
   ): Promise<Capture> {
     const r = await this.request((id) => captureCommand(id, req), 'captured', signal);
     if (r.type !== 'captured') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { captureId: r.id, overviewPath: r.overview, overview: { w: r.ow, h: r.oh }, zooms: r.zooms };
+    return { overviewPath: r.overview, overview: { w: r.ow, h: r.oh }, zooms: r.zooms };
   }
 
   /**
-   * Text and controls near the spots, read from capture `of`'s grab into a marks file in `dir`. `exiting`: a probe
-   * was too slow, so some marks may be missing.
+   * The context layers that are on, read side by side: the controls and text near the spots (into a marks file in
+   * `dir`), the system text and the file behind the window. A layer that was too slow comes back `slow`.
    */
-  async marks(
-    req: { of: string; spots: Point[]; radius: number; ocr: boolean; controls: boolean; dir: string },
+  async read(
+    req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; dir: string },
     signal: AbortSignal,
-  ): Promise<{ path: string; count: number; exiting: boolean }> {
-    const r = await this.request((id) => marksCommand(id, req), 'marks', signal);
-    if (r.type !== 'marks') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { path: r.path, count: r.count, exiting: r.exiting };
-  }
-
-  async systemText(spots: Point[], signal: AbortSignal): Promise<SystemTextLayer> {
-    const r = await this.request((id) => systemTextCommand(id, spots), 'systemText', signal);
-    if (r.type !== 'systemText') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return r.layer;
-  }
-
-  async fileOf(signal: AbortSignal): Promise<{ path: string; address: string; how: FileHow }> {
-    const r = await this.request((id) => fileOfCommand(id), 'fileOf', signal);
-    if (r.type !== 'fileOf') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { path: r.path, address: r.address, how: r.how };
+  ): Promise<ReadResult> {
+    const r = await this.request((id) => readCommand(id, req), 'read', signal);
+    if (r.type !== 'read') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return { status: r.status, marks: r.marks, text: r.text, file: r.file };
   }
 
   async foreground(signal: AbortSignal): Promise<{ app: string; title: string }> {
@@ -195,7 +181,7 @@ export class ContextClient {
       else if (reply.type !== p.expect) p.reject(new ContextError('bad', `expected ${p.expect}, got ${reply.type}`));
       else p.resolve(reply);
     }
-    if ((reply.type === 'error' && reply.code === 'slow') || (reply.type === 'marks' && reply.exiting)) {
+    if (reply.type === 'read' && Object.values(reply.status).includes('slow')) {
       // The helper exits after this reply and reads nothing more: the next request must start a fresh one.
       this.child = null;
       this.failAll('exited', 'the context helper stopped after a slow probe');

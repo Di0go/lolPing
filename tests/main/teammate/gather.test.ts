@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ContextError } from '../../../src/main/teammate/contextClient';
 import type { Doc } from '../../../src/main/teammate/files';
 import { gather, type GatherDeps, type GatherRequest } from '../../../src/main/teammate/gather';
-import type { FileHow, SystemTextLayer } from '../../../src/shared/teammate/contextProtocol';
+import type { FileHow, LayerStatus, SystemTextLayer } from '../../../src/shared/teammate/contextProtocol';
 import { PAGE_CHARS } from '../../../src/shared/teammate/locate';
 
 const SPOT = { x: 1000, y: 800 };
@@ -19,42 +19,35 @@ const pages = (): Doc['sections'] => [1, 2, 3, 4, 5, 6].map((n) => ({
 }));
 const pdf = (name: string, sections: Doc['sections'] = pages()): Doc => ({ name, kind: 'pdf', outline: [], sections });
 
+type Layer = 'marks' | 'text' | 'file';
+
 interface FakeOptions {
-  system?: SystemTextLayer | Error;
-  marks?: Error;
-  /** The helper sent the marks it had and is exiting: a probe ran over its budget. */
-  marksExiting?: boolean;
+  /** What the helper says about a layer it was asked for, instead of `ok`. */
+  status?: Partial<Record<Layer, Exclude<LayerStatus, 'off' | 'ok'>>>;
+  /** The read itself fails: the helper timed out, died, or the ask was cancelled. */
+  readError?: Error;
+  system?: SystemTextLayer;
   marksFile?: string;
-  file?: { path: string; address: string; how: FileHow } | Error;
+  file?: { path: string; address: string; how: FileHow };
   doc?: Doc | Error;
 }
 
 function fakes(opts: FakeOptions = {}) {
   const calls: string[] = [];
   const fetched: string[] = [];
-  /** A slow probe makes the helper exit, and the capture's grab goes with it. */
-  let grab = true;
-  const failed = (err: Error): Error => {
-    if (err instanceof ContextError && err.code === 'slow') grab = false;
-    return err;
-  };
   const deps: GatherDeps = {
     context: {
-      systemText: async () => {
-        calls.push('systemText');
-        if (opts.system instanceof Error) throw failed(opts.system);
-        return opts.system ?? layer({ spotTexts: [VISIBLE] });
-      },
-      marks: async (req) => {
-        calls.push(`marks:${req.of}`);
-        if (opts.marks) throw failed(opts.marks);
-        if (!grab) throw new ContextError('bad', 'that capture is gone');
-        return { path: `${req.dir}/marks.tsv`, count: 1, exiting: opts.marksExiting ?? false };
-      },
-      fileOf: async () => {
-        calls.push('fileOf');
-        if (opts.file instanceof Error) throw opts.file;
-        return opts.file ?? { path: 'C:/docs/report.pdf', address: '', how: 'title' };
+      read: async (req) => {
+        const asked = (['marks', 'text', 'file'] as const).filter((l) => req[l]);
+        calls.push(`read:${asked.join('+')}`);
+        if (opts.readError) throw opts.readError;
+        const status = (l: Layer): LayerStatus => (!req[l] ? 'off' : opts.status?.[l] ?? 'ok');
+        return {
+          status: { marks: status('marks'), text: status('text'), file: status('file') },
+          marks: status('marks') === 'ok' ? { path: `${req.dir}/marks.tsv`, count: 1 } : null,
+          text: status('text') === 'ok' ? opts.system ?? layer({ spotTexts: [VISIBLE] }) : null,
+          file: status('file') === 'ok' ? opts.file ?? { path: 'C:/docs/report.pdf', address: '', how: 'title' } : null,
+        };
       },
     },
     readFile: async (path) => {
@@ -76,7 +69,7 @@ function fakes(opts: FakeOptions = {}) {
 }
 
 const request = (over: Partial<GatherRequest> = {}): GatherRequest => ({
-  settings: ALL_ON, captureId: 'r2', spots: [SPOT], dir: 'tmp/run', allin: false, title: 'report.pdf - Acrobat',
+  settings: ALL_ON, spots: [SPOT], dir: 'tmp/run', allin: false, title: 'report.pdf - Acrobat',
   ...over,
 });
 const signal = (): AbortSignal => new AbortController().signal;
@@ -86,14 +79,10 @@ afterEach(() => {
 });
 
 describe('gather', () => {
-  it('runs only the layers that are on', async () => {
+  it('runs only the layers that are on, in one helper read', async () => {
     const all = fakes();
     const got = await gather(all.deps, request(), signal());
-    // One after another: the helper answers one request at a time. Marks go first: a slow probe after them ends the
-    // helper, and the capture's grab with it.
-    expect(all.calls).toEqual([
-      'marks:r2', 'readFile:tmp/run/marks.tsv', 'systemText', 'fileOf', 'readDocument:C:/docs/report.pdf',
-    ]);
+    expect(all.calls).toEqual(['read:marks+text+file', 'readFile:tmp/run/marks.tsv', 'readDocument:C:/docs/report.pdf']);
     expect(got.marks).toEqual([{ kind: 'button', box: { x: 900, y: 700, w: 200, h: 60 }, text: 'Save' }]);
     expect(got.system).toEqual(layer({ spotTexts: [VISIBLE] }));
     expect(got.file?.doc.name).toBe('report.pdf');
@@ -103,17 +92,17 @@ describe('gather', () => {
     const some = fakes();
     const off = { ...ALL_ON, marks: false, files: false };
     const less = await gather(some.deps, request({ settings: off }), signal());
-    expect(some.calls).toEqual(['systemText']);
+    expect(some.calls).toEqual(['read:text']);
     expect(less).toMatchObject({ marks: [], file: null, skipped: false });
 
     const none = fakes();
-    const nothing = { ...ALL_ON, systemText: false, files: false };
-    await gather(none.deps, request({ settings: nothing, captureId: null }), signal());
-    expect(none.calls).toEqual([]); // marks need the capture's grab
+    const nothing = { ...ALL_ON, marks: false, systemText: false, files: false };
+    await gather(none.deps, request({ settings: nothing }), signal());
+    expect(none.calls).toEqual([]); // nothing to ask the helper
   });
 
   it('answers without a layer the helper was too slow for', async () => {
-    const f = fakes({ system: new ContextError('slow', 'the system took too long to answer') });
+    const f = fakes({ status: { text: 'slow' } });
     const got = await gather(f.deps, request(), signal());
     expect(got.system).toBeNull();
     expect(got.skipped).toBe(true);
@@ -121,23 +110,18 @@ describe('gather', () => {
     expect(got.file).not.toBeNull();
     expect(got.used.map((u) => u.kind)).toEqual(['marks', 'file']);
 
-    // Slow marks end the helper; the system text comes from a fresh one.
-    const slowMarks = fakes({ marks: new ContextError('slow', 'OCR took too long') });
+    // The walk was too slow: what the other layers found is kept, and the footer says some context was skipped.
+    const slowMarks = fakes({ status: { marks: 'slow' } });
     const rest = await gather(slowMarks.deps, request(), signal());
     expect(rest).toMatchObject({ marks: [], system: layer({ spotTexts: [VISIBLE] }), skipped: true });
+    expect(slowMarks.calls).not.toContain('readFile:tmp/run/marks.tsv');
 
-    // The OCR finished but the controls walk didn't: the marks found are kept, and the footer says some were skipped.
-    const partial = fakes({ marksExiting: true });
-    const kept = await gather(partial.deps, request(), signal());
-    expect(kept.marks).toHaveLength(1);
-    expect(kept.skipped).toBe(true);
-    expect(kept.used.map((u) => u.kind)).toContain('marks');
+    const timedOut = fakes({ readError: new ContextError('timeout', 'no reply') });
+    await expect(gather(timedOut.deps, request(), signal()))
+      .resolves.toMatchObject({ marks: [], system: null, file: null, skipped: true });
 
-    const timedOut = fakes({ marks: new ContextError('timeout', 'no reply') });
-    await expect(gather(timedOut.deps, request(), signal())).resolves.toMatchObject({ marks: [], skipped: true });
-
-    // A layer the system can't give (no permission, no OCR language) is left out without saying context was skipped.
-    const denied = fakes({ system: new ContextError('permission', 'Accessibility is off') });
+    // A layer the system can't give (no permission) is left out without saying context was skipped.
+    const denied = fakes({ status: { text: 'permission' } });
     await expect(gather(denied.deps, request(), signal())).resolves.toMatchObject({ system: null, skipped: false });
   });
 
@@ -208,9 +192,9 @@ describe('gather', () => {
   });
 
   it('rethrows when the ask is cancelled', async () => {
-    const f = fakes({ marks: new ContextError('aborted', 'the ask was cancelled') });
+    const f = fakes({ readError: new ContextError('aborted', 'the ask was cancelled') });
     await expect(gather(f.deps, request(), signal())).rejects.toMatchObject({ code: 'aborted' });
-    expect(f.calls).toEqual(['marks:r2']);
+    expect(f.calls).toEqual(['read:marks+text+file']);
 
     // A download cut off by the cancel rejects with the signal's own error, which goes up as well.
     const ac = new AbortController();

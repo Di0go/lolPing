@@ -8,7 +8,7 @@ import { ContextError, type ContextClient } from './contextClient';
 import type { Doc, fetchWebPdf, readDocument, readPdfBuffer } from './files';
 
 export interface GatherDeps {
-  context: Pick<ContextClient, 'marks' | 'systemText' | 'fileOf'>;
+  context: Pick<ContextClient, 'read'>;
   /** Reads the helper's marks file. */
   readFile(path: string): Promise<string>;
   readDocument: typeof readDocument;
@@ -18,8 +18,6 @@ export interface GatherDeps {
 
 export interface GatherRequest {
   settings: TeammateSettings['context'];
-  /** The ask's capture, whose grab the marks are read from; null: no marks. */
-  captureId: string | null;
   spots: Point[];
   dir: string;
   /** Whole picture reads a larger part of the file. */
@@ -119,8 +117,8 @@ async function fetchWithin(deps: GatherDeps, url: string, signal: AbortSignal): 
 }
 
 /**
- * Runs the context layers that are on for one ask, one after another (the helper answers one request at a time). A
- * layer that fails is left out; a cancelled ask rejects.
+ * Runs the context layers that are on for one ask: one helper read, side by side, then the marks file and the file
+ * behind the window. A layer that fails is left out; a cancelled ask rejects.
  */
 export async function gather(deps: GatherDeps, req: GatherRequest, signal: AbortSignal): Promise<Gathered> {
   const out: Gathered = { marks: [], system: null, file: null, doc: null, used: [], skipped: false };
@@ -130,36 +128,34 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
       return await run();
     } catch (err) {
       if (signal.aborted || (err instanceof ContextError && err.code === 'aborted')) throw err;
-      if (err instanceof ContextError && (err.code === 'timeout' || err.code === 'slow' || err.code === 'exited')) {
+      if (err instanceof ContextError && (err.code === 'timeout' || err.code === 'exited')) {
         out.skipped = true;
       }
       return null;
     }
   };
-  const { settings, captureId } = req;
+  const { settings } = req;
+  const layers = { marks: settings.marks, text: settings.systemText, file: settings.files };
+  const read = layers.marks || layers.text || layers.file
+    ? await step(() => deps.context.read({ spots: req.spots, radius: MARK_RADIUS, ...layers, dir: req.dir }, signal))
+    : null;
+  // A layer still running at the helper's budget is left out, and the footer says some context was skipped.
+  if (read && Object.values(read.status).includes('slow')) out.skipped = true;
 
-  // Marks first: a slow probe ends the helper, and the capture's grab, which marks are read from, goes with it.
-  if (settings.marks && captureId !== null) {
-    const marks = await step(async () => {
-      const found = await deps.context.marks({
-        of: captureId, spots: req.spots, radius: MARK_RADIUS, ocr: true, controls: true, dir: req.dir,
-      }, signal);
-      // A probe was too slow: the marks the others found are used, and the footer says some context was skipped.
-      if (found.exiting) out.skipped = true;
-      return selectMarks(parseMarksFile(await deps.readFile(found.path)), req.spots, {
-        radius: MARK_RADIUS, max: MAX_MARKS,
-      });
-    });
+  const found = read?.marks;
+  if (found) {
+    const marks = await step(async () => selectMarks(parseMarksFile(await deps.readFile(found.path)), req.spots, {
+      radius: MARK_RADIUS, max: MAX_MARKS,
+    }));
     out.marks = marks ?? [];
   }
+  out.system = read?.text ?? null;
 
-  if (settings.systemText) out.system = await step(() => deps.context.systemText(req.spots, signal));
-
-  if (settings.files) {
-    const behind = await step(() => deps.context.fileOf(signal));
-    const web = behind && behind.path === '' && settings.webPdfs ? webPdf(behind.address, req.title) : null;
+  const behind = read?.file ?? null;
+  if (behind) {
+    const web = behind.path === '' && settings.webPdfs ? webPdf(behind.address, req.title) : null;
     const doc = await step(async () => {
-      if (behind && behind.path !== '') return deps.readDocument(behind.path);
+      if (behind.path !== '') return deps.readDocument(behind.path);
       if (web) return deps.readPdfBuffer(web.name, await fetchWithin(deps, web.url, signal));
       return null;
     });

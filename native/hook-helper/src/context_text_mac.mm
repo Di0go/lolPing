@@ -1,11 +1,10 @@
-// macOS text probes: OCR of the kept grab by Vision, named controls near the spots by the Accessibility API, the
-// system's own text (selection, focus, text under the spots, browser address) and the file behind the window.
+// macOS text probes: named controls and text near the spots by the Accessibility API, the system's own text
+// (selection, focus, text under the spots, browser address) and the file behind the window.
 // Each runs on its own fresh thread (context.h), so each opens its own autorelease pool and keeps no caller state.
-// The Accessibility probes need the Accessibility permission for this process; OCR only needs the grab.
+// The Accessibility probes need the Accessibility permission for this process.
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
-#import <Vision/Vision.h>
 #include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -32,12 +31,9 @@ constexpr size_t kSecureScanNodes = 5000;
 constexpr size_t kAddressNodes = 1500;
 constexpr size_t kNameMax = 200;  // characters of a control's name kept; the marks file cuts it further
 constexpr int kPasswordParents = 3;  // how far up a password field's inner nodes are looked for
-// The probe's own limit, inside the 1.5 s the caller gives it: past it a walk stops and the probe answers with what
+// The probe's own limit, inside the 1 s the caller gives it: past it a walk stops and the probe answers with what
 // it has, rather than the helper being restarted for answering late.
-constexpr std::chrono::milliseconds kWalkBudget{1100};
-
-// Premultiplied-first, little-endian: B, G, R, A in memory, like the grab.
-constexpr CGBitmapInfo kBgra = static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedFirst) | kCGBitmapByteOrder32Little;
+constexpr std::chrono::milliseconds kWalkBudget{800};
 
 // Owns one Core Foundation object.
 class Ref {
@@ -254,8 +250,9 @@ const char* kindOf(const Node& n) {
   if (r == "AXMenuItem" || r == "AXMenuBarItem" || r == "AXMenuBar") return "menu";
   if (r == "AXCheckBox" || r == "AXRadioButton") return "check";
   if (r == "AXRow" || r == "AXCell") return "item";
-  // Text repeats what OCR reads; the others are containers whose names say little about a place.
-  for (const char* skip : {"AXStaticText", "AXHeading", "AXGroup", "AXWindow", "AXWebArea", "AXScrollArea", "AXSplitGroup",
+  if (r == "AXStaticText" || r == "AXHeading") return "text";
+  // Containers, whose names say little about a place.
+  for (const char* skip : {"AXGroup", "AXWindow", "AXWebArea", "AXScrollArea", "AXSplitGroup",
                            "AXToolbar", "AXList", "AXTable", "AXOutline", "AXBrowser", "AXTabGroup", "AXRadioGroup",
                            "AXLayoutArea", "AXLayoutItem", "AXSplitter", "AXScrollBar", "AXSheet", "AXDrawer",
                            "AXPopover", "AXApplication", "AXUnknown", "AXGrowArea"}) {
@@ -306,65 +303,6 @@ Ref windowAt(AXUIElementRef system, Point p) {
 }
 
 }  // namespace
-
-bool ocrLines(const Image& img, const Rect& area, std::vector<RawMark>& out, Failure& fail) {
-  @autoreleasepool {
-    if (area.x < 0 || area.y < 0 || area.w <= 0 || area.h <= 0 || area.x + area.w > img.w || area.y + area.h > img.h ||
-        img.px.size() < static_cast<size_t>(img.w) * img.h * 4) {
-      fail.message = "the area is outside the grab";
-      return false;
-    }
-    // The image reads the grab's pixels in place: the caller keeps the grab alive until this returns.
-    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, img.px.data(), img.px.size(), nullptr);
-    CGImageRef whole = CGImageCreate(img.w, img.h, 8, 32, static_cast<size_t>(img.w) * 4, space, kBgra, provider, nullptr,
-                                     false, kCGRenderingIntentDefault);
-    CGDataProviderRelease(provider);
-    CGColorSpaceRelease(space);
-    if (!whole) {
-      fail.message = "could not read the grab";
-      return false;
-    }
-    CGImageRef crop = CGImageCreateWithImageInRect(whole, CGRectMake(area.x, area.y, area.w, area.h));
-    CGImageRelease(whole);
-    if (!crop) {
-      fail.message = "could not cut the area out of the grab";
-      return false;
-    }
-    VNRecognizeTextRequest* request = [[VNRecognizeTextRequest alloc] init];
-    request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-    request.usesLanguageCorrection = YES;
-    // A language this macOS cannot read with the accurate level would fail the whole request: ask only for those it has.
-    NSArray<NSString*>* supported = [request supportedRecognitionLanguagesAndReturnError:nil];
-    NSMutableArray<NSString*>* languages = [NSMutableArray array];
-    for (NSString* language in @[ @"en-US", @"zh-Hans" ]) {
-      if ([supported containsObject:language]) [languages addObject:language];
-    }
-    if (languages.count > 0) request.recognitionLanguages = languages;
-    VNImageRequestHandler* handler = [[VNImageRequestHandler alloc] initWithCGImage:crop options:@{}];
-    NSError* error = nil;
-    const BOOL ok = [handler performRequests:@[ request ] error:&error];
-    CGImageRelease(crop);
-    if (!ok) {
-      fail.message = error ? error.localizedDescription.UTF8String : "text recognition failed";
-      return false;
-    }
-    for (VNRecognizedTextObservation* line in request.results) {
-      VNRecognizedText* best = [line topCandidates:1].firstObject;
-      if (!best) continue;
-      const std::string text = trimmed(utf8Of((__bridge CFStringRef)best.string));
-      if (text.empty()) continue;
-      // Normalised with the origin at the bottom left: flip to rows from the top and scale to the area's pixels.
-      const CGRect b = line.boundingBox;
-      const int left = area.x + static_cast<int>(std::floor(b.origin.x * area.w));
-      const int right = area.x + static_cast<int>(std::ceil((b.origin.x + b.size.width) * area.w));
-      const int top = area.y + static_cast<int>(std::floor((1.0 - b.origin.y - b.size.height) * area.h));
-      const int bottom = area.y + static_cast<int>(std::ceil((1.0 - b.origin.y) * area.h));
-      out.push_back(RawMark{"text", Rect{left, top, std::max(1, right - left), std::max(1, bottom - top)}, text});
-    }
-    return true;
-  }
-}
 
 bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail) {
   @autoreleasepool {
@@ -517,7 +455,7 @@ void readFocus(AXUIElementRef system, Clock::time_point deadline, SystemText& ou
 
 }  // namespace
 
-bool systemTextAt(const std::vector<Point>& spots, SystemText& out, Failure& fail) {
+bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail) {
   @autoreleasepool {
     if (noAccess(fail)) return false;
     const Clock::time_point deadline = Clock::now() + kWalkBudget;
@@ -528,6 +466,7 @@ bool systemTextAt(const std::vector<Point>& spots, SystemText& out, Failure& fai
     }
     for (const Point& spot : spots) out.spotTexts.push_back(spotText(system.el(), spot, deadline));
     readFocus(system.el(), deadline, out);
+    if (!withAddress) return true;
     const Ref app = attr(system.el(), kAXFocusedApplicationAttribute);
     if (isElement(app) && !unreadableApp(app.el()) && isBrowser(app.el())) {
       AXUIElementSetMessagingTimeout(app.el(), 1.0f);  // a hung browser must not stall the reply

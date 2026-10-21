@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <functional>
 #include <istream>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,21 +32,20 @@ struct CaptureRequest {
   std::string dir;            // where the JPEGs go
 };
 
-struct MarksRequest {
-  std::string of;             // the capture whose grab is read
+/** Which context layers to read for one ask; they run side by side under one budget. */
+struct ReadRequest {
   std::vector<Point> spots;
-  int radius = 600;           // request units around each spot
-  bool ocr = false, controls = false;
+  int radius = 600;           // request units around each spot, for marks
+  bool marks = false, text = false, file = false;
   std::string dir;            // where the marks file goes
 };
 
 struct Command {
-  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown, Marks, SystemText, FileOf } kind = Kind::Bad;
+  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown, Read } kind = Kind::Bad;
   std::string id;
   std::string error;  // Bad: why
   CaptureRequest capture;
-  MarksRequest marks;
-  std::vector<Point> spots;  // SystemText
+  ReadRequest read;
 };
 
 constexpr int kMaxSpots = 4;
@@ -87,7 +85,7 @@ struct SystemText {
   bool focusSecure = false;
 };
 
-// ocr, controls, systemText and fileOf each run on their own fresh thread, which may outlive the command when it runs
+// controls, systemText and fileOf each run on their own fresh thread, which may outlive the command when it runs
 // over budget: they must not keep references to caller-owned state, and on Windows each must CoInitializeEx on its
 // thread.
 struct ContextPlatform {
@@ -96,11 +94,10 @@ struct ContextPlatform {
   std::function<bool(const Image& in, int w, int h, Image& out)> resize;
   std::function<bool(const Image& img, int quality, const std::string& path, Failure& fail)> writeJpeg;
   std::function<bool(std::string& app, std::string& title, Failure& fail)> foreground;
-  /** Text lines inside `area` of the grab; the area and the boxes are in the image's pixels. */
-  std::function<bool(const Image& img, const Rect& area, std::vector<RawMark>& out, Failure& fail)> ocr;
-  /** Named controls within `radius` of a spot; spots, radius and boxes are in request (screen) units. */
+  /** Named controls and text within `radius` of a spot; spots, radius and boxes are in request (screen) units. */
   std::function<bool(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail)> controls;
-  std::function<bool(const std::vector<Point>& spots, SystemText& out, Failure& fail)> systemText;
+  /** `withAddress`: also look up the browser's address; off when the file probe of the same read looks it up. */
+  std::function<bool(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail)> systemText;
   /** The file or web address behind the foreground window; `how` is office, address, title or none. */
   std::function<bool(std::string& path, std::string& address, std::string& how, Failure& fail)> fileOf;
 };
@@ -108,38 +105,24 @@ struct ContextPlatform {
 /** This OS's capture, resize, JPEG and foreground calls (context_capture_win.cpp, context_capture_mac.mm). */
 ContextPlatform nativePlatform();
 
-/** The latest successful capture's full grab, kept for one `marks` command and released by it. */
-struct LastGrab {
-  std::string id;
-  Rect display;
-  std::shared_ptr<const Image> image;  // shared so a probe thread that outlives its command can still read it
-};
-
 struct Reply {
   std::string line;        // without the newline
   bool exitAfter = false;  // a probe is still running past its budget: the helper exits after this reply
 };
 
 /** How long a command's OS probes may take, together, before the helper gives up on them. */
-constexpr int kProbeBudgetMs = 1500;
+constexpr int kProbeBudgetMs = 1000;
 
 /** runContextLoop's result after a reply with exitAfter: the caller ends the process without cleanup. */
 constexpr int kExitNow = 2;
 
 /** Runs one command. Not called for Shutdown. Tests pass a short budget. */
-Reply handleCommand(const Command& cmd, const ContextPlatform& platform, LastGrab& last,
-                    int budgetMs = kProbeBudgetMs);
-
-/**
- * One OCR line from its words (UTF-8): a space between words, none between two Han or kana characters and none next
- * to CJK punctuation or a full-width form. Korean keeps its spaces.
- */
-std::string joinOcrWords(const std::vector<std::string>& words);
+Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int budgetMs = kProbeBudgetMs);
 
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
 std::string marksFileText(const std::vector<RawMark>& marks);
 
-/** Caps on what systemText sends, in characters; the probes apply them. */
+/** Caps on the system text a read sends, in characters; the probes apply them. */
 constexpr size_t kSelectionMax = 4000;
 constexpr size_t kSpotTextMax = 2000;
 constexpr size_t kFocusValueMax = 2000;

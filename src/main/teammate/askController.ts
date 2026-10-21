@@ -35,7 +35,7 @@ export interface AskDeps {
   settings: () => Settings;
   lang: () => Lang;
   secrets: Pick<SecretStore, 'key' | 'instructions' | 'available'>;
-  context: Pick<ContextClient, 'capture' | 'foreground' | 'marks' | 'systemText' | 'fileOf'>;
+  context: Pick<ContextClient, 'capture' | 'foreground' | 'read'>;
   /** What gather reads the marks file and the file behind the window with. */
   readers: Omit<GatherDeps, 'context'>;
   adapter: (p: BuiltinProfile, key: string) => ProviderAdapter;
@@ -382,7 +382,7 @@ export class AskController extends EventEmitter {
     run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
     const allin = run.intent.def.id === 'allin';
     const layers = await gather({ context: deps.context, ...deps.readers }, {
-      settings: t.context, captureId: cap.captureId, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
+      settings: t.context, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
     }, signal);
     if (!this.alive(run)) return;
     run.screenMarks = layers.marks;

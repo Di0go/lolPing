@@ -194,10 +194,8 @@ bool foreground(std::string& app, std::string& title, Failure&) {
 }  // namespace
 
 // The text probes, in context_text_win.cpp.
-bool ocrLines(const Image& img, const Rect& area, const std::function<bool(const Image&, int, int, Image&)>& resize,
-              std::vector<RawMark>& out, Failure& fail);
 bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail);
-bool systemTextAt(const std::vector<Point>& spots, SystemText& out, Failure& fail);
+bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail);
 bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail);
 
 ContextPlatform nativePlatform() {
@@ -206,9 +204,6 @@ ContextPlatform nativePlatform() {
   p.resize = resize;
   p.writeJpeg = writeJpeg;
   p.foreground = foreground;
-  p.ocr = [](const Image& img, const Rect& area, std::vector<RawMark>& out, Failure& fail) {
-    return ocrLines(img, area, resize, out, fail);
-  };
   p.controls = nearbyControls;
   p.systemText = systemTextAt;
   p.fileOf = fileBehindWindow;

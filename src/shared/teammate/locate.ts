@@ -4,12 +4,12 @@ export const PAGE_CHARS = 3000;
 const SHINGLE = 12;
 const STEP = 4;
 
-/** NFKC, lower case, and every run of whitespace and punctuation as one space, so OCR and file text compare. */
+/** NFKC, lower case, and every run of whitespace and punctuation as one space, so screen and file text compare. */
 export function normalize(text: string): string {
   return text.normalize('NFKC').toLowerCase().replace(/[\s\p{P}]+/gu, ' ').trim();
 }
 
-/** Fixed-length slices of the visible text: a Chinese line has no word breaks, and one wrong OCR character spoils few. */
+/** Fixed-length slices of the visible text: a Chinese line has no word breaks, and one odd character spoils few. */
 function shingles(text: string): string[] {
   if (text.length <= SHINGLE) return text ? [text] : [];
   const out: string[] = [];

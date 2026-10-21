@@ -14,16 +14,16 @@ export type ContextCommand =
     type: 'capture'; id: string; display: string; spots: string; overview: number; zoom: string; quality: number; dir: string;
   }
   | {
-    type: 'marks'; id: string; of: string; spots: string; radius: number; ocr: boolean; controls: boolean; dir: string;
+    type: 'read'; id: string; spots: string; radius: number; marks: boolean; text: boolean; file: boolean; dir: string;
   }
-  | { type: 'systemText'; id: string; spots: string }
-  | { type: 'fileOf'; id: string }
   | { type: 'foreground'; id: string }
   | { type: 'ping'; id: string }
   | { type: 'shutdown' };
 
-/** `slow`: an OS probe ran over its budget and the helper exits after this reply. */
-export type ContextErrorCode = 'capture' | 'permission' | 'bad' | 'slow';
+export type ContextErrorCode = 'capture' | 'permission' | 'bad';
+
+/** One layer of a read: `off` was not asked for; `slow` was still running at the budget, so the helper exits. */
+export type LayerStatus = 'off' | 'ok' | 'slow' | 'capture' | 'permission';
 
 /** How the helper found the file behind the window. */
 export type FileHow = 'office' | 'address' | 'title' | 'none';
@@ -36,13 +36,18 @@ export interface SystemTextLayer {
   address: string;
 }
 
+/** What one read found; a layer is null unless its status is `ok`. */
+export interface ReadResult {
+  status: { marks: LayerStatus; text: LayerStatus; file: LayerStatus };
+  marks: { path: string; count: number } | null;
+  text: SystemTextLayer | null;
+  file: { path: string; address: string; how: FileHow } | null;
+}
+
 /** Lines context-helper writes to stdout, after validation. */
 export type ContextReply =
   | { type: 'captured'; id: string; overview: string; ow: number; oh: number; zooms: { path: string; rect: Rect }[] }
-  /** `exiting`: a probe ran over its budget, so these are the marks the others found and the helper exits after. */
-  | { type: 'marks'; id: string; path: string; count: number; exiting: boolean }
-  | { type: 'systemText'; id: string; layer: SystemTextLayer }
-  | { type: 'fileOf'; id: string; path: string; address: string; how: FileHow }
+  | ({ type: 'read'; id: string } & ReadResult)
   | { type: 'foreground'; id: string; app: string; title: string }
   | { type: 'pong'; id: string }
   | { type: 'error'; id: string; code: ContextErrorCode; message: string };
@@ -69,33 +74,31 @@ export function captureCommand(
   };
 }
 
-/** Reads text and controls near the spots from capture `of`'s grab into a marks file in `dir`. */
-export function marksCommand(
+/**
+ * Reads the layers that are on, side by side: the controls and text near the spots (into a marks file in `dir`), the
+ * system text and the file behind the window.
+ */
+export function readCommand(
   id: string,
-  req: { of: string; spots: Point[]; radius: number; ocr: boolean; controls: boolean; dir: string },
+  req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; dir: string },
 ): ContextCommand {
   return {
-    type: 'marks', id, of: req.of, spots: spotsText(req.spots), radius: Math.round(req.radius), ocr: req.ocr,
-    controls: req.controls, dir: req.dir,
+    type: 'read', id, spots: spotsText(req.spots), radius: Math.round(req.radius), marks: req.marks, text: req.text,
+    file: req.file, dir: req.dir,
   };
 }
-
-export const systemTextCommand = (id: string, spots: Point[]): ContextCommand => (
-  { type: 'systemText', id, spots: spotsText(spots) }
-);
-
-export const fileOfCommand = (id: string): ContextCommand => ({ type: 'fileOf', id });
 
 export const serializeContextCommand = (cmd: ContextCommand): string => `${JSON.stringify(cmd)}\n`;
 
 const isPositiveInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
-const isErrorCode = (v: unknown): v is ContextErrorCode => (
-  v === 'capture' || v === 'permission' || v === 'bad' || v === 'slow'
+const isErrorCode = (v: unknown): v is ContextErrorCode => v === 'capture' || v === 'permission' || v === 'bad';
+const isLayerStatus = (v: unknown): v is LayerStatus => (
+  v === 'off' || v === 'ok' || v === 'slow' || v === 'capture' || v === 'permission'
 );
 const isFileHow = (v: unknown): v is FileHow => v === 'office' || v === 'address' || v === 'title' || v === 'none';
 
-/** Between spot texts in the systemText reply. */
+/** Between spot texts in the read reply. */
 const RECORD_SEPARATOR = '\u001e';
 
 /** The helper's caps (kSelectionMax and the rest in context.h), applied again here in case a helper ever doesn't. */
@@ -130,6 +133,24 @@ function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
     focus: focusKind === '' ? null : { kind: focusKind, label: focusLabel, value, secure: focusSecure },
     address: capChars(address, ADDRESS_MAX),
   };
+}
+
+function parseRead(o: Record<string, unknown>): ReadResult | null {
+  const { marks, text, file } = o;
+  if (!isLayerStatus(marks) || !isLayerStatus(text) || !isLayerStatus(file)) return null;
+  let found: ReadResult['marks'] = null;
+  if (marks === 'ok') {
+    if (typeof o.marksPath !== 'string' || o.marksPath === '' || !isCount(o.count)) return null;
+    found = { path: o.marksPath, count: o.count };
+  }
+  const layer = text === 'ok' ? parseSystemText(o) : null;
+  if (text === 'ok' && !layer) return null;
+  let behind: ReadResult['file'] = null;
+  if (file === 'ok') {
+    if (typeof o.filePath !== 'string' || typeof o.fileAddress !== 'string' || !isFileHow(o.how)) return null;
+    behind = { path: o.filePath, address: o.fileAddress, how: o.how };
+  }
+  return { status: { marks, text, file }, marks: found, text: layer, file: behind };
 }
 
 function parseRect(s: string): Rect | null {
@@ -172,18 +193,10 @@ export function parseContextLine(line: string): ContextReply | null {
       const zooms = parseZooms(o.zooms, o.zoomRects);
       return zooms ? { type: 'captured', id, overview: o.overview, ow: o.ow, oh: o.oh, zooms } : null;
     }
-    case 'marks':
-      if (typeof o.path !== 'string' || o.path === '' || !isCount(o.count)) return null;
-      // Older helpers never send `exiting`.
-      if (o.exiting !== undefined && typeof o.exiting !== 'boolean') return null;
-      return { type: 'marks', id, path: o.path, count: o.count, exiting: o.exiting === true };
-    case 'systemText': {
-      const layer = parseSystemText(o);
-      return layer ? { type: 'systemText', id, layer } : null;
+    case 'read': {
+      const result = parseRead(o);
+      return result ? { type: 'read', id, ...result } : null;
     }
-    case 'fileOf':
-      if (typeof o.path !== 'string' || typeof o.address !== 'string' || !isFileHow(o.how)) return null;
-      return { type: 'fileOf', id, path: o.path, address: o.address, how: o.how };
     case 'foreground':
       if (typeof o.app !== 'string' || typeof o.title !== 'string') return null;
       return { type: 'foreground', id, app: o.app, title: o.title };

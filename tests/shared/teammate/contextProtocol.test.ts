@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import {
-  captureCommand, fileOfCommand, marksCommand, parseContextLine, systemTextCommand,
-} from '../../../src/shared/teammate/contextProtocol';
+import { captureCommand, parseContextLine, readCommand } from '../../../src/shared/teammate/contextProtocol';
+
+/** A read reply with every layer off; `over` adds or replaces fields. */
+const readLine = (over: Record<string, unknown> = {}): string => JSON.stringify({
+  type: 'read', id: 'r1', marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', ...over,
+});
+const textFields = {
+  text: 'ok', selection: 'picked', spotTexts: 'one', focusKind: 'field', focusLabel: 'Name', focusValue: 'Ada',
+  focusSecure: false, address: 'https://example.com/',
+};
 
 describe('contextProtocol', () => {
   it('flattens a capture into the helper\'s strings with whole pixels', () => {
@@ -39,6 +46,7 @@ describe('contextProtocol', () => {
     expect(parseContextLine(JSON.stringify({ ...captured, ow: 0 }))).toBeNull();
     expect(parseContextLine(JSON.stringify({ ...captured, overview: '' }))).toBeNull();
     expect(parseContextLine(JSON.stringify({ type: 'error', id: 'r1', code: 'weird', message: 'x' }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ type: 'error', id: 'r1', code: 'slow', message: 'x' }))).toBeNull();
     expect(parseContextLine(JSON.stringify({ type: 'foreground', id: 'r1', app: 3, title: '' }))).toBeNull();
   });
 
@@ -50,86 +58,77 @@ describe('contextProtocol', () => {
     expect(parseContextLine(JSON.stringify({ type: 'pong', id: 'r3' }))).toEqual({ type: 'pong', id: 'r3' });
   });
 
-  it('flattens marks, systemText and fileOf commands', () => {
-    expect(marksCommand('m1', {
-      of: 'r1', spots: [{ x: 10.4, y: -20 }, { x: 3, y: 4 }], radius: 600, ocr: true, controls: false, dir: 'C:\\t',
+  it('flattens a read command', () => {
+    expect(readCommand('r1', {
+      spots: [{ x: 10.4, y: -20 }, { x: 3, y: 4 }], radius: 600, marks: true, text: false, file: true, dir: 'C:\\t',
     })).toEqual({
-      type: 'marks', id: 'm1', of: 'r1', spots: '10,-20;3,4', radius: 600, ocr: true, controls: false, dir: 'C:\\t',
+      type: 'read', id: 'r1', spots: '10,-20;3,4', radius: 600, marks: true, text: false, file: true, dir: 'C:\\t',
     });
-    expect(systemTextCommand('s1', [{ x: 1, y: 2 }])).toEqual({ type: 'systemText', id: 's1', spots: '1,2' });
-    expect(fileOfCommand('f1')).toEqual({ type: 'fileOf', id: 'f1' });
   });
 
-  it('parses marks, systemText and fileOf replies', () => {
-    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm1', path: 'C:\\t\\marks-m1.tsv', count: 12 })))
-      .toEqual({ type: 'marks', id: 'm1', path: 'C:\\t\\marks-m1.tsv', count: 12, exiting: false });
-    // A probe ran over its budget: the marks the others found, and the helper exits after them.
-    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm2', path: 'm.tsv', count: 3, exiting: true })))
-      .toEqual({ type: 'marks', id: 'm2', path: 'm.tsv', count: 3, exiting: true });
-    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm2', path: 'm.tsv', count: 3, exiting: 'yes' })))
-      .toBeNull();
-    expect(parseContextLine(JSON.stringify({
-      type: 'systemText', id: 's1', selection: 'picked', spotTexts: 'one', focusKind: 'field', focusLabel: 'Name',
-      focusValue: 'Ada', focusSecure: false, address: 'https://example.com/',
+  it('parses a read reply layer by layer', () => {
+    expect(parseContextLine(readLine({
+      marks: 'ok', marksPath: 'C:\\t\\marks-r1.tsv', count: 12, ...textFields,
+      file: 'ok', filePath: 'C:\\a.pdf', fileAddress: '', how: 'title',
     }))).toEqual({
-      type: 'systemText', id: 's1',
-      layer: {
+      type: 'read', id: 'r1',
+      status: { marks: 'ok', text: 'ok', file: 'ok' },
+      marks: { path: 'C:\\t\\marks-r1.tsv', count: 12 },
+      text: {
         selection: 'picked', spotTexts: ['one'], focus: { kind: 'field', label: 'Name', value: 'Ada', secure: false },
         address: 'https://example.com/',
       },
+      file: { path: 'C:\\a.pdf', address: '', how: 'title' },
     });
-    expect(parseContextLine(JSON.stringify({
-      type: 'systemText', id: 's2', selection: '', spotTexts: '', focusKind: '', focusLabel: '', focusValue: '',
-      focusSecure: false, address: '',
-    }))).toEqual({ type: 'systemText', id: 's2', layer: { selection: '', spotTexts: [], focus: null, address: '' } });
-    expect(parseContextLine(JSON.stringify({ type: 'fileOf', id: 'f1', path: 'C:\\a.pdf', address: '', how: 'title' })))
-      .toEqual({ type: 'fileOf', id: 'f1', path: 'C:\\a.pdf', address: '', how: 'title' });
-    expect(parseContextLine(JSON.stringify({ type: 'error', id: 'f1', code: 'slow', message: 'fileOf' })))
-      .toEqual({ type: 'error', id: 'f1', code: 'slow', message: 'fileOf' });
+    // A layer that is off, too slow or refused comes back null with its status.
+    expect(parseContextLine(readLine({ text: 'permission', file: 'slow' }))).toEqual({
+      type: 'read', id: 'r1', status: { marks: 'off', text: 'permission', file: 'slow' }, marks: null, text: null,
+      file: null,
+    });
+    expect(parseContextLine(readLine({ text: 'ok', selection: '', spotTexts: '', focusKind: '', focusLabel: '',
+      focusValue: '', focusSecure: false, address: '' }))).toMatchObject({
+      text: { selection: '', spotTexts: [], focus: null, address: '' },
+    });
+  });
+
+  it('rejects a read reply with a bad status or a missing layer', () => {
+    expect(parseContextLine(readLine({ marks: 'maybe' }))).toBeNull();
+    expect(parseContextLine(readLine({ marks: 'ok', marksPath: '', count: 1 }))).toBeNull();
+    expect(parseContextLine(readLine({ marks: 'ok', marksPath: 'a.tsv', count: -1 }))).toBeNull();
+    expect(parseContextLine(readLine({ text: 'ok' }))).toBeNull(); // ok, but no text fields
+    expect(parseContextLine(readLine({ file: 'ok', filePath: 'a', fileAddress: '', how: 'guess' }))).toBeNull();
+    expect(parseContextLine(readLine({ file: 'ok', filePath: 3, fileAddress: '', how: 'none' }))).toBeNull();
+    expect(parseContextLine(readLine({ file: 'ok', filePath: '', fileAddress: '', how: 'none' })))
+      .toMatchObject({ file: { path: '', address: '', how: 'none' } });
   });
 
   it('blanks the value of a secure field', () => {
-    const reply = parseContextLine(JSON.stringify({
-      type: 'systemText', id: 's1', selection: '', spotTexts: '', focusKind: 'field', focusLabel: 'Password',
-      focusValue: 'hunter2', focusSecure: true, address: '',
+    const reply = parseContextLine(readLine({
+      ...textFields, focusLabel: 'Password', focusValue: 'hunter2', focusSecure: true,
     }));
-    expect(reply).toMatchObject({ layer: { focus: { kind: 'field', label: 'Password', value: '', secure: true } } });
+    expect(reply).toMatchObject({ text: { focus: { kind: 'field', label: 'Password', value: '', secure: true } } });
     expect(JSON.stringify(reply)).not.toContain('hunter2');
-    const noFlag = { type: 'systemText', id: 's1', selection: '', spotTexts: '', focusKind: 'field', focusLabel: '',
-      focusValue: '', address: '' };
-    expect(parseContextLine(JSON.stringify({ ...noFlag, focusSecure: 'true' }))).toBeNull();
-    expect(parseContextLine(JSON.stringify(noFlag))).toBeNull();
+    expect(parseContextLine(readLine({ ...textFields, focusSecure: 'true' }))).toBeNull();
+    const { focusSecure: _dropped, ...noFlag } = textFields;
+    expect(parseContextLine(readLine(noFlag))).toBeNull();
   });
 
   it('cuts the helper\'s text to its caps in code points, whatever the helper sent', () => {
     const han = '\u{20000}'; // one code point, two UTF-16 units
-    const reply = parseContextLine(JSON.stringify({
-      type: 'systemText', id: 's1', selection: han.repeat(4_001), spotTexts: `${'a'.repeat(2_001)}\u001eshort`,
-      focusKind: 'field', focusLabel: 'Body', focusValue: 'v'.repeat(2_001), focusSecure: false,
-      address: `https://example.com/${'p'.repeat(2_000)}`,
+    const reply = parseContextLine(readLine({
+      ...textFields, selection: han.repeat(4_001), spotTexts: `${'a'.repeat(2_001)}\u001eshort`,
+      focusValue: 'v'.repeat(2_001), address: `https://example.com/${'p'.repeat(2_000)}`,
     }));
-    if (reply?.type !== 'systemText') throw new Error('not parsed');
-    const { layer } = reply;
-    expect(layer.selection).toBe(han.repeat(4_000));
-    expect(layer.spotTexts.map((t) => t.length)).toEqual([2_000, 5]);
-    expect(layer.focus?.value).toHaveLength(2_000);
-    expect([...layer.address]).toHaveLength(2_000);
+    if (reply?.type !== 'read' || !reply.text) throw new Error('not parsed');
+    const { text } = reply;
+    expect(text.selection).toBe(han.repeat(4_000));
+    expect(text.spotTexts.map((t) => t.length)).toEqual([2_000, 5]);
+    expect(text.focus?.value).toHaveLength(2_000);
+    expect([...text.address]).toHaveLength(2_000);
   });
 
   it('splits spot texts on the record separator', () => {
-    const reply = parseContextLine(JSON.stringify({
-      type: 'systemText', id: 's1', selection: '', spotTexts: 'first line\u001esecond, with\ttab\u001e', focusKind: '',
-      focusLabel: '', focusValue: '', focusSecure: false, address: '',
-    }));
-    expect(reply).toMatchObject({ layer: { spotTexts: ['first line', 'second, with\ttab', ''] } });
-  });
-
-  it('rejects a fileOf reply with an unknown how', () => {
-    const fileOf = { type: 'fileOf', id: 'f1', path: '', address: '', how: 'none' };
-    expect(parseContextLine(JSON.stringify(fileOf))).toEqual(fileOf);
-    expect(parseContextLine(JSON.stringify({ ...fileOf, how: 'guess' }))).toBeNull();
-    expect(parseContextLine(JSON.stringify({ ...fileOf, path: 3 }))).toBeNull();
-    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm1', path: 'a.tsv', count: -1 }))).toBeNull();
-    expect(parseContextLine(JSON.stringify({ type: 'marks', id: 'm1', path: '', count: 0 }))).toBeNull();
+    const reply = parseContextLine(readLine({ ...textFields, spotTexts: 'first line\u001esecond, with\ttab\u001e' }));
+    expect(reply).toMatchObject({ text: { spotTexts: ['first line', 'second, with\ttab', ''] } });
   });
 });
