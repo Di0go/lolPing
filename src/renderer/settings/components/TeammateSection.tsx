@@ -1,10 +1,10 @@
 import { Button, Combobox, Dropdown, Input, Option, OptionGroup, Switch, Textarea } from '@fluentui/react-components';
 import {
   Bot24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, DocumentText24Regular, Emoji24Regular,
-  Globe24Regular, History24Regular, Keyboard24Regular, MusicNote224Regular, Person24Regular, ScanText24Regular,
-  ShieldKeyhole24Regular, Sparkle24Regular, TextEditStyle24Regular, TextField24Regular,
+  Eye24Regular, Globe24Regular, History24Regular, Keyboard24Regular, MusicNote224Regular, Person24Regular,
+  ScanText24Regular, ShieldKeyhole24Regular, Sparkle24Regular, TextEditStyle24Regular, TextField24Regular,
 } from '@fluentui/react-icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
 import { TAG_COLORS } from '../../../shared/roomColors';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
@@ -141,6 +141,24 @@ function ProfileCard({ p, onChange, onRemove }: {
         </Combobox>
         {visionGuess(p.model) === false ? <><span /><span className="weImportError">{m.modelNoVision}</span></> : null}
       </div>
+    </div>
+  );
+}
+
+/** One context source inside the "What the teammate reads" card: a SwitchRow without its own card. */
+function ReadRow({ icon, title, description, checked, onChange }: {
+  icon: ReactNode; title: string; description: string; checked: boolean; onChange(v: boolean): void;
+}) {
+  const t = useText();
+  return (
+    <div className="mateRead">
+      <span className="icon">{icon}</span>
+      <div className="lbl">
+        {title}
+        <span className="desc">{description}</span>
+      </div>
+      <Switch checked={checked} aria-label={title} onChange={(_, d) => onChange(d.checked)}
+        label={checked ? t.on : t.off} labelPosition="before" />
     </div>
   );
 }
@@ -428,16 +446,21 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
           onPick={(i) => patch({ tagColor: i, tagColorCustom: null })} />
       </SettingRow>
 
-      <div className="section">{m.reads}</div>
-      <SwitchRow icon={<ScanText24Regular />} title={m.readMarks} description={m.readMarksDesc}
-        checked={mate.context.marks} onChange={(marks) => patch({ context: { ...mate.context, marks } })} />
-      <SwitchRow icon={<TextField24Regular />} title={m.readSystemText} description={m.readSystemTextDesc}
-        checked={mate.context.systemText}
-        onChange={(systemText) => patch({ context: { ...mate.context, systemText } })} />
-      <SwitchRow icon={<DocumentText24Regular />} title={m.readFiles} description={m.readFilesDesc}
-        checked={mate.context.files} onChange={(files) => patch({ context: { ...mate.context, files } })} />
-      <SwitchRow icon={<Globe24Regular />} title={m.readWebPdfs} description={m.readWebPdfsDesc}
-        checked={mate.context.webPdfs} onChange={(webPdfs) => patch({ context: { ...mate.context, webPdfs } })} />
+      <div className="card mate">
+        <div className="mateHead">
+          <span className="icon"><Eye24Regular /></span>
+          <div className="lbl">{m.reads}</div>
+        </div>
+        <ReadRow icon={<ScanText24Regular />} title={m.readMarks} description={m.readMarksDesc}
+          checked={mate.context.marks} onChange={(marks) => patch({ context: { ...mate.context, marks } })} />
+        <ReadRow icon={<TextField24Regular />} title={m.readSystemText} description={m.readSystemTextDesc}
+          checked={mate.context.systemText}
+          onChange={(systemText) => patch({ context: { ...mate.context, systemText } })} />
+        <ReadRow icon={<DocumentText24Regular />} title={m.readFiles} description={m.readFilesDesc}
+          checked={mate.context.files} onChange={(files) => patch({ context: { ...mate.context, files } })} />
+        <ReadRow icon={<Globe24Regular />} title={m.readWebPdfs} description={m.readWebPdfsDesc}
+          checked={mate.context.webPdfs} onChange={(webPdfs) => patch({ context: { ...mate.context, webPdfs } })} />
+      </div>
 
       <div className="card mate">
         <div className="mateHead">
