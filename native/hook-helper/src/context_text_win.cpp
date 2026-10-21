@@ -1,4 +1,5 @@
-// Windows text probes: OCR of the kept grab by Windows.Media.Ocr, named controls near the spots by UI Automation.
+// Windows text probes: OCR of the kept grab by Windows.Media.Ocr, named controls near the spots by UI Automation,
+// the system's own text (selection, focus, text under the spots, browser address) and the file behind the window.
 // Each runs on its own fresh thread (context.h), so each joins the MTA itself and never uninitializes: an abandoned
 // thread may still be inside a call when the helper exits.
 #define NOMINMAX
@@ -6,6 +7,12 @@
 #include <windows.h>
 #include <unknwn.h>
 #include <UIAutomation.h>
+#include <oleauto.h>
+#include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <tlhelp32.h>
+#include <winternl.h>
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +21,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The SDK's C++/WinRT headers do not build clean under /W4 /WX; our own code keeps both.
@@ -261,6 +269,534 @@ bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<Raw
     return true;
   } catch (const winrt::hresult_error& e) {
     fail.message = failed("UI Automation", e.code());
+    return false;
+  }
+}
+
+namespace {
+
+constexpr size_t kMaxAddressEdits = 40;  // the address bar comes first in a browser's tree
+
+// Releases a BSTR at scope exit.
+struct Bstr {
+  BSTR s = nullptr;
+  Bstr() = default;
+  Bstr(const Bstr&) = delete;
+  Bstr& operator=(const Bstr&) = delete;
+  ~Bstr() { SysFreeString(s); }
+  std::wstring text() const { return s ? std::wstring(s, SysStringLen(s)) : std::wstring(); }
+};
+
+// Clears a VARIANT at scope exit.
+struct Variant {
+  VARIANT v;
+  Variant() { VariantInit(&v); }
+  Variant(const Variant&) = delete;
+  Variant& operator=(const Variant&) = delete;
+  ~Variant() { VariantClear(&v); }
+};
+
+std::wstring wide(const std::string& s) { return std::wstring(winrt::to_hstring(s)); }
+
+// lolPing's main process started this helper and owns lolPing's windows.
+DWORD lolPingPid() {
+  static const DWORD pid = [] {
+    DWORD parent = 0;
+    const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return parent;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    for (BOOL more = Process32FirstW(snap, &entry); more; more = Process32NextW(snap, &entry)) {
+      if (entry.th32ProcessID == GetCurrentProcessId()) {
+        parent = entry.th32ParentProcessID;
+        break;
+      }
+    }
+    CloseHandle(snap);
+    return parent;
+  }();
+  return pid;
+}
+
+bool isLolPing(DWORD pid) { return pid != 0 && pid == lolPingPid(); }
+
+struct WindowProcess {
+  DWORD pid = 0;
+  std::wstring exe;  // lower case, without ".exe"
+};
+
+WindowProcess processOf(HWND w) {
+  WindowProcess out;
+  GetWindowThreadProcessId(w, &out.pid);
+  const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, out.pid);
+  if (!proc) return out;
+  wchar_t image[MAX_PATH];
+  DWORD size = MAX_PATH;
+  if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
+    std::wstring name(image, size);
+    name = name.substr(name.find_last_of(L"\\/") + 1);
+    if (name.size() > 4 && _wcsicmp(name.c_str() + name.size() - 4, L".exe") == 0) name.resize(name.size() - 4);
+    CharLowerBuffW(name.data(), static_cast<DWORD>(name.size()));
+    out.exe = name;
+  }
+  CloseHandle(proc);
+  return out;
+}
+
+bool isBrowser(const std::wstring& exe) {
+  return exe == L"chrome" || exe == L"msedge" || exe == L"brave" || exe == L"firefox";
+}
+
+bool isFile(const std::wstring& path) {
+  const DWORD attrs = GetFileAttributesW(path.c_str());
+  return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+// A lookup's hit: the name must equal the title's before the disk is touched, as a stale network path can block.
+bool isNamedFile(const std::wstring& path, const std::wstring& name) {
+  const std::wstring_view file = std::wstring_view(path).substr(path.find_last_of(L"\\/") + 1);
+  return CompareStringOrdinal(file.data(), static_cast<int>(file.size()), name.data(), static_cast<int>(name.size()),
+                              TRUE) == CSTR_EQUAL &&
+         isFile(path);
+}
+
+std::string textOf(const std::wstring& s, size_t maxChars) { return cutText(winrt::to_string(s), maxChars); }
+
+// A range's text: at most `maxChars` characters (twice as many UTF-16 units asked, for surrogate pairs).
+std::string rangeText(IUIAutomationTextRange* range, size_t maxChars) {
+  Bstr text;
+  if (FAILED(range->GetText(static_cast<int>(maxChars * 2), &text.s))) return "";
+  return textOf(text.text(), maxChars);
+}
+
+std::string valuePatternText(IUIAutomationElement* el, size_t maxChars) {
+  winrt::com_ptr<IUIAutomationValuePattern> value;
+  if (FAILED(el->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(value.put()))) || !value) return "";
+  Bstr text;
+  if (FAILED(value->get_CurrentValue(&text.s))) return "";
+  return textOf(text.text(), maxChars);
+}
+
+winrt::com_ptr<IUIAutomationTextPattern> textPatternOf(IUIAutomationElement* el) {
+  winrt::com_ptr<IUIAutomationTextPattern> text;
+  if (FAILED(el->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(text.put())))) return nullptr;
+  return text;
+}
+
+std::string nameOf(IUIAutomationElement* el) {
+  Bstr name;
+  if (FAILED(el->get_CurrentName(&name.s)) || !name.s) return "";
+  return winrt::to_string(trimmed(name.s, SysStringLen(name.s)));
+}
+
+constexpr int kPasswordParents = 3;  // how far up a password field's inner nodes are looked for
+
+// Whether the element is safe to read: it answers, is not lolPing's, and is not in a password field. Chromium's
+// password field holds a text node of bullets that is not marked as a password itself, so the parents are asked too.
+bool readable(IUIAutomation* uia, IUIAutomationElement* el, bool& secure) {
+  int pid = 0;
+  if (FAILED(el->get_CurrentProcessId(&pid)) || isLolPing(static_cast<DWORD>(pid))) return false;
+  winrt::com_ptr<IUIAutomationTreeWalker> walker;
+  if (FAILED(uia->get_RawViewWalker(walker.put())) || !walker) return false;
+  winrt::com_ptr<IUIAutomationElement> node;
+  node.copy_from(el);
+  for (int depth = 0; node && depth <= kPasswordParents; ++depth) {
+    BOOL password = FALSE;
+    if (FAILED(node->get_CurrentIsPassword(&password))) return false;
+    if (password) {
+      secure = true;
+      return false;
+    }
+    winrt::com_ptr<IUIAutomationElement> parent;
+    if (FAILED(walker->GetParentElement(node.get(), parent.put()))) break;
+    node = parent;
+  }
+  return true;
+}
+
+// Whether a text range is in or holds a password field: Chromium's document text shows a field's bullets.
+bool touchesPassword(IUIAutomation* uia, IUIAutomationTextRange* range) {
+  winrt::com_ptr<IUIAutomationElement> enclosing;
+  bool secure = false;
+  if (FAILED(range->GetEnclosingElement(enclosing.put())) || !enclosing || !readable(uia, enclosing.get(), secure)) {
+    return true;
+  }
+  winrt::com_ptr<IUIAutomationElementArray> children;
+  if (FAILED(range->GetChildren(children.put())) || !children) return false;
+  int count = 0;
+  children->get_Length(&count);
+  for (int i = 0; i < count; ++i) {
+    winrt::com_ptr<IUIAutomationElement> child;
+    BOOL password = FALSE;
+    if (FAILED(children->GetElement(i, child.put())) || !child) continue;
+    if (FAILED(child->get_CurrentIsPassword(&password)) || password) return true;
+  }
+  return false;
+}
+
+// The paragraph under the spot when the element has text, else its name and value.
+std::string spotText(IUIAutomation* uia, Point p) {
+  winrt::com_ptr<IUIAutomationElement> el;
+  if (FAILED(uia->ElementFromPoint(POINT{p.x, p.y}, el.put())) || !el) return "";
+  bool secure = false;
+  if (!readable(uia, el.get(), secure)) return "";
+  if (const auto text = textPatternOf(el.get())) {
+    winrt::com_ptr<IUIAutomationTextRange> range;
+    if (SUCCEEDED(text->RangeFromPoint(POINT{p.x, p.y}, range.put())) && range &&
+        SUCCEEDED(range->ExpandToEnclosingUnit(TextUnit_Paragraph))) {
+      if (touchesPassword(uia, range.get())) return "";
+      const std::string paragraph = rangeText(range.get(), kSpotTextMax);
+      if (paragraph.find_first_not_of(" \t\r\n") != std::string::npos) return paragraph;
+    }
+  }
+  const std::string name = nameOf(el.get());
+  const std::string value = valuePatternText(el.get(), kSpotTextMax);
+  if (value.empty() || value == name) return cutText(name, kSpotTextMax);
+  return cutText(name.empty() ? value : name + "\n" + value, kSpotTextMax);
+}
+
+// The focused element's kind, label, value and selection; nothing when it is lolPing's own.
+void readFocus(IUIAutomation* uia, SystemText& out) {
+  winrt::com_ptr<IUIAutomationElement> el;
+  if (FAILED(uia->GetFocusedElement(el.put())) || !el) return;
+  bool secure = false;
+  const bool open = readable(uia, el.get(), secure);
+  if (!open && !secure) return;
+  CONTROLTYPEID type = 0;
+  el->get_CurrentControlType(&type);
+  const char* kind = kindOf(type);
+  out.focusKind = kind ? kind : "other";
+  out.focusLabel = cutText(nameOf(el.get()), kFocusValueMax);
+  if (out.focusLabel.empty()) {
+    winrt::com_ptr<IUIAutomationElement> label;
+    if (SUCCEEDED(el->get_CurrentLabeledBy(label.put())) && label) {
+      out.focusLabel = cutText(nameOf(label.get()), kFocusValueMax);
+    }
+  }
+  out.focusSecure = secure;
+  if (secure) return;  // never read: no value, no selection
+  out.focusValue = valuePatternText(el.get(), kFocusValueMax);
+  const auto text = textPatternOf(el.get());
+  if (!text) return;
+  if (out.focusValue.empty()) {
+    winrt::com_ptr<IUIAutomationTextRange> document;
+    if (SUCCEEDED(text->get_DocumentRange(document.put())) && document) {
+      out.focusValue = rangeText(document.get(), kFocusValueMax);
+    }
+  }
+  winrt::com_ptr<IUIAutomationTextRangeArray> ranges;
+  if (FAILED(text->GetSelection(ranges.put())) || !ranges) return;
+  int count = 0;
+  ranges->get_Length(&count);
+  for (int i = 0; i < count && out.selection.size() < kSelectionMax * 4; ++i) {
+    winrt::com_ptr<IUIAutomationTextRange> range;
+    if (FAILED(ranges->GetElement(i, range.put())) || !range || touchesPassword(uia, range.get())) continue;
+    const std::string part = rangeText(range.get(), kSelectionMax);
+    if (part.empty()) continue;
+    out.selection += (out.selection.empty() ? "" : "\n") + part;
+  }
+  out.selection = cutText(out.selection, kSelectionMax);
+}
+
+// The first edit in the browser window whose value reads as an address; password fields are never read.
+bool addressBar(IUIAutomation* uia, HWND window, std::string& path, std::string& address) {
+  winrt::com_ptr<IUIAutomationElement> root;
+  if (FAILED(uia->ElementFromHandle(window, root.put())) || !root) return false;
+  VARIANT edit;
+  VariantInit(&edit);
+  edit.vt = VT_I4;
+  edit.lVal = UIA_EditControlTypeId;
+  VARIANT no;
+  VariantInit(&no);
+  no.vt = VT_BOOL;
+  no.boolVal = VARIANT_FALSE;
+  winrt::com_ptr<IUIAutomationCondition> isEdit, notPassword, condition;
+  winrt::com_ptr<IUIAutomationCacheRequest> cache;
+  winrt::com_ptr<IUIAutomationElementArray> found;
+  if (FAILED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, edit, isEdit.put())) ||
+      FAILED(uia->CreatePropertyCondition(UIA_IsPasswordPropertyId, no, notPassword.put())) ||
+      FAILED(uia->CreateAndCondition(isEdit.get(), notPassword.get(), condition.put())) ||
+      FAILED(uia->CreateCacheRequest(cache.put())) || FAILED(cache->AddProperty(UIA_ValueValuePropertyId)) ||
+      FAILED(cache->put_AutomationElementMode(AutomationElementMode_None)) ||
+      FAILED(root->FindAllBuildCache(TreeScope_Descendants, condition.get(), cache.get(), found.put())) || !found) {
+    return false;
+  }
+  int count = 0;
+  found->get_Length(&count);
+  for (int i = 0; i < count && static_cast<size_t>(i) < kMaxAddressEdits; ++i) {
+    winrt::com_ptr<IUIAutomationElement> el;
+    Variant value;
+    if (FAILED(found->GetElement(i, el.put())) || !el) continue;
+    if (FAILED(el->GetCachedPropertyValue(UIA_ValueValuePropertyId, &value.v)) || value.v.vt != VT_BSTR) continue;
+    const std::string text = winrt::to_string(std::wstring_view(value.v.bstrVal, SysStringLen(value.v.bstrVal)));
+    if (browserAddress(text, path, address)) {
+      address = cutText(address, kAddressMax);
+      return true;
+    }
+  }
+  return false;
+}
+
+HRESULT getProperty(IDispatch* object, const wchar_t* name, VARIANT& out) {
+  DISPID id = 0;
+  LPOLESTR names[] = {const_cast<LPOLESTR>(name)};
+  const HRESULT r = object->GetIDsOfNames(IID_NULL, names, 1, LOCALE_USER_DEFAULT, &id);
+  if (FAILED(r)) return r;
+  DISPPARAMS none{};
+  return object->Invoke(id, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &none, &out, nullptr, nullptr);
+}
+
+struct OfficeApp {
+  const wchar_t* exe;
+  const wchar_t* progId;
+  const wchar_t* active;  // the property holding the document in front
+};
+
+constexpr OfficeApp kOfficeApps[] = {{L"winword", L"Word.Application", L"ActiveDocument"},
+                                     {L"powerpnt", L"PowerPoint.Application", L"ActivePresentation"},
+                                     {L"excel", L"Excel.Application", L"ActiveWorkbook"}};
+
+const OfficeApp* officeApp(const std::wstring& exe) {
+  for (const OfficeApp& app : kOfficeApps) {
+    if (exe == app.exe) return &app;
+  }
+  return nullptr;
+}
+
+// The document in front of a running Office app, by its FullName; false for an unsaved or online document.
+bool officeDocument(const OfficeApp& office, std::wstring& path) {
+  CLSID clsid;
+  winrt::com_ptr<IUnknown> running;
+  if (FAILED(CLSIDFromProgID(office.progId, &clsid)) || FAILED(GetActiveObject(clsid, nullptr, running.put())) ||
+      !running) {
+    return false;
+  }
+  const auto app = running.try_as<IDispatch>();
+  Variant document, fullName;
+  if (!app || FAILED(getProperty(app.get(), office.active, document.v)) || document.v.vt != VT_DISPATCH ||
+      !document.v.pdispVal || FAILED(getProperty(document.v.pdispVal, L"FullName", fullName.v)) ||
+      fullName.v.vt != VT_BSTR) {
+    return false;
+  }
+  const std::wstring name(fullName.v.bstrVal, SysStringLen(fullName.v.bstrVal));
+  if (!isFile(name)) return false;
+  path = name;
+  return true;
+}
+
+std::wstring commandLineOf(DWORD pid) {
+  using QueryFn = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  constexpr ULONG kProcessCommandLineInformation = 60;
+  static const auto query =
+      reinterpret_cast<QueryFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+  if (!query) return L"";
+  const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!proc) return L"";
+  // A UNICODE_STRING header followed by the text, which is at most 32,767 characters.
+  std::vector<uint64_t> buf(70000 / sizeof(uint64_t));
+  ULONG length = 0;
+  std::wstring out;
+  if (query(proc, kProcessCommandLineInformation, buf.data(), static_cast<ULONG>(buf.size() * sizeof(uint64_t)),
+            &length) >= 0) {
+    const auto* text = reinterpret_cast<const UNICODE_STRING*>(buf.data());
+    if (text->Buffer) out.assign(text->Buffer, text->Length / sizeof(wchar_t));
+  }
+  CloseHandle(proc);
+  return out;
+}
+
+bool fromCommandLine(DWORD pid, const std::wstring& name, std::wstring& out) {
+  const std::wstring line = commandLineOf(pid);
+  if (line.empty()) return false;
+  int argc = 0;
+  wchar_t** argv = CommandLineToArgvW(line.c_str(), &argc);
+  if (!argv) return false;
+  bool found = false;
+  // Only absolute paths: a relative one is relative to that process's folder, not this one's.
+  for (int i = 1; i < argc && !found; ++i) {
+    const std::wstring arg = argv[i];
+    const bool absolute = (arg.size() >= 3 && arg[1] == L':' && arg[2] == L'\\') || arg.rfind(L"\\\\", 0) == 0;
+    if (absolute && isNamedFile(arg, name)) {
+      out = arg;
+      found = true;
+    }
+  }
+  LocalFree(argv);
+  return found;
+}
+
+std::wstring linkTarget(const std::wstring& lnk) {
+  winrt::com_ptr<IShellLinkW> link;
+  if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put())))) return L"";
+  const auto file = link.try_as<IPersistFile>();
+  wchar_t target[MAX_PATH * 4] = {};
+  // No Resolve: it can search the disk and show UI.
+  if (!file || FAILED(file->Load(lnk.c_str(), STGM_READ)) ||
+      FAILED(link->GetPath(target, static_cast<int>(std::size(target)), nullptr, 0))) {
+    return L"";
+  }
+  return target;
+}
+
+// Recent's links are named after their file ("notes.txt.lnk", "notes.txt (2).lnk"): newest first.
+bool fromRecent(const std::wstring& name, std::wstring& out) {
+  PWSTR folder = nullptr;
+  if (FAILED(SHGetKnownFolderPath(FOLDERID_Recent, 0, nullptr, &folder))) return false;
+  const std::wstring dir = folder;
+  CoTaskMemFree(folder);
+  std::vector<std::pair<uint64_t, std::wstring>> links;
+  WIN32_FIND_DATAW data;
+  const HANDLE find = FindFirstFileW((dir + L"\\" + name + L"*.lnk").c_str(), &data);
+  if (find == INVALID_HANDLE_VALUE) return false;
+  do {
+    const uint64_t written = (static_cast<uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+                             data.ftLastWriteTime.dwLowDateTime;
+    links.emplace_back(written, dir + L"\\" + data.cFileName);
+  } while (FindNextFileW(find, &data));
+  FindClose(find);
+  std::sort(links.begin(), links.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  for (const auto& link : links) {
+    const std::wstring target = linkTarget(link.second);
+    if (!target.empty() && isNamedFile(target, name)) {
+      out = target;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Calls `each` with every subkey of HKCU\<path> until it returns true.
+bool anySubkey(const std::wstring& path, const std::function<bool(HKEY)>& each) {
+  HKEY root = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, KEY_READ, &root) != ERROR_SUCCESS) return false;
+  bool found = false;
+  wchar_t sub[256];
+  for (DWORD i = 0; !found; ++i) {
+    DWORD size = static_cast<DWORD>(std::size(sub));
+    if (RegEnumKeyExW(root, i, sub, &size, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, sub, 0, KEY_READ, &key) != ERROR_SUCCESS) continue;
+    found = each(key);
+    RegCloseKey(key);
+  }
+  RegCloseKey(root);
+  return found;
+}
+
+std::wstring stringValue(HKEY key, const wchar_t* sub, const wchar_t* name) {
+  DWORD bytes = 0;
+  if (RegGetValueW(key, sub, name, RRF_RT_REG_SZ, nullptr, nullptr, &bytes) != ERROR_SUCCESS || bytes < 2) return L"";
+  std::wstring out(bytes / sizeof(wchar_t), L'\0');
+  if (RegGetValueW(key, sub, name, RRF_RT_REG_SZ, nullptr, out.data(), &bytes) != ERROR_SUCCESS) return L"";
+  out.resize(wcsnlen(out.c_str(), out.size()));
+  return out;
+}
+
+// Acrobat writes its list when a file closes, so this finds files read before rather than the one open now.
+bool fromAcrobat(const std::wstring& name, std::wstring& out) {
+  for (const wchar_t* path : {L"Software\\Adobe\\Adobe Acrobat\\DC\\AVGeneral\\cRecentFiles",
+                              L"Software\\Adobe\\Acrobat Reader\\DC\\AVGeneral\\cRecentFiles"}) {
+    if (anySubkey(path, [&](HKEY entry) {
+          const std::string text = acrobatMruPath(winrt::to_string(stringValue(entry, nullptr, L"tDIText")));
+          const std::wstring file = text.empty() ? std::wstring() : wide(text);
+          if (file.empty() || !isNamedFile(file, name)) return false;
+          out = file;
+          return true;
+        })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool fromOfficeMru(const std::wstring& name, std::wstring& out) {
+  for (const wchar_t* app : {L"Word", L"Excel", L"PowerPoint"}) {
+    const std::wstring path = std::wstring(L"Software\\Microsoft\\Office\\16.0\\") + app + L"\\User MRU";
+    if (anySubkey(path, [&](HKEY account) {
+          HKEY mru = nullptr;
+          if (RegOpenKeyExW(account, L"File MRU", 0, KEY_READ, &mru) != ERROR_SUCCESS) return false;
+          bool found = false;
+          wchar_t valueName[64];
+          for (DWORD i = 0; !found; ++i) {
+            DWORD size = static_cast<DWORD>(std::size(valueName));
+            if (RegEnumValueW(mru, i, valueName, &size, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+            const std::string text = officeMruPath(winrt::to_string(stringValue(mru, nullptr, valueName)));
+            const std::wstring file = text.empty() ? std::wstring() : wide(text);
+            if (!file.empty() && isNamedFile(file, name)) {
+              out = file;
+              found = true;
+            }
+          }
+          RegCloseKey(mru);
+          return found;
+        })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The title's file, from the process command line, Recent, then Acrobat's and Office's recent lists.
+bool fromTitle(DWORD pid, const std::wstring& title, std::wstring& out) {
+  const std::wstring name = wide(fileNameFromTitle(winrt::to_string(title)));
+  // Not a file name (and no wildcards in the Recent search).
+  if (name.empty() || name.find_first_of(L"\\/:*?\"<>|") != std::wstring::npos) return false;
+  return fromCommandLine(pid, name, out) || fromRecent(name, out) || fromAcrobat(name, out) || fromOfficeMru(name, out);
+}
+
+}  // namespace
+
+bool systemTextAt(const std::vector<Point>& spots, SystemText& out, Failure& fail) {
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    const auto uia = winrt::create_instance<IUIAutomation>(CLSID_CUIAutomation);
+    for (const Point& spot : spots) out.spotTexts.push_back(spotText(uia.get(), spot));
+    readFocus(uia.get(), out);
+    const HWND front = GetForegroundWindow();
+    const WindowProcess proc = front ? processOf(front) : WindowProcess{};
+    std::string path, address;
+    if (front && !isLolPing(proc.pid) && isBrowser(proc.exe) && addressBar(uia.get(), front, path, address)) {
+      out.address = cutText(path.empty() ? address : path, kAddressMax);
+    }
+    return true;
+  } catch (const winrt::hresult_error& e) {
+    fail.message = failed("UI Automation", e.code());
+    return false;
+  }
+}
+
+bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail) {
+  path.clear();
+  address.clear();
+  how = "none";
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    const HWND front = GetForegroundWindow();
+    if (!front) return true;
+    const WindowProcess proc = processOf(front);
+    if (isLolPing(proc.pid)) return true;
+    std::wstring file;
+    if (isBrowser(proc.exe)) {
+      const auto uia = winrt::create_instance<IUIAutomation>(CLSID_CUIAutomation);
+      std::string local, web;
+      if (!addressBar(uia.get(), front, local, web)) return true;
+      if (!local.empty() && !isFile(wide(local))) return true;
+      path = local;
+      address = web;
+      how = "address";
+      return true;
+    }
+    if (const OfficeApp* office = officeApp(proc.exe)) {
+      if (officeDocument(*office, file)) how = "office";
+    } else {
+      wchar_t title[512];
+      const int n = GetWindowTextW(front, title, static_cast<int>(std::size(title)));
+      if (n > 0 && fromTitle(proc.pid, std::wstring(title, static_cast<size_t>(n)), file)) how = "title";
+    }
+    if (how != "none") path = winrt::to_string(file);
+    return true;
+  } catch (const winrt::hresult_error& e) {
+    fail.message = failed("Finding the file", e.code());
     return false;
   }
 }

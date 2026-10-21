@@ -139,6 +139,35 @@ std::string joinOcrWords(const std::vector<std::string>& words);
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
 std::string marksFileText(const std::vector<RawMark>& marks);
 
+/** Caps on what systemText sends, in characters; the probes apply them. */
+constexpr size_t kSelectionMax = 4000;
+constexpr size_t kSpotTextMax = 2000;
+constexpr size_t kFocusValueMax = 2000;
+constexpr size_t kAddressMax = 2000;
+
+/** The first `maxChars` characters of UTF-8 `text`, never cut inside a character. */
+std::string cutText(const std::string& text, size_t maxChars);
+
+/**
+ * The file name a window title shows ("notes.txt - Notepad", "a.ts - repo - Visual Studio Code"), or empty: the
+ * text before the last " - " when it ends in a known extension, else the last " - " part or word that does, else the
+ * text before the last " - ". A leading unsaved mark ('*' or U+25CF) is dropped.
+ */
+std::string fileNameFromTitle(const std::string& title);
+
+/** Acrobat's recent-file form `/C/a/b.pdf` as `C:\a\b.pdf`; empty when the value is not in that form. */
+std::string acrobatMruPath(const std::string& value);
+
+/** Office's File MRU value `[F…][T…]*C:\a\b.docx` as the path after the `*`; empty without one. */
+std::string officeMruPath(const std::string& value);
+
+/**
+ * A browser address bar's value: `C:/…` and `file:///…` become a Windows `path` (percent-decoded), anything else
+ * that looks like a web address becomes `address`, with https:// added when it has no scheme. False when the value
+ * looks like neither (empty, a search, `about:blank`).
+ */
+bool browserAddress(const std::string& value, std::string& path, std::string& address);
+
 /** Runs `probe` on its own thread; false when it is still running at the budget, leaving it running detached. */
 bool runWithBudget(const std::function<void()>& probe, int budgetMs);
 

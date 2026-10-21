@@ -508,6 +508,73 @@ static void test_file_of_reply() {
   CHECK(m.at("path") == "C:\\docs\\a.pdf" && m.at("address").empty() && m.at("how") == "title");
 }
 
+static void test_cut_text_keeps_whole_characters() {
+  const std::string zhong = "\xe4\xb8\xad";  // U+4E2D
+  CHECK(cutText("hello", 3) == "hel");
+  CHECK(cutText("hi", 5) == "hi");
+  CHECK(cutText("ab" + zhong + zhong, 3) == "ab" + zhong);
+  CHECK(cutText("\xf0\xa0\x80\x80" "ab", 1) == "\xf0\xa0\x80\x80");  // a four-byte character counts once
+  CHECK(cutText("abc", 0).empty());
+}
+
+static void test_file_name_from_a_window_title() {
+  CHECK(fileNameFromTitle("notes.txt - Notepad") == "notes.txt");
+  CHECK(fileNameFromTitle("My Report.docx - Word") == "My Report.docx");
+  CHECK(fileNameFromTitle("plan - final.pdf - Adobe Acrobat Pro (64-bit)") == "plan - final.pdf");
+  CHECK(fileNameFromTitle("*notes.txt - Notepad") == "notes.txt");
+  CHECK(fileNameFromTitle("\xe2\x97\x8f context.cpp - lolPing - Visual Studio Code") == "context.cpp");
+  CHECK(fileNameFromTitle("My Notes.md - repo - Visual Studio Code") == "My Notes.md");
+  CHECK(fileNameFromTitle("Reading report.PDF now") == "report.PDF");
+  CHECK(fileNameFromTitle("Document1 - Word") == "Document1");
+  CHECK(fileNameFromTitle("My Notes.md") == "My Notes.md");
+  CHECK(fileNameFromTitle("a.js and b.py open") == "b.py");
+  CHECK(fileNameFromTitle("C:\\a\\b.txt - Notepad++") == "b.txt");
+  CHECK(fileNameFromTitle("Settings").empty());
+  CHECK(fileNameFromTitle("").empty());
+  // ".pdfx" is not ".pdf", and an extension alone is no name.
+  CHECK(fileNameFromTitle("a.pdfx - Viewer") == "a.pdfx");
+  CHECK(fileNameFromTitle(".pdf").empty());
+}
+
+static void test_acrobat_mru_path() {
+  CHECK(acrobatMruPath("/C/Users/me/My Docs/a.pdf") == "C:\\Users\\me\\My Docs\\a.pdf");
+  CHECK(acrobatMruPath("/d/b.pdf") == "d:\\b.pdf");
+  CHECK(acrobatMruPath("C:\\a.pdf").empty());
+  CHECK(acrobatMruPath("/server/share/a.pdf").empty());
+  CHECK(acrobatMruPath("/C").empty());
+  CHECK(acrobatMruPath("").empty());
+}
+
+static void test_office_mru_path() {
+  CHECK(officeMruPath("[F00000000][T01D93C7FC86CB1A0][O00000000]*C:\\Users\\me\\a.docx") == "C:\\Users\\me\\a.docx");
+  CHECK(officeMruPath("C:\\Users\\me\\Desktop\\").empty());
+  CHECK(officeMruPath("[F00000000]*").empty());
+}
+
+static void test_browser_address() {
+  std::string path, address;
+  const auto read = [&](const std::string& value) {
+    path = "x";
+    address = "x";
+    return browserAddress(value, path, address);
+  };
+  CHECK(read("C:/Users/Darren Meng/a.pdf") && path == "C:\\Users\\Darren Meng\\a.pdf" && address.empty());
+  CHECK(read("file:///C:/Users/Darren%20Meng/b%25.pdf") && path == "C:\\Users\\Darren Meng\\b%.pdf");
+  CHECK(read("FILE:///d:/x.pdf") && path == "d:\\x.pdf");
+  CHECK(read("file://server/share/c.pdf") && path == "\\\\server\\share\\c.pdf");
+  CHECK(read("C:/a/%E4%B8%AD.pdf") && path == "C:\\a\\\xe4\xb8\xad.pdf");
+  CHECK(read("example.com/docs/a.pdf") && address == "https://example.com/docs/a.pdf" && path.empty());
+  CHECK(read("https://example.com/a.pdf?x=1") && address == "https://example.com/a.pdf?x=1");
+  CHECK(read("http://localhost:3000/") && address == "http://localhost:3000/");
+  CHECK(read("localhost:3000/x") && address == "https://localhost:3000/x");
+  CHECK(read("  example.com  ") && address == "https://example.com");
+  CHECK(!read("") && path.empty() && address.empty());
+  CHECK(!read("how to read a pdf"));
+  CHECK(!read("about:blank"));
+  CHECK(!read("hello"));
+  CHECK(!read("file:///"));
+}
+
 int main() {
   test_parse_capture_command();
   test_parse_other_commands();
@@ -534,6 +601,11 @@ int main() {
   test_slow_probe_replies_slow_and_exits();
   test_marks_runs_both_probes_under_one_deadline();
   test_file_of_reply();
+  test_cut_text_keeps_whole_characters();
+  test_file_name_from_a_window_title();
+  test_acrobat_mru_path();
+  test_office_mru_path();
+  test_browser_address();
   std::printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
 }

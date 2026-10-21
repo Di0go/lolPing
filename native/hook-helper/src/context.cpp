@@ -7,6 +7,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -623,15 +624,187 @@ std::string marksFileText(const std::vector<RawMark>& marks) {
   for (const RawMark& m : marks) {
     out += m.kind + "\t" + std::to_string(m.box.x) + "\t" + std::to_string(m.box.y) + "\t" + std::to_string(m.box.w) +
            "\t" + std::to_string(m.box.h) + "\t";
-    size_t chars = 0;
-    for (const char c : m.text) {
-      // A byte that is not a continuation byte starts a character, so the cut never splits one.
-      if ((static_cast<unsigned char>(c) & 0xC0) != 0x80 && ++chars > kMarkTextMax) break;
-      out += c == '\t' || c == '\r' || c == '\n' ? ' ' : c;
-    }
+    for (const char c : cutText(m.text, kMarkTextMax)) out += c == '\t' || c == '\r' || c == '\n' ? ' ' : c;
     out += '\n';
   }
   return out;
+}
+
+std::string cutText(const std::string& text, size_t maxChars) {
+  size_t chars = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    // A byte that is not a continuation byte starts a character, so the cut never splits one.
+    if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80 && ++chars > maxChars) return text.substr(0, i);
+  }
+  return text;
+}
+
+namespace {
+
+// Extensions that name a document in a title: what the file layer can read, plus common text and code files.
+constexpr const char* kFileExtensions[] = {"pdf", "docx", "doc", "pptx", "ppt",  "xlsx", "xls",  "csv",
+                                           "txt", "md",   "rtf", "epub", "json", "ts",   "js",   "py",
+                                           "c",   "cpp",  "h",   "java", "go",   "rs",   "html", "css"};
+
+bool isSpace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+char lowerAscii(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+
+bool isAsciiLetter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+
+bool isDigit(char c) { return c >= '0' && c <= '9'; }
+
+std::string trim(const std::string& s) {
+  size_t a = 0, b = s.size();
+  while (a < b && isSpace(s[a])) ++a;
+  while (b > a && isSpace(s[b - 1])) --b;
+  return s.substr(a, b - a);
+}
+
+std::string lowered(std::string s) {
+  for (char& c : s) c = lowerAscii(c);
+  return s;
+}
+
+// Editors mark an unsaved file with a leading '*' (Notepad) or U+25CF (VS Code).
+std::string withoutUnsavedMark(const std::string& s) {
+  std::string t = trim(s);
+  if (t.rfind('*', 0) == 0) t.erase(0, 1);
+  else if (t.rfind("\xe2\x97\x8f", 0) == 0) t.erase(0, 3);
+  return trim(t);
+}
+
+bool hasFileExtension(const std::string& name) {
+  const size_t dot = name.find_last_of('.');
+  if (dot == std::string::npos || dot == 0 || isSpace(name[dot - 1])) return false;
+  const std::string ext = lowered(name.substr(dot + 1));
+  return std::any_of(std::begin(kFileExtensions), std::end(kFileExtensions),
+                     [&ext](const char* known) { return ext == known; });
+}
+
+// Notepad++ and others show the whole path; the lookups want the name.
+std::string baseName(const std::string& s) {
+  const size_t slash = s.find_last_of("\\/");
+  return slash == std::string::npos ? s : s.substr(slash + 1);
+}
+
+std::vector<std::string> splitOn(const std::string& s, const std::string& sep) {
+  std::vector<std::string> parts;
+  size_t start = 0;
+  while (true) {
+    const size_t at = s.find(sep, start);
+    parts.push_back(s.substr(start, at == std::string::npos ? std::string::npos : at - start));
+    if (at == std::string::npos) return parts;
+    start = at + sep.size();
+  }
+}
+
+int hexValue(char c) {
+  if (isDigit(c)) return c - '0';
+  const char l = lowerAscii(c);
+  return l >= 'a' && l <= 'f' ? l - 'a' + 10 : -1;
+}
+
+std::string percentDecoded(const std::string& s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const int hi = s[i] == '%' && i + 2 < s.size() ? hexValue(s[i + 1]) : -1;
+    const int lo = hi >= 0 ? hexValue(s[i + 2]) : -1;
+    if (lo < 0) {
+      out += s[i];
+      continue;
+    }
+    out += static_cast<char>(hi * 16 + lo);
+    i += 2;
+  }
+  return out;
+}
+
+bool isDrivePath(const std::string& s) {
+  return s.size() >= 3 && isAsciiLetter(s[0]) && s[1] == ':' && (s[2] == '/' || s[2] == '\\');
+}
+
+// "example.com", "localhost:3000": a host a browser opens without a scheme. "about:blank" and plain words are not.
+bool looksLikeHost(const std::string& host) {
+  const size_t colon = host.find(':');
+  const std::string name = host.substr(0, colon);
+  if (colon != std::string::npos) {
+    const std::string port = host.substr(colon + 1);
+    if (port.empty() || !std::all_of(port.begin(), port.end(), isDigit)) return false;
+  }
+  if (name.empty() || name.front() == '.' || name.back() == '.') return false;
+  const bool plain = std::all_of(name.begin(), name.end(), [](char c) {
+    return isAsciiLetter(c) || isDigit(c) || c == '-' || c == '.' || (static_cast<unsigned char>(c) & 0x80) != 0;
+  });
+  return plain && (name.find('.') != std::string::npos || lowered(name) == "localhost");
+}
+
+bool hasScheme(const std::string& v) {
+  const size_t end = v.find("://");
+  if (end == std::string::npos || end == 0 || !isAsciiLetter(v[0])) return false;
+  return std::all_of(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(end), [](char c) {
+    return isAsciiLetter(c) || isDigit(c) || c == '+' || c == '-' || c == '.';
+  });
+}
+
+}  // namespace
+
+std::string fileNameFromTitle(const std::string& title) {
+  const std::string t = trim(title);
+  const size_t last = t.rfind(" - ");
+  const std::string before = last == std::string::npos ? std::string() : withoutUnsavedMark(t.substr(0, last));
+  if (hasFileExtension(before)) return baseName(before);
+  const std::vector<std::string> parts = splitOn(t, " - ");
+  for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+    const std::string part = withoutUnsavedMark(*it);
+    if (hasFileExtension(part)) return baseName(part);
+  }
+  const std::vector<std::string> words = splitOn(t, " ");
+  for (auto it = words.rbegin(); it != words.rend(); ++it) {
+    if (hasFileExtension(*it)) return baseName(*it);
+  }
+  return baseName(before);
+}
+
+std::string acrobatMruPath(const std::string& value) {
+  if (value.size() < 4 || value[0] != '/' || !isAsciiLetter(value[1]) || value[2] != '/') return "";
+  std::string path = value.substr(1, 1) + ":" + value.substr(2);
+  std::replace(path.begin(), path.end(), '/', '\\');
+  return path;
+}
+
+std::string officeMruPath(const std::string& value) {
+  const size_t star = value.find('*');
+  return star == std::string::npos ? std::string() : value.substr(star + 1);
+}
+
+bool browserAddress(const std::string& value, std::string& path, std::string& address) {
+  path.clear();
+  address.clear();
+  const std::string v = trim(value);
+  if (v.empty()) return false;
+  std::string local;
+  if (isDrivePath(v)) {
+    local = percentDecoded(v);
+  } else if (lowered(v.substr(0, 7)) == "file://") {
+    const std::string rest = percentDecoded(v.substr(7));
+    if (rest.rfind('/', 0) == 0) local = rest.substr(1);  // file:///C:/a
+    else if (!rest.empty()) local = "//" + rest;           // file://server/share
+    if (!isDrivePath(local) && local.rfind("//", 0) != 0) return false;
+  }
+  if (!local.empty()) {
+    std::replace(local.begin(), local.end(), '/', '\\');
+    path = local;
+    return true;
+  }
+  if (std::any_of(v.begin(), v.end(), isSpace)) return false;
+  if (hasScheme(v)) {
+    address = v;
+    return true;
+  }
+  if (!looksLikeHost(v.substr(0, v.find_first_of("/?#")))) return false;
+  address = "https://" + v;
+  return true;
 }
 
 bool runWithBudget(const std::function<void()>& probe, int budgetMs) {
