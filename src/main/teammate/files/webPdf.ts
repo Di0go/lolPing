@@ -18,7 +18,10 @@ export async function fetchWebPdf(url: string, signal: AbortSignal, maxBytes = M
   }
   try {
     const res = await fetch(target, { signal, redirect: 'follow', credentials: 'omit' });
-    if (!res.ok || !res.body) throw new FileReadError('unreadable', `the server answered ${res.status}`);
+    if (!res.ok || !res.body) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new FileReadError('unreadable', `the server answered ${res.status}`);
+    }
     const declared = Number(res.headers.get('content-length'));
     if (declared > maxBytes) {
       await res.body.cancel();

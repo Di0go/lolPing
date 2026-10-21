@@ -2,15 +2,15 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { FileReadError, MAX_FILE_BYTES, type Doc } from './doc';
 import { readDocx, readPptx, readXlsx } from './office';
-import { readPdfBuffer } from './pdf';
+import { readPdfBuffer, type PdfReadOptions } from './pdf';
 import { readTextBytes, TEXT_EXTENSIONS } from './text';
 
 export { FileReadError, type Doc, type FileReadCode } from './doc';
-export { readPdfBuffer } from './pdf';
+export { MAX_PDF_PAGES, pdfAssetDirs, readPdfBuffer, type PdfReadOptions } from './pdf';
 export { fetchWebPdf } from './webPdf';
 
 /** Reads a file the user pointed at into labelled sections; the file's extension picks the reader. */
-export async function readDocument(path: string, opts: { maxBytes?: number } = {}): Promise<Doc> {
+export async function readDocument(path: string, opts: PdfReadOptions & { maxBytes?: number } = {}): Promise<Doc> {
   const name = basename(path);
   const ext = extname(path).toLowerCase();
   if (ext !== '.pdf' && ext !== '.docx' && ext !== '.pptx' && ext !== '.xlsx' && !TEXT_EXTENSIONS.has(ext)) {
@@ -35,7 +35,7 @@ export async function readDocument(path: string, opts: { maxBytes?: number } = {
     throw new FileReadError(code === 'ENOENT' ? 'missing' : 'unreadable', `cannot read ${name}`);
   }
   switch (ext) {
-    case '.pdf': return readPdfBuffer(name, bytes);
+    case '.pdf': return readPdfBuffer(name, bytes, opts);
     case '.docx': return readDocx(name, bytes);
     case '.pptx': return readPptx(name, bytes);
     case '.xlsx': return readXlsx(name, bytes);

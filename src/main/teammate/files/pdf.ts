@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { FileReadError, MAX_OUTLINE, type Doc } from './doc';
 
 type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -31,8 +32,34 @@ function flattenOutline(nodes: readonly OutlineNode[], out: string[]): void {
   }
 }
 
+/** More pages than this are not read; a huge PDF would hold main for seconds. */
+export const MAX_PDF_PAGES = 1000;
+
+export interface PdfReadOptions {
+  /** Directory of pdfjs's predefined CMaps (ending in a slash); Chinese PDFs without ToUnicode need it. */
+  cMapUrl?: string;
+  /** Directory of pdfjs's standard font files (ending in a slash). */
+  standardFontDataUrl?: string;
+  maxPages?: number;
+}
+
+/**
+ * Where pdfjs's CMaps and standard fonts are: copied beside the app when packaged (see `extraResources` in
+ * package.json), in node_modules when running from source.
+ * Both end with a slash, which pdfjs insists on even on Windows.
+ */
+export function pdfAssetDirs(
+  base: { packaged: boolean; resourcesPath: string; appPath: string },
+): { cMapUrl: string; standardFontDataUrl: string } {
+  const root = base.packaged ? join(base.resourcesPath, 'pdfjs') : join(base.appPath, 'node_modules', 'pdfjs-dist');
+  return {
+    cMapUrl: join(root, 'cmaps') + '/',
+    standardFontDataUrl: join(root, 'standard_fonts') + '/',
+  };
+}
+
 /** Reads a PDF's text page by page; any failure, a password included, is `unreadable`. */
-export async function readPdfBuffer(name: string, data: Buffer): Promise<Doc> {
+export async function readPdfBuffer(name: string, data: Buffer, opts: PdfReadOptions = {}): Promise<Doc> {
   const lib = await pdfjs().catch((e: unknown) => {
     throw new FileReadError('unreadable', `PDF reader failed to load: ${String(e)}`);
   });
@@ -42,16 +69,24 @@ export async function readPdfBuffer(name: string, data: Buffer): Promise<Doc> {
     useSystemFonts: false,
     disableFontFace: true,
     verbosity: lib.VerbosityLevel.ERRORS,
+    cMapUrl: opts.cMapUrl,
+    cMapPacked: true,
+    standardFontDataUrl: opts.standardFontDataUrl,
   });
   try {
     const pdf = await task.promise;
     const sections: Doc['sections'] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
+    const pages = Math.min(pdf.numPages, opts.maxPages ?? MAX_PDF_PAGES);
+    for (let i = 1; i <= pages; i++) {
+      // pdfjs's in-process worker is a chain of microtasks; without a turn of the event loop between pages
+      // main's timers and IPC wait for the whole file.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
       let text = '';
       for (const item of content.items) {
-        if ('str' in item) text += item.hasEOL ? `${item.str}\n` : item.str;
+        if ('str' in item) text += item.hasEOL ? `${item.str}
+` : item.str;
       }
       sections.push({ label: `p. ${i}`, text: text.trim() });
       page.cleanup();

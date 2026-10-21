@@ -1,13 +1,18 @@
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { zipSync } from 'fflate';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { fetchWebPdf, FileReadError, readDocument, readPdfBuffer } from '../../../src/main/teammate/files';
+import {
+  fetchWebPdf, FileReadError, MAX_PDF_PAGES, pdfAssetDirs, readDocument, readPdfBuffer,
+} from '../../../src/main/teammate/files';
 import { PAGE_CHARS } from '../../../src/shared/teammate/locate';
-import { buildDocx, buildPdf, buildPptx, buildXlsx, GBK_ZHONGWEN } from '../fixtures/files/build';
+import { buildCjkPdf, buildDocx, buildPdf, buildPptx, buildXlsx, GBK_ZHONGWEN } from '../fixtures/files/build';
 
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 let dir = '';
 const at = (name: string): string => join(dir, name);
 const write = (name: string, data: string | Uint8Array): string => {
@@ -85,6 +90,21 @@ describe('readDocument: text', () => {
   });
 });
 
+describe('pdfAssetDirs', () => {
+  it('points at the copies beside a packaged app', () => {
+    const dirs = pdfAssetDirs({ packaged: true, resourcesPath: join('app', 'resources'), appPath: join('app', 'x') });
+    expect(dirs.cMapUrl).toBe(join('app', 'resources', 'pdfjs', 'cmaps') + '/');
+    expect(dirs.standardFontDataUrl).toBe(join('app', 'resources', 'pdfjs', 'standard_fonts') + '/');
+  });
+
+  it('points into node_modules when running from source', () => {
+    const appPath = join('src', 'repo');
+    const dirs = pdfAssetDirs({ packaged: false, resourcesPath: join('app', 'resources'), appPath });
+    expect(dirs.cMapUrl).toBe(join('src', 'repo', 'node_modules', 'pdfjs-dist', 'cmaps') + '/');
+    expect(dirs.standardFontDataUrl).toBe(join('src', 'repo', 'node_modules', 'pdfjs-dist', 'standard_fonts') + '/');
+  });
+});
+
 describe('readDocument: PDF', () => {
   it('reads PDF pages with their numbers', async () => {
     const doc = await readDocument(write('two.pdf', buildPdf(['Hello first page', 'Second page here'])));
@@ -99,6 +119,34 @@ describe('readDocument: PDF', () => {
     const doc = await readPdfBuffer('web.pdf', buildPdf(['Only page']));
     expect(doc.name).toBe('web.pdf');
     expect(doc.sections.map((s) => s.label)).toEqual(['p. 1']);
+  });
+
+  it('reads Chinese text that only a predefined CMap can decode', async () => {
+    const assets = pdfAssetDirs({ packaged: false, resourcesPath: '', appPath: repoRoot });
+    const doc = await readDocument(write('cjk.pdf', buildCjkPdf()), assets);
+    expect(doc.sections[0].text).toBe('中文');
+  });
+
+  it('leaves the event loop free between pages', async () => {
+    const data = buildPdf(Array.from({ length: 60 }, (_, i) => `page ${i}`));
+    await readPdfBuffer('warm.pdf', data); // the first read loads pdfjs, which has turns of its own
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 0);
+    try {
+      const doc = await readPdfBuffer('many.pdf', data);
+      expect(doc.sections).toHaveLength(60);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThanOrEqual(5);
+  });
+
+  it('reads at most the page cap and keeps the outline', async () => {
+    expect(MAX_PDF_PAGES).toBe(1000);
+    const data = buildPdf(['one', 'two', 'three', 'four', 'five']);
+    const doc = await readPdfBuffer('cap.pdf', data, { maxPages: 3 });
+    expect(doc.sections.map((s) => s.label)).toEqual(['p. 1', 'p. 2', 'p. 3']);
+    expect(doc.outline).toHaveLength(5);
   });
 
   it('says unreadable for a corrupt PDF', async () => {
@@ -132,6 +180,14 @@ describe('readDocument: Office', () => {
     expect(doc.outline.slice(0, 3)).toEqual(['Title 1', 'Title 2', 'Title 3']);
   });
 
+  it('follows the deck order in presentation.xml, not the slide file numbers', async () => {
+    const slides = [1, 2, 3].map((n) => ({ title: `Title ${n}`, lines: [`Body ${n}`] }));
+    const doc = await readDocument(write('order.pptx', buildPptx(slides, [3, 1, 2])));
+    expect(doc.sections.map((s) => s.label)).toEqual(['slide 1', 'slide 2', 'slide 3']);
+    expect(doc.sections.map((s) => s.text)).toEqual(['Title 3\nBody 3', 'Title 1\nBody 1', 'Title 2\nBody 2']);
+    expect(doc.outline).toEqual(['Title 3', 'Title 1', 'Title 2']);
+  });
+
   it('reads every sheet as rows', async () => {
     const doc = await readDocument(write('a.xlsx', buildXlsx([
       { name: 'Budget', rows: [['Item', 'Cost'], ['Tea', 3], ['Rice', 12]] },
@@ -148,6 +204,20 @@ describe('readDocument: Office', () => {
     const rows = Array.from({ length: 2500 }, (_, i) => [i]);
     const doc = await readDocument(write('rows.xlsx', buildXlsx([{ name: 'Big', rows }])));
     expect(doc.sections[0].text.split('\n')).toHaveLength(2000);
+  });
+
+  it('says tooBig for a zip that unpacks past the budget instead of missing its text', async () => {
+    const mb = (n: number): Uint8Array => new Uint8Array(n * 1024 * 1024);
+    const one = zipSync({ 'word/document.xml': mb(101) }, { level: 1 });
+    const err = await failure(readDocument(write('bomb.docx', one)));
+    expect(err.code).toBe('tooBig');
+    expect(err.message).toContain('word/document.xml');
+    const two = zipSync({
+      'xl/workbook.xml': new Uint8Array(10),
+      'xl/worksheets/sheet1.xml': mb(60),
+      'xl/worksheets/sheet2.xml': mb(60),
+    }, { level: 1 });
+    expect((await failure(readDocument(write('bomb.xlsx', two)))).code).toBe('tooBig');
   });
 
   it('says unreadable for a corrupt docx', async () => {

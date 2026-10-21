@@ -2,8 +2,8 @@ import { strFromU8, unzipSync } from 'fflate';
 import { FileReadError, MAX_OUTLINE, type Doc } from './doc';
 import { cutParts } from './text';
 
-/** One entry may not unpack past this, so a small zip bomb cannot fill memory. */
-const MAX_ENTRY_BYTES = 200 * 1024 * 1024;
+/** No wanted entry, and no file's wanted entries together, may unpack past this, so a zip bomb cannot fill memory. */
+const MAX_UNZIPPED_BYTES = 100 * 1024 * 1024;
 const MAX_SHEET_ROWS = 2000;
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
@@ -16,14 +16,25 @@ function unescapeXml(s: string): string {
   });
 }
 
-/** The wanted entries of a zip, as text; an entry that is not a zip or is too large is `unreadable`. */
+/**
+ * The wanted entries of a zip, as text. Something that is not a zip is `unreadable`; entries that would unpack
+ * past the budget (by the sizes the zip declares) are `tooBig` before any of them is inflated.
+ */
 function unzipText(data: Uint8Array, want: (name: string) => boolean): Map<string, string> {
+  let total = 0;
   try {
     const files = unzipSync(data, {
-      filter: (f) => want(f.name) && f.originalSize <= MAX_ENTRY_BYTES,
+      filter: (f) => {
+        if (!want(f.name)) return false;
+        total += f.originalSize;
+        if (f.originalSize > MAX_UNZIPPED_BYTES) throw new FileReadError('tooBig', `${f.name} unpacks too large`);
+        if (total > MAX_UNZIPPED_BYTES) throw new FileReadError('tooBig', 'the file unpacks too large');
+        return true;
+      },
     });
     return new Map(Object.entries(files).map(([name, bytes]) => [name, strFromU8(bytes)]));
   } catch (e) {
+    if (e instanceof FileReadError) throw e;
     throw new FileReadError('unreadable', `cannot open the file: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
@@ -86,12 +97,31 @@ function paragraphsOf(xml: string): string[] {
   return out;
 }
 
-/** Reads a pptx: one section per slide in slide-number order, the title shape first. */
+/** Slide files in the order the deck shows them (sldIdLst through the rels), or null when that cannot be read. */
+function deckOrder(files: Map<string, string>): string[] | null {
+  const list = files.get('ppt/presentation.xml');
+  const rels = files.get('ppt/_rels/presentation.xml.rels');
+  if (!list || !rels) return null;
+  const targets = new Map<string, string>();
+  for (const r of rels.matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = /\bId="([^"]*)"/.exec(r[0])?.[1];
+    const target = /\bTarget="([^"]*)"/.exec(r[0])?.[1];
+    if (id && target) targets.set(id, target.startsWith('/') ? target.slice(1) : `ppt/${target}`);
+  }
+  const order = [...list.matchAll(/<p:sldId\b[^>]*>/g)]
+    .map((s) => targets.get(/\br:id="([^"]*)"/.exec(s[0])?.[1] ?? '') ?? '')
+    .filter((path) => files.has(path));
+  return order.length > 0 ? order : null;
+}
+
+/** Reads a pptx: one section per slide in deck order (file-number order without a readable deck), title first. */
 export function readPptx(name: string, data: Uint8Array): Doc {
-  const files = unzipText(data, (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n));
-  const slides = [...files.entries()]
-    .map(([n, xml]) => ({ num: Number(/slide(\d+)\.xml$/.exec(n)?.[1]), xml }))
-    .sort((a, b) => a.num - b.num);
+  const files = unzipText(data, (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)
+    || n === 'ppt/presentation.xml' || n === 'ppt/_rels/presentation.xml.rels');
+  const byNumber = [...files.keys()]
+    .filter((n) => n.startsWith('ppt/slides/'))
+    .sort((a, b) => Number(/(\d+)\.xml$/.exec(a)?.[1]) - Number(/(\d+)\.xml$/.exec(b)?.[1]));
+  const slides = (deckOrder(files) ?? byNumber).map((n) => ({ xml: files.get(n) ?? '' }));
   if (slides.length === 0) throw new FileReadError('unreadable', 'no slides found');
   const outline: string[] = [];
   const sections = slides.map(({ xml }, i) => {

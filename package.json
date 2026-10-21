@@ -57,6 +57,10 @@
     "productName": "lolPing",
     "directories": { "output": "release", "buildResources": "build" },
     "files": ["out/**/*", "package.json"],
+    "extraResources": [
+      { "from": "node_modules/pdfjs-dist/cmaps", "to": "pdfjs/cmaps" },
+      { "from": "node_modules/pdfjs-dist/standard_fonts", "to": "pdfjs/standard_fonts" }
+    ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "build/icon.ico",
