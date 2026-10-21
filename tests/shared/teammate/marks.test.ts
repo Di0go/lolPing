@@ -105,6 +105,21 @@ describe('snapPoint', () => {
     expect(snapPoint({ x: 250, y: 340 }, marks)).toEqual({ x: 250, y: 340 }); // 20 px below
   });
 
+  it('snaps only onto small controls, so a word in a big box or a spot on an image stays put', () => {
+    const big: Mark[] = [
+      mark('field', 1000, 1000, 900, 500, 'Compose'),
+      mark('text', 1020, 1100, 700, 20, 'Dear team, the numbers are in'),
+      mark('other', 2000, 1000, 600, 400, 'Sales chart'),
+      mark('other', 3000, 1000, 80, 30, 'icon'),
+      mark('button', 2100, 1100, 80, 30, 'Send'),
+    ];
+    expect(snapPoint({ x: 1300, y: 1104 }, big)).toEqual({ x: 1300, y: 1110 }); // the line, not the box centre
+    expect(snapPoint({ x: 1500, y: 1400 }, big)).toEqual({ x: 1500, y: 1400 });
+    expect(snapPoint({ x: 2400, y: 1300 }, big)).toEqual({ x: 2400, y: 1300 }); // a bar in a chart image
+    expect(snapPoint({ x: 3010, y: 1010 }, big)).toEqual({ x: 3010, y: 1010 }); // `other` is never a target
+    expect(snapPoint({ x: 2105, y: 1105 }, big)).toEqual({ x: 2140, y: 1115 }); // the button inside the image
+  });
+
   it('leaves a point near nothing where it is', () => {
     expect(snapPoint({ x: 900, y: 900 }, marks)).toEqual({ x: 900, y: 900 });
     expect(snapPoint({ x: 5, y: 5 }, [])).toEqual({ x: 5, y: 5 });

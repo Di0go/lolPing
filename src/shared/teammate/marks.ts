@@ -37,6 +37,13 @@ export function parseMarksFile(text: string): RawMark[] {
 }
 
 const isControl = (m: Mark): boolean => m.kind !== 'text';
+/** Larger controls (a compose box, a list, a pane) hold words and spots of their own; their centre means nothing. */
+const SNAP_MAX_W = 400;
+const SNAP_MAX_H = 120;
+/** A control a point may jump to the centre of: small, and not an image or container (`other`). */
+const isSnapTarget = (m: Mark): boolean => (
+  isControl(m) && m.kind !== 'other' && m.box.w <= SNAP_MAX_W && m.box.h <= SNAP_MAX_H
+);
 
 /** Distance from `p` to the nearest point of `box`; 0 inside or on its edge. */
 function distanceTo(p: Point, box: Rect): number {
@@ -81,8 +88,8 @@ export function selectMarks(
 }
 
 /**
- * Moves a point the model picked by eye onto what it meant: the centre of the control it is on or just beside, else
- * the middle of the text line it is on or just above or below (keeping x, so a word in a line stays put).
+ * Moves a point the model picked by eye onto what it meant: the centre of the small control it is on or just beside,
+ * else the middle of the text line it is on or just above or below (keeping x, so a word in a line stays put).
  */
 export function snapPoint(
   p: Point,
@@ -91,7 +98,7 @@ export function snapPoint(
 ): Point {
   const controlPx = opts.controlPx ?? 24;
   const linePx = opts.linePx ?? 12;
-  const controls = marks.filter(isControl);
+  const controls = marks.filter(isSnapTarget);
 
   const on = controls.filter((m) => distanceTo(p, m.box) === 0);
   if (on.length > 0) return centre(on.reduce((a, b) => (area(b.box) < area(a.box) ? b : a)).box);
