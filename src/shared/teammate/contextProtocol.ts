@@ -98,18 +98,37 @@ const isFileHow = (v: unknown): v is FileHow => v === 'office' || v === 'address
 /** Between spot texts in the systemText reply. */
 const RECORD_SEPARATOR = '\u001e';
 
+/** The helper's caps (kSelectionMax and the rest in context.h), applied again here in case a helper ever doesn't. */
+const SELECTION_MAX = 4000;
+const SPOT_TEXT_MAX = 2000;
+const FOCUS_VALUE_MAX = 2000;
+const ADDRESS_MAX = 2000;
+
+/** The first `max` code points of `text`. */
+function capChars(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let at = 0;
+  let n = 0;
+  for (const ch of text) {
+    if (n === max) return text.slice(0, at);
+    at += ch.length;
+    n += 1;
+  }
+  return text;
+}
+
 function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
   const { selection, spotTexts, focusKind, focusLabel, focusValue, focusSecure, address } = o;
   if (typeof selection !== 'string' || typeof spotTexts !== 'string' || typeof focusKind !== 'string') return null;
   if (typeof focusLabel !== 'string' || typeof focusValue !== 'string' || typeof address !== 'string') return null;
   if (typeof focusSecure !== 'boolean') return null;
   // The helper already sends no value for a secure field; blanking it here keeps that true whatever arrives.
-  const value = focusSecure ? '' : focusValue;
+  const value = focusSecure ? '' : capChars(focusValue, FOCUS_VALUE_MAX);
   return {
-    selection,
-    spotTexts: spotTexts === '' ? [] : spotTexts.split(RECORD_SEPARATOR),
+    selection: capChars(selection, SELECTION_MAX),
+    spotTexts: spotTexts === '' ? [] : spotTexts.split(RECORD_SEPARATOR).map((t) => capChars(t, SPOT_TEXT_MAX)),
     focus: focusKind === '' ? null : { kind: focusKind, label: focusLabel, value, secure: focusSecure },
-    address,
+    address: capChars(address, ADDRESS_MAX),
   };
 }
 

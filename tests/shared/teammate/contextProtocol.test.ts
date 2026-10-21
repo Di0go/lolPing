@@ -101,6 +101,21 @@ describe('contextProtocol', () => {
     expect(parseContextLine(JSON.stringify(noFlag))).toBeNull();
   });
 
+  it('cuts the helper\'s text to its caps in code points, whatever the helper sent', () => {
+    const han = '\u{20000}'; // one code point, two UTF-16 units
+    const reply = parseContextLine(JSON.stringify({
+      type: 'systemText', id: 's1', selection: han.repeat(4_001), spotTexts: `${'a'.repeat(2_001)}\u001eshort`,
+      focusKind: 'field', focusLabel: 'Body', focusValue: 'v'.repeat(2_001), focusSecure: false,
+      address: `https://example.com/${'p'.repeat(2_000)}`,
+    }));
+    if (reply?.type !== 'systemText') throw new Error('not parsed');
+    const { layer } = reply;
+    expect(layer.selection).toBe(han.repeat(4_000));
+    expect(layer.spotTexts.map((t) => t.length)).toEqual([2_000, 5]);
+    expect(layer.focus?.value).toHaveLength(2_000);
+    expect([...layer.address]).toHaveLength(2_000);
+  });
+
   it('splits spot texts on the record separator', () => {
     const reply = parseContextLine(JSON.stringify({
       type: 'systemText', id: 's1', selection: '', spotTexts: 'first line\u001esecond, with\ttab\u001e', focusKind: '',

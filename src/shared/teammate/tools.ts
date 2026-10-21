@@ -128,6 +128,8 @@ function target(a: Record<string, unknown>): Target | null {
 }
 
 function pageRange(v: unknown): { from: number; to: number } | null {
+  // The schema asks for a string, but models often send a single page as a number.
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 1 ? { from: v, to: v } : null;
   const m = typeof v === 'string' ? /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/.exec(v) : null;
   if (!m) return null;
   const from = Number(m[1]);

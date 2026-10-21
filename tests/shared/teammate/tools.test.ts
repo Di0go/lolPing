@@ -49,6 +49,14 @@ describe('tools', () => {
     expect(parseToolCall('read_file', { pages: 'abc', search: 'x' })).toEqual({ tool: 'read_file', search: 'x' });
   });
 
+  it('takes a page given as a number, as models often send it', () => {
+    expect(parseToolCall('read_file', { pages: 3 })).toEqual({ tool: 'read_file', pages: { from: 3, to: 3 } });
+    expect(parseToolCall('read_file', { pages: 0 })).toBeNull();
+    expect(parseToolCall('read_file', { pages: -2 })).toBeNull();
+    expect(parseToolCall('read_file', { pages: 2.5 })).toBeNull();
+    expect(parseToolCall('read_file', { pages: Number.NaN })).toBeNull();
+  });
+
   it('offers read_file only with a file', () => {
     const names = (file: boolean) => toolDefs({ emotes: true, spots: 1, file }).map((d) => d.name);
     expect(names(true)).toContain('read_file');
