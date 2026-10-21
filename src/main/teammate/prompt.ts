@@ -17,7 +17,7 @@ export interface AskContext {
   app: string;
   title: string;
   shot: Shot;
-  /** Each spot's position in overview pixels, numbered 1..N in order (spot N = mark N). */
+  /** Each spot's position in overview pixels, numbered 1..N in order, as the numbered rings on the images. */
   spots: { x: number; y: number }[];
   overviewJpeg: Buffer;
   zoomJpegs: Buffer[];
