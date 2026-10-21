@@ -11,8 +11,8 @@ case "$(uname -s)" in
     "$CXX" $FLAGS -O2 src/main_posix.cpp src/hooks_mac.cpp src/macinput.cpp src/simulate.cpp src/commands.cpp \
       src/output.cpp src/json.cpp src/decision.cpp \
       -framework ApplicationServices -framework CoreFoundation -o build/hook-helper
-    "$CXX" $FLAGS -fobjc-arc -O2 src/context_main_posix.cpp src/context_capture_mac.mm src/context.cpp src/json.cpp \
-      -framework ScreenCaptureKit -framework CoreGraphics -framework ImageIO -framework AppKit \
+    "$CXX" $FLAGS -fobjc-arc -O2 src/context_main_posix.cpp src/context_capture_mac.mm src/context_text_mac.mm \
+      src/context.cpp src/json.cpp -framework ScreenCaptureKit -framework Vision -framework CoreGraphics -framework ImageIO -framework AppKit \
       -framework ApplicationServices -framework CoreFoundation -o build/context-helper
     ;;
   Linux)

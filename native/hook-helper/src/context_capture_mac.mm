@@ -259,6 +259,12 @@ bool foreground(std::string& app, std::string& title, Failure&) {
 
 }  // namespace
 
+// The text probes, in context_text_mac.mm.
+bool ocrLines(const Image& img, const Rect& area, std::vector<RawMark>& out, Failure& fail);
+bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail);
+bool systemTextAt(const std::vector<Point>& spots, SystemText& out, Failure& fail);
+bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail);
+
 ContextPlatform nativePlatform() {
   NSApplicationLoad();  // a command-line process needs a window server connection for ScreenCaptureKit
   ContextPlatform p;
@@ -266,23 +272,10 @@ ContextPlatform nativePlatform() {
   p.resize = resize;
   p.writeJpeg = writeJpeg;
   p.foreground = foreground;
-  // Stubs until the text probes land in context_text_mac.mm.
-  p.ocr = [](const Image&, const Rect&, std::vector<RawMark>&, Failure& fail) {
-    fail.message = "not available";
-    return false;
-  };
-  p.controls = [](const std::vector<Point>&, int, std::vector<RawMark>&, Failure& fail) {
-    fail.message = "not available";
-    return false;
-  };
-  p.systemText = [](const std::vector<Point>&, SystemText&, Failure& fail) {
-    fail.message = "not available";
-    return false;
-  };
-  p.fileOf = [](std::string&, std::string&, std::string&, Failure& fail) {
-    fail.message = "not available";
-    return false;
-  };
+  p.ocr = ocrLines;
+  p.controls = nearbyControls;
+  p.systemText = systemTextAt;
+  p.fileOf = fileBehindWindow;
   return p;
 }
 
