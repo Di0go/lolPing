@@ -197,6 +197,18 @@ describe('contextProtocol', () => {
     expect(parseFieldsFile(file).map((f) => [f.id, f.label])).toEqual([['ok.1', 'Name'], ['ok.2', 'Name']]);
   });
 
+  it('keeps a field box that is a real rect and drops one that is not', () => {
+    const [boxed, empty, junk, none] = parseFieldsFile([
+      fieldLine({ id: '1.1', box: '120,340,400,32' }),
+      fieldLine({ id: '1.2', box: '120,340,0,32' }),
+      fieldLine({ id: '1.3', box: 'here' }),
+      fieldLine({ id: '1.4' }),
+    ].join('\n'));
+    expect(boxed.box).toEqual({ x: 120, y: 340, w: 400, h: 32 });
+    expect([empty.box, junk.box, none.box]).toEqual([undefined, undefined, undefined]);
+    expect('box' in none).toBe(false);
+  });
+
   it('blanks a secure field value whatever the helper sends', () => {
     const file = fieldLine({ id: '9.1', label: 'Password', value: 'hunter2', secure: true });
     const fields = parseFieldsFile(file);

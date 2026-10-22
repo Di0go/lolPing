@@ -623,6 +623,15 @@ static void test_form_fields_file_keeps_one_line_per_field_and_the_caps() {
   CHECK(options == kMaxFieldOptions);
 }
 
+static void test_form_fields_file_gives_each_field_its_box() {
+  RawField name = field("1.1", "text", "Name");
+  name.box = Rect{120, 340, 400, 32};
+  const std::vector<std::string> rows = lines(formFieldsFileText({name, field("1.2", "text", "No box")}));
+  CHECK(rows.size() == 2);
+  CHECK(rows[0].find(R"("box":"120,340,400,32")") != std::string::npos);
+  CHECK(rows[1].find("\"box\"") == std::string::npos);  // an empty box is left out
+}
+
 static void test_read_leaves_the_fields_layer_off_unless_asked_and_reports_a_failure() {
   Fake fake;
   ContextPlatform p = readPlatform(fake);
@@ -1442,6 +1451,7 @@ int main() {
   test_form_fields_send_no_value_for_a_secure_field();
   test_form_fields_file_cuts_labels_on_a_character_boundary();
   test_form_fields_file_keeps_one_line_per_field_and_the_caps();
+  test_form_fields_file_gives_each_field_its_box();
   test_read_leaves_the_fields_layer_off_unless_asked_and_reports_a_failure();
   test_never_fill_labels_match_the_shared_table();
   test_form_fields_blank_the_value_of_a_never_fill_label();

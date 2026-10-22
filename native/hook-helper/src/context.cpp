@@ -788,7 +788,9 @@ std::string formFieldsFileText(const std::vector<RawField>& fields) {
     for (size_t j = 0; j < f.options.size() && j < kMaxFieldOptions; ++j) {
       out += (j == 0 ? "" : ",") + quoted(f.options[j], kFieldOptionMax);
     }
-    out += "]}\n";
+    out += "]";
+    if (f.box.w > 0 && f.box.h > 0) out += ",\"box\":\"" + rectText(f.box) + "\"";
+    out += "}\n";
   }
   return out;
 }

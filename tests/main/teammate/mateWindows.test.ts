@@ -359,6 +359,18 @@ describe('MateWindows form preview', () => {
     expect(far.webContents.send).toHaveBeenCalledWith('mate:state', { ...form, side: 'left', serial: 2 });
   });
 
+  it('counts its serials apart from the consent card, so showing one never restarts the other', () => {
+    mate.showConsent({ x: 500, y: 400 }, consent);
+    const card = h.windows[h.windows.length - 1];
+    card.webContents.emit('did-finish-load');
+    const w = openForm();
+    mate.updateConsent({ ...consent, detail: 'Changed' });
+    expect(w.webContents.send).toHaveBeenCalledWith('mate:state', { ...form, side: 'right', serial: 1 });
+    expect(card.webContents.send).toHaveBeenLastCalledWith(
+      'mate:state', { ...consent, detail: 'Changed', side: 'right', serial: 1 },
+    );
+  });
+
   it('passes on a fill of listed rows once, with each id once', () => {
     openForm();
     sendAction(0, { t: 'fill', ids: ['f2', 'f1', 'f2'] });

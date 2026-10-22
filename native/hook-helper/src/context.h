@@ -158,6 +158,7 @@ struct RawField {
   std::string value;  // a checkbox or radio: "on" or "off"; empty for a secure field, whatever it holds
   bool secure = false, required = false;
   std::vector<std::string> options;  // a combo's list items
+  Rect box;  // on screen, physical px: where the teammate pings it and where a paste into it clicks
 };
 
 struct SystemText {
@@ -280,7 +281,7 @@ constexpr size_t kFieldOptionMax = 120;
 /**
  * The fields file: one JSON object per line for each of the first kMaxFormFields fields, texts cut to their caps on
  * character boundaries. The value of a secure field, or of one whose label is a never-fill label, is never written,
- * whatever the probe read; such a field is written with secure true.
+ * whatever the probe read; such a field is written with secure true. A field's box is left out when it is empty.
  */
 std::string formFieldsFileText(const std::vector<RawField>& fields);
 

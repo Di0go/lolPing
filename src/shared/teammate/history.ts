@@ -17,6 +17,8 @@ export interface ThreadRecord {
     markdown: string;
     /** base64 JPEG, 512 px */
     thumb: string;
+    /** What the teammate did for the ask, described ("Pasted 2 lines into Chrome"); never the text it put anywhere. */
+    done?: string[];
   }[];
 }
 

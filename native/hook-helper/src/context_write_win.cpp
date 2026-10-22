@@ -303,6 +303,8 @@ bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, F
       if (SUCCEEDED(el->get_CachedClassName(&className.s)) && className.text() == L"OmniboxViewViews") continue;
 
       RawField f;
+      f.box = Rect{static_cast<int>(box.left), static_cast<int>(box.top), static_cast<int>(box.right - box.left),
+                   static_cast<int>(box.bottom - box.top)};
       f.id = runtimeIdOf(el.get());
       if (f.id.empty()) continue;
       BOOL password = FALSE, required = FALSE;

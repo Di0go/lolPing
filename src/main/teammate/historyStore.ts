@@ -36,7 +36,10 @@ function parseEntry(raw: unknown): Entry | null {
   const x = raw as Record<string, unknown>;
   if (!isNumber(x.at) || !isPingId(x.intent) || !(x.words === null || isString(x.words))) return null;
   if (!isString(x.line) || !isString(x.markdown) || !isString(x.thumb)) return null;
-  return { at: x.at, intent: x.intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb };
+  // Entries written before actions existed have no `done`.
+  if (x.done !== undefined && !(Array.isArray(x.done) && x.done.every(isString))) return null;
+  const e: Entry = { at: x.at, intent: x.intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb };
+  return Array.isArray(x.done) ? { ...e, done: x.done as string[] } : e;
 }
 
 /** Validates decrypted text from disk; anything malformed is rejected rather than trusted. */
@@ -149,6 +152,19 @@ export class HistoryStore {
       // The thread just written is never pruned by its own append.
       await this.pruneNow(this.rule(), record.id);
       return record;
+    });
+  }
+
+  /** Sets what was done for the entry made at `at`: actions that finished after it was written (after consent). */
+  async amend(threadId: string, at: number, done: string[]): Promise<void> {
+    await this.enqueue(async () => {
+      if (!this.writable()) return;
+      const t = await this.read(threadId);
+      const i = t ? t.entries.findLastIndex((e) => e.at === at) : -1;
+      if (!t || i < 0) return;
+      const record = { ...t, entries: t.entries.map((e, j) => (j === i ? { ...e, done } : e)) };
+      await this.write(record);
+      if (this.currentId === record.id) this.currentRecord = record;
     });
   }
 

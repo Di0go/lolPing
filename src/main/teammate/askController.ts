@@ -6,7 +6,9 @@ import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
+import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
 import { overviewToPhysical, physicalToOverview, receiptPoint, type Rect, type Shot } from '../../shared/teammate/coords';
+import type { FormField } from '../../shared/teammate/doRules';
 import { frameAsk, type Framing } from '../../shared/teammate/framing';
 import type { ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
@@ -20,6 +22,7 @@ import {
 } from '../../shared/teammate/tools';
 import type { BubbleState, CardState, MateAction, MateView } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
+import type { ActionRunner, RunInfo } from './actions';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
 import type { Doc } from './files';
 import { FILE_READ_LIMIT, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
@@ -47,15 +50,15 @@ export interface AskDeps {
     | 'displayAt' | 'toLocal' | 'toDip' | 'primaryDip'>;
   windows: Pick<MateWindows,
     'showBubble' | 'updateBubble' | 'hideBubble' | 'showCard' | 'updateCard' | 'hideCard' | 'setCaptureExcluded'>;
-  history: Pick<HistoryStore, 'append' | 'current'>;
+  history: Pick<HistoryStore, 'append' | 'current' | 'amend'>;
   /** The folder each ask's own capture folder goes in. */
   tempDir: () => string;
   /** A 512 px JPEG of a capture as base64, kept with the thread in history. */
   thumbnail: (jpeg: Buffer) => string;
   now: () => number;
   usage: (u: { input: number; output: number }) => void;
-  /** Carries out the copy, event, paste, fill and open calls; without it they are only kept on the run. */
-  actions?: { take(call: ActionCall): void };
+  /** Carries out the copy, event, paste, fill and open calls; without it they are dropped. */
+  actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described'> & Pick<EventEmitter, 'on'>;
   /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
   cursor?: () => Point;
   /** Makes, reads and deletes an ask's capture folder; the file system by default. */
@@ -119,8 +122,6 @@ interface Run {
   markdown: string[];
   tokens: number | null;
   calls: ToolCall[];
-  /** The action calls taken this ask, when no runner is wired. */
-  actions: ActionCall[];
   /** Says shown while their turn was still streaming: when the turn ends, play() skips each of them once. */
   early: string[];
   pings: number;
@@ -136,6 +137,12 @@ interface Run {
   skipped: boolean;
   /** File characters `read_file` has given this ask. */
   fileRead: number;
+  /** What the context read at the ask: the focused field and selection, the form fields, the element under the spot. */
+  system: SystemTextLayer | null;
+  fields: FormField[];
+  box: Rect | null;
+  /** What the action runner is given with each call of this ask; made at the first one. */
+  info: RunInfo | null;
 }
 
 const isAction = (c: ToolCall): c is ActionCall => (
@@ -202,6 +209,8 @@ export class AskController extends EventEmitter {
   private thread: ThreadRecord | null = null;
   /** A thread opened from History that the card shows; its reply box continues it. */
   private viewed: ThreadRecord | null = null;
+  /** The last answer's history entry: an action done after it was written (after consent) is added to it. */
+  private entry: { ask: string; at: number; thread: Promise<string | null> } | null = null;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -212,6 +221,7 @@ export class AskController extends EventEmitter {
       },
       removeDir: (p) => rm(p, { recursive: true, force: true }),
     };
+    deps.actions?.on('described', (ask: string, done: string[]) => this.amendDone(ask, done));
   }
 
   get running(): boolean {
@@ -228,6 +238,7 @@ export class AskController extends EventEmitter {
     machine.addSpot(spot);
 
     this.stopRun();
+    this.deps.actions?.cancel(); // a consent card or form preview of the last answer goes, and nothing of it runs
     this.answeredAt = null;
     this.clearMarks();
     this.hideBubble();
@@ -250,8 +261,9 @@ export class AskController extends EventEmitter {
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
       profile: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '', rest: '',
       markdown: [], tokens: null,
-      calls: [], actions: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
+      calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
+      system: null, fields: [], box: null, info: null,
     };
     this.run = run;
     this.shown = run;
@@ -321,6 +333,7 @@ export class AskController extends EventEmitter {
   /** Stops the running ask, if any, and clears everything the teammate has on screen. */
   cancel(_reason: 'new' | 'pause' | 'helper' | 'user'): void {
     this.stopRun();
+    this.deps.actions?.cancel();
     // Unconditionally: whatever the flags say, nothing of the teammate may stay on screen after a pause.
     this.marksShown = true;
     this.clearMarks();
@@ -397,6 +410,9 @@ export class AskController extends EventEmitter {
     if (!this.alive(run)) return;
     run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
     run.screenMarks = layers.marks;
+    run.system = layers.system;
+    run.fields = layers.fields;
+    run.box = layers.boxes[0]?.[0] ?? null;
     run.doc = layers.doc;
     // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
     run.used = aimsExactly(run.intent.def.id) ? layers.used : layers.used.filter((u) => u.kind !== 'marks');
@@ -604,8 +620,18 @@ export class AskController extends EventEmitter {
   }
 
   private takeAction(run: Run, call: ActionCall): void {
-    if (this.deps.actions) this.deps.actions.take(call);
-    else run.actions.push(call);
+    this.deps.actions?.take(this.runInfo(run), call);
+  }
+
+  private runInfo(run: Run): RunInfo {
+    const focus = run.system?.focus ?? null;
+    run.info ??= {
+      id: run.machine.id, profileId: run.profile?.id ?? '', tag: run.tag, app: run.app, window: run.window,
+      lang: run.lang, spot: run.spot.phys, at: this.deps.overlay.toDip(run.spot.phys) ?? this.deps.overlay.primaryDip(),
+      box: run.box, focus: focus ? { label: focus.label, secure: focus.secure } : null,
+      selection: run.system?.selection ?? '', fields: run.fields,
+    };
+    return run.info;
   }
 
   private async look(run: Run, area: { x: number; y: number; w: number; h: number }): Promise<Part[]> {
@@ -722,9 +748,11 @@ export class AskController extends EventEmitter {
     else if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, false));
     this.answeredAt = this.deps.now();
     this.scheduleFade();
+    // What the actions did, never what they put anywhere (spec §8.2).
+    const done = this.deps.actions?.described() ?? [];
     const entry = {
       at: this.deps.now(), intent: run.spot.intent, words: run.words, line: run.said,
-      markdown: run.markdown.join('\n\n'), thumb: run.thumb,
+      markdown: run.markdown.join('\n\n'), thumb: run.thumb, ...(done.length > 0 ? { done } : {}),
     };
     const meta = {
       title: (run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
@@ -736,9 +764,20 @@ export class AskController extends EventEmitter {
       ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry] }
       : { id: randomUUID(), ...meta, started: now, lastActivity: now, entries: [entry] };
     this.thread = local;
-    const saved = await this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => null);
+    const saving = this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => null);
+    this.entry = { ask: run.machine.id, at: entry.at, thread: saving.then((s) => s?.id ?? null) };
+    const saved = await saving;
     // A saved record replaces ours only when it is the same thread: with history off, append makes a new one each time.
     if (saved && this.thread === local && (run.thread === null || saved.id === run.thread.id)) this.thread = saved;
+  }
+
+  /** An action of the last answer was done after its entry went into history: the entry says so too. */
+  private amendDone(ask: string, done: string[]): void {
+    const entry = this.entry;
+    if (entry?.ask !== ask) return; // still answering: finish() takes it from described()
+    entry.thread
+      .then((id) => (id === null ? undefined : this.deps.history.amend(id, entry.at, done)))
+      .catch((err: unknown) => console.warn('[teammate] history:', err));
   }
 
   private fail(run: Run, reason: AskFailure): void {

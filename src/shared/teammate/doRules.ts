@@ -1,3 +1,5 @@
+import type { Rect } from './coords';
+
 export type PutAction = 'paste' | 'fill' | 'event' | 'open';
 
 export const permissionKey = (profileId: string, action: PutAction): string => `${profileId}:${action}`;
@@ -47,6 +49,8 @@ export interface FormField {
   secure: boolean;
   required: boolean;
   options: string[];
+  /** On screen in physical px, when the helper gave one. */
+  box?: Rect;
 }
 export interface PreviewRow { id: string; label: string; value: string; checked: boolean }
 export interface LeftField { label: string; reason: 'secure' | 'unknown' | 'kind' | 'option' }

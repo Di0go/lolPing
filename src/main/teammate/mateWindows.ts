@@ -62,8 +62,9 @@ export class MateWindows extends EventEmitter {
     consent: emptySlot('consent'), form: emptySlot('form'),
   };
   private captureExcluded = false;
-  /** Counts showConsent and showForm calls, so a page can tell a new window from an update of the open one. */
-  private sideShows = 0;
+  /** Counts the shows of each, so a page can tell a new card from an update of the open one without the other's shows
+   *  restarting it. */
+  private readonly shows = { consent: 0, form: 0 };
 
   constructor() {
     super();
@@ -104,7 +105,7 @@ export class MateWindows extends EventEmitter {
   showConsent(at: Point, s: ConsentState): void {
     const slot = this.slots.consent;
     slot.ended = false;
-    this.sideShows++;
+    this.shows.consent++;
     this.showPopup('consent', at, this.withSide(slot, at, s));
   }
 
@@ -127,7 +128,7 @@ export class MateWindows extends EventEmitter {
     const slot = this.slots.form;
     slot.ended = false;
     slot.formIds = new Set(s.rows.map((r) => r.id));
-    this.sideShows++;
+    this.shows.form++;
     this.showPopup('form', at, this.withSide(slot, at, s));
   }
 
@@ -279,7 +280,7 @@ export class MateWindows extends EventEmitter {
   }
 
   private withSide<S extends ConsentState | FormState>(slot: Slot, at: Point, s: S): S {
-    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side, serial: this.sideShows };
+    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side, serial: this.shows[s.view] };
   }
 
   private update(view: MateView, s: MateState): void {

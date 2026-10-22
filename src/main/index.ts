@@ -1,9 +1,9 @@
 import {
-  app, clipboard, dialog, Menu, nativeImage, powerMonitor, safeStorage, screen, shell, systemPreferences,
+  app, clipboard, ClipboardItem, dialog, Menu, nativeImage, powerMonitor, safeStorage, screen, shell, systemPreferences,
 } from 'electron';
 import { randomBytes, randomInt } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { resolveLang, strings, type Strings } from '../shared/i18n';
@@ -47,6 +47,7 @@ import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
+import { ActionRunner } from './teammate/actions';
 import { AskController } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
 import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
@@ -130,6 +131,7 @@ interface Mate {
   usage: UsageLog;
   context: ContextClient;
   windows: MateWindows;
+  actions: ActionRunner;
   controller: AskController;
 }
 
@@ -709,6 +711,12 @@ function start(): void {
       onHistoryAction(m, action).catch((err: unknown) => console.warn('[teammate] history:', err));
       return;
     }
+    if (view === 'consent' || view === 'form') {
+      const t = action.t;
+      const answer = t === 'allow' || t === 'always' || t === 'decline' || t === 'fill' || t === 'cancel';
+      if (answer) m.actions.onAction(view, action);
+      return;
+    }
     if (action.t === 'copy') clipboard.writeText(action.text);
     else if (action.t === 'link') void shell.openExternal(action.url);
     else if (action.t === 'history') void openHistory();
@@ -733,6 +741,41 @@ function start(): void {
     const pdf = pdfAssetDirs({
       packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(),
     });
+    const actions = new ActionRunner({
+      settings: () => settings,
+      savePermissions: (permissions) => {
+        store.update({ teammate: { ...settings.teammate, permissions } });
+      },
+      context,
+      clipboard: {
+        write: (item) => clipboard.write([new ClipboardItem({
+          'text/plain': item.text, ...(item.html === undefined ? {} : { 'text/html': item.html }),
+        })]),
+      },
+      openPath: (file) => shell.openPath(file),
+      showInFolder: (file) => shell.showItemInFolder(file),
+      openExternal: (url) => shell.openExternal(url),
+      writeFile: (file, text) => writeFile(file, text, 'utf8'),
+      tempDir: () => tempDir,
+      windows: {
+        showConsent: (at, s) => windows.showConsent(at, s),
+        hideConsent: () => windows.hideConsent(),
+        showForm: (at, s) => windows.showForm(at, s),
+        hideForm: () => windows.hideForm(),
+        cardHadFocus: () => windows.cardHadFocus(),
+        // Through the controller, which keeps track of what it has on screen.
+        hideCard: () => controller.onTeammateAction('card', { t: 'close' }),
+        hideBubble: () => controller.onTeammateAction('bubble', { t: 'dismiss' }),
+      },
+      overlay: overlays,
+      glow: () => undefined, // the overlay draws no field glow yet
+      zoneOffset: (d) => -d.getTimezoneOffset(),
+      now: Date.now,
+      timer: (ms, fn) => {
+        const timer = setTimeout(fn, ms);
+        return () => clearTimeout(timer);
+      },
+    });
     const controller = new AskController({
       settings: () => settings,
       lang: mateLang,
@@ -752,11 +795,12 @@ function start(): void {
       thumbnail,
       now: Date.now,
       usage: (u) => usage.add(u),
+      actions,
       cursor: cursorPhys,
     });
     controller.on('state', pushMateTray);
     windows.on('action', onMateAction);
-    return { secrets, history, usage, context, windows, controller };
+    return { secrets, history, usage, context, windows, actions, controller };
   };
   /** Takes the teammate down; settles once its context helper has exited and its usage is on disk. */
   const stopMate = (): Promise<unknown> => {
@@ -766,6 +810,7 @@ function start(): void {
     mate = null;
     m.controller.cancel('user');
     m.controller.removeAllListeners();
+    m.actions.removeAllListeners();
     m.windows.removeAllListeners();
     m.windows.destroy();
     pushMateTray();

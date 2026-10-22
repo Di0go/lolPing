@@ -180,4 +180,29 @@ describe('HistoryStore', () => {
     await store.setCurrent(null);
     expect(store.current()).toBeNull();
   });
+
+  it('adds what was done to an entry after it was written, and reads old entries without it', async () => {
+    const d = join(root(), 'history');
+    const store = new HistoryStore(d, fakeCrypto(), () => 1000);
+    const t = await store.append(null, { ...entry('first'), at: 5 }, meta);
+    await store.append(t.id, { ...entry('second'), at: 7, done: ['Copied 1 line'] }, meta);
+    await store.amend(t.id, 5, ['Pasted 2 lines into Chrome']);
+    await store.amend('missing', 5, ['Opened a link']);
+    const read = await new HistoryStore(d, fakeCrypto(), () => 1000).get(t.id);
+    expect(read?.entries.map((e) => e.done)).toEqual([['Pasted 2 lines into Chrome'], ['Copied 1 line']]);
+    expect(store.current()?.entries[0].done).toEqual(['Pasted 2 lines into Chrome']);
+    const fresh = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000);
+    const old = await fresh.append(null, entry('x'), meta);
+    expect('done' in old.entries[0]).toBe(false);
+  });
+
+  it('rejects a stored entry whose done list is not text', async () => {
+    const d = join(root(), 'history');
+    const crypto = fakeCrypto();
+    const store = new HistoryStore(d, crypto, () => 1000);
+    const t = await store.append(null, entry('ok'), meta);
+    const bad = { ...t, entries: [{ ...t.entries[0], done: [3] }] };
+    writeFileSync(join(d, t.id + '.thread'), crypto.encryptString(JSON.stringify(bad)));
+    expect(await new HistoryStore(d, crypto, () => 1000).list()).toEqual([]);
+  });
 });

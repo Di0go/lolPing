@@ -1,4 +1,6 @@
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RunInfo } from '../../../src/main/teammate/actions';
 import { AskController, type AskDeps } from '../../../src/main/teammate/askController';
 import { ContextError } from '../../../src/main/teammate/contextClient';
 import type { Doc } from '../../../src/main/teammate/files';
@@ -67,8 +69,9 @@ interface HarnessOptions {
   onAdapter?: (key: string) => void;
   /** What the context helper and the file readers find; tests may change it between asks. */
   screen?: Partial<Screen>;
-  /** Wires an action runner that records the calls it is given. */
+  /** Wires an action runner that records the calls it is given and says it did `done`. */
   recordActions?: boolean;
+  done?: string[];
 }
 
 interface Screen {
@@ -95,6 +98,20 @@ function harness(opts: HarnessOptions = {}) {
   const tickets: string[] = [];
   const appends: Array<{ threadId: string | null; line: string; markdown: string }> = [];
   const taken: ActionCall[] = [];
+  const takenRuns: RunInfo[] = [];
+  let runnerCancels = 0;
+  const runner = Object.assign(new EventEmitter(), {
+    take: (r: RunInfo, c: ActionCall) => {
+      takenRuns.push(r);
+      taken.push(c);
+    },
+    cancel: () => {
+      runnerCancels += 1;
+    },
+    described: () => [...(opts.done ?? [])],
+  });
+  const dones: Array<{ at: number; done: string[] | undefined }> = [];
+  const amends: Array<{ threadId: string; at: number; done: string[] }> = [];
   const states: boolean[] = [];
   let current: ThreadRecord | null = null;
   let captures = 0;
@@ -220,6 +237,7 @@ function harness(opts: HarnessOptions = {}) {
       current: () => current,
       append: async (threadId, entry, meta) => {
         appends.push({ threadId, line: entry.line, markdown: entry.markdown });
+        dones.push({ at: entry.at, done: entry.done });
         if (opts.historyOff) {
           return { id: `unsaved${appends.length}`, ...meta, started: 0, lastActivity: 0, entries: [entry] };
         }
@@ -228,13 +246,14 @@ function harness(opts: HarnessOptions = {}) {
           : { id: `t${appends.length}`, ...meta, started: 0, lastActivity: 0, entries: [entry] };
         return current;
       },
+      amend: async (threadId, at, done) => void amends.push({ threadId, at, done }),
     },
     tempDir: () => 'tmp',
     thumbnail: () => 'thumb',
     now: () => Date.now() + skew,
     usage: () => undefined,
     cursor: () => ({ x: 1200, y: 900 }),
-    ...(opts.recordActions ? { actions: { take: (c: ActionCall) => void taken.push(c) } } : {}),
+    ...(opts.recordActions ? { actions: runner } : {}),
     files: {
       read: async (p) => Buffer.from(p),
       makeDir: async (d) => void disk.add(d),
@@ -249,6 +268,7 @@ function harness(opts: HarnessOptions = {}) {
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
     ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen, taken,
+    takenRuns, runner, dones, amends, runnerCancels: () => runnerCancels,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -1078,6 +1098,69 @@ describe('AskController', () => {
       expect(h.taken).toEqual([{ tool: 'paste', text: 'one', mode: 'insert' }]);
       expect(results(second).map((r) => r.id)).toEqual(['p1', 'p2', 'f']);
       expect(JSON.stringify(results(second)[1].content)).toContain('Ignored');
+    });
+
+    it('hands action calls to the runner', async () => {
+      const box = { x: 900, y: 780, w: 400, h: 40 };
+      const fields = JSON.stringify({
+        id: '42.7.1', kind: 'text', label: 'Reply', group: '', value: '', secure: false, required: false, options: [],
+        box: '900,780,400,40',
+      });
+      const h = harness({
+        recordActions: true,
+        steps: [answers([call('paste', { text: 'Friday works.', mode: 'replace' }), call('say', { text: 'Ok.' })])],
+        screen: {
+          system: {
+            selection: 'teh text', spotTexts: [], address: '',
+            focus: { kind: 'edit', label: 'Reply', value: 'teh text', secure: false },
+          },
+          boxes: [box, DISPLAY],
+          fields,
+        },
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      expect(h.taken).toEqual([{ tool: 'paste', text: 'Friday works.', mode: 'replace' }]);
+      expect(h.takenRuns).toEqual([{
+        id: h.tickets[0], profileId: 'fast', tag: TAG, app: 'notepad.exe', window: '263544', lang: 'en',
+        spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box, focus: { label: 'Reply', secure: false },
+        selection: 'teh text',
+        fields: [{
+          id: '42.7.1', kind: 'text', label: 'Reply', group: '', value: '', secure: false, required: false, options: [],
+          box,
+        }],
+      }]);
+      // A new ask, or a pause, drops whatever is still waiting for consent.
+      const before = h.runnerCancels();
+      h.ctl.ask(spot('danger', 1500, 900));
+      expect(h.runnerCancels()).toBe(before + 1);
+      h.ctl.cancel('pause');
+      expect(h.runnerCancels()).toBe(before + 2);
+    });
+
+    it('keeps a description of what was done in history, not the text', async () => {
+      const h = harness({
+        recordActions: true,
+        done: ['Copied 1 line'],
+        steps: [answers([call('copy', { text: 'Friday works.' }), call('say', { text: 'Copied your reply.' })])],
+      });
+      h.ctl.ask(spot('enemyvision'));
+      await flush();
+      expect(h.dones).toEqual([{ at: expect.any(Number), done: ['Copied 1 line'] }]);
+      expect(JSON.stringify(h.dones)).not.toContain('Friday works.');
+      // A paste allowed after the answer was written joins its entry.
+      h.runner.emit('described', h.tickets[0], ['Copied 1 line', 'Pasted 1 line into notepad.exe']);
+      h.runner.emit('described', 'another ask', ['Opened a link']);
+      await flush();
+      expect(h.amends).toEqual([
+        { threadId: 't1', at: h.dones[0].at, done: ['Copied 1 line', 'Pasted 1 line into notepad.exe'] },
+      ]);
+
+      // Nothing done: the entry has no list.
+      const quiet = harness({ recordActions: true, steps: [answers([call('say', { text: 'Ok.' })])] });
+      quiet.ctl.ask(spot('enemyvision'));
+      await flush();
+      expect(quiet.dones).toEqual([{ at: expect.any(Number), done: undefined }]);
     });
 
     it('keeps action calls without a runner and still answers', async () => {

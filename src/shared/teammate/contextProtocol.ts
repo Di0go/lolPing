@@ -231,12 +231,14 @@ function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
 function parseField(v: unknown): FormField | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
   const o = v as Record<string, unknown>;
-  const { id, kind, label, group, value, secure, required, options } = o;
+  const { id, kind, label, group, value, secure, required, options, box } = o;
   if (typeof id !== 'string' || id === '' || typeof kind !== 'string') return null;
   if (!FIELD_KINDS.includes(kind as FormField['kind'])) return null;
   if (typeof label !== 'string' || typeof group !== 'string' || typeof value !== 'string') return null;
   if (typeof secure !== 'boolean' || typeof required !== 'boolean' || !Array.isArray(options)) return null;
   if (!options.every((opt) => typeof opt === 'string')) return null;
+  // Without a box a field is still filled; it only gets no ping and no paste fallback.
+  const rect = typeof box === 'string' ? parseRect(box) : null;
   return {
     id: capChars(id, FIELD_ID_MAX),
     kind: kind as FormField['kind'],
@@ -248,6 +250,7 @@ function parseField(v: unknown): FormField | null {
     secure,
     required,
     options: (options as string[]).slice(0, FIELD_OPTIONS_MAX).map((opt) => capChars(opt, FIELD_OPTION_MAX)),
+    ...(rect ? { box: rect } : {}),
   };
 }
 
