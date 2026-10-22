@@ -3,6 +3,7 @@ import { isPingId, type PingId } from '../pings';
 import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from '../roomColors';
 import { sanitizeName } from '../roomProtocol';
 import type { EmoteTriggerKey, NamedTrigger, TriggerKey } from '../settings';
+import { parsePermissionKey } from './doRules';
 import { PROVIDER_IDS, type ProviderId } from './providers';
 
 /** The ask key: a trigger key of its own, or the ping key ('same'). */
@@ -192,7 +193,11 @@ export function normalizeTeammate(
     ? sanitizeName(r.tagName.slice(0, 256), DEFAULT_TEAMMATE.tagName, TAG_NAME_MAX)
     : DEFAULT_TEAMMATE.tagName;
   const permissions = Array.isArray(r.permissions)
-    ? r.permissions.filter((p): p is string => typeof p === 'string' && p !== '' && p.length <= 200)
+    ? r.permissions.filter((p): p is string => {
+      if (typeof p !== 'string' || p.length > 200) return false;
+      const k = parsePermissionKey(p);
+      return k !== null && known(k.profileId) !== null;
+    })
     : [];
   return {
     askTrigger: askTrigger(r.askTrigger, ctx),

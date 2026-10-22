@@ -77,4 +77,22 @@ describe('normalizeTeammate', () => {
     expect(t.tagColor).toBe(3);
     expect(t.context).toEqual({ ...DEFAULT_TEAMMATE.context, marks: false });
   });
+
+  it('keeps the form paste switch off for an old file and reads it when given', () => {
+    expect(normalizeTeammate({ context: { marks: true } }, win).context.clipboardForForms).toBe(false);
+    expect(normalizeTeammate({ context: { clipboardForForms: true } }, win).context.clipboardForForms).toBe(true);
+    expect(normalizeTeammate({ context: { clipboardForForms: 1 } }, win).context.clipboardForForms).toBe(false);
+  });
+
+  it('drops permissions for a missing profile or an unknown action', () => {
+    const t = normalizeTeammate({
+      profiles: [validProfile],
+      permissions: ['a:paste', 'a:open', 'gone:paste', 'a:shred', 'a:', ':paste', 'a', 'a:paste', 7, null, 'a:event'],
+    }, win);
+    expect(t.permissions).toEqual(['a:paste', 'a:open', 'a:event']);
+  });
+
+  it('drops every permission when there is no profile', () => {
+    expect(normalizeTeammate({ permissions: ['a:paste'] }, win).permissions).toEqual([]);
+  });
 });

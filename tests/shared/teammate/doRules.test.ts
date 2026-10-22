@@ -6,6 +6,7 @@ import {
   formPreview,
   neverFill,
   pastePlan,
+  parsePermissionKey,
   permissionKey,
   type FormField,
 } from '../../../src/shared/teammate/doRules';
@@ -21,6 +22,12 @@ describe('permissions', () => {
     expect(allowed(['p1:paste', 'p2:open'], 'p1', 'open')).toBe(false);
     expect(allowed(['p1:paste', 'p2:open'], 'p2', 'paste')).toBe(false);
     expect(allowed([], 'p1', 'event')).toBe(false);
+  });
+
+  it('reads a key back into its profile and action', () => {
+    expect(parsePermissionKey(permissionKey('p1', 'open'))).toEqual({ profileId: 'p1', action: 'open' });
+    expect(parsePermissionKey('a:b:paste')).toEqual({ profileId: 'a:b', action: 'paste' });
+    for (const bad of ['', 'paste', ':paste', 'p1:', 'p1:shred']) expect(parsePermissionKey(bad), bad).toBeNull();
   });
 
   it('never allows fill without the preview', () => {

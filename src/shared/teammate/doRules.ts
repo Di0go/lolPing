@@ -1,8 +1,17 @@
 import type { Rect } from './coords';
 
-export type PutAction = 'paste' | 'fill' | 'event' | 'open';
+export const PUT_ACTIONS = ['paste', 'fill', 'event', 'open'] as const;
+export type PutAction = (typeof PUT_ACTIONS)[number];
 
 export const permissionKey = (profileId: string, action: PutAction): string => `${profileId}:${action}`;
+
+/** The profile and action behind a saved key, or null when the key isn't one permissionKey could have made. */
+export function parsePermissionKey(key: string): { profileId: string; action: PutAction } | null {
+  const at = key.lastIndexOf(':');
+  const action = key.slice(at + 1);
+  const known = PUT_ACTIONS.find((a) => a === action);
+  return at > 0 && known ? { profileId: key.slice(0, at), action: known } : null;
+}
 
 /** Whether the user chose Always allow for this action. Fill never is: it always shows its preview. */
 export function allowed(permissions: readonly string[], profileId: string, action: PutAction): boolean {

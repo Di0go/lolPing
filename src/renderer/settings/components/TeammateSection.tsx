@@ -1,6 +1,6 @@
 import { Button, Combobox, Dropdown, Input, Option, OptionGroup, Switch, Textarea } from '@fluentui/react-components';
 import {
-  Bot24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, DocumentText24Regular, Emoji24Regular,
+  Bot24Regular, ClipboardPaste24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, DocumentText24Regular, Emoji24Regular,
   Eye24Regular, Globe24Regular, History24Regular, Keyboard24Regular, MusicNote224Regular, Person24Regular,
   ScanText24Regular, ShieldKeyhole24Regular, Sparkle24Regular, TextEditStyle24Regular, TextField24Regular,
 } from '@fluentui/react-icons';
@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
 import { TAG_COLORS } from '../../../shared/roomColors';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
+import { parsePermissionKey } from '../../../shared/teammate/doRules';
 import { needsKey, PROVIDERS, visionGuess, type ProviderId } from '../../../shared/teammate/providers';
 import {
   INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, TAG_NAME_MAX, type BuiltinProfile, type IntentOverride,
@@ -241,6 +242,37 @@ function InstructionsCard() {
   );
 }
 
+/** What Always allow saved: each line can be taken back. Keys of a removed profile are already gone from the file. */
+function PermissionsCard({ s, patch }: { s: TeammateSettings; patch: Patch }) {
+  const t = useText();
+  const m = t.teammate.settings;
+  const rows = s.permissions.flatMap((key) => {
+    const k = parsePermissionKey(key);
+    const profile = k && s.profiles.find((p) => p.id === k.profileId);
+    return k && profile ? [{ key, text: m.permissionLine(profile.name, m.permissionActions[k.action]) }] : [];
+  });
+  return (
+    <div className="card mate">
+      <div className="mateHead">
+        <span className="icon"><ShieldKeyhole24Regular /></span>
+        <div className="lbl">
+          {m.permissions}
+          {rows.length === 0 ? <span className="desc">{m.permissionsEmpty}</span> : null}
+        </div>
+      </div>
+      {rows.map((r) => (
+        <div key={r.key} className="mateRead">
+          <div className="lbl">{r.text}</div>
+          <Button size="small" appearance="subtle" aria-label={`${m.permissionRemove}: ${r.text}`}
+            onClick={() => patch({ permissions: s.permissions.filter((p) => p !== r.key) })}>
+            {m.permissionRemove}
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function UsageRow() {
   const t = useText();
   const m = t.teammate.settings;
@@ -460,6 +492,9 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
           checked={mate.context.files} onChange={(files) => patch({ context: { ...mate.context, files } })} />
         <ReadRow icon={<Globe24Regular />} title={m.readWebPdfs} description={m.readWebPdfsDesc}
           checked={mate.context.webPdfs} onChange={(webPdfs) => patch({ context: { ...mate.context, webPdfs } })} />
+        <ReadRow icon={<ClipboardPaste24Regular />} title={m.readFormPaste} description={m.readFormPasteDesc}
+          checked={mate.context.clipboardForForms}
+          onChange={(clipboardForForms) => patch({ context: { ...mate.context, clipboardForForms } })} />
       </div>
 
       <div className="card mate">
@@ -475,6 +510,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         ))}
       </div>
       <InstructionsCard />
+      <PermissionsCard s={mate} patch={patch} />
 
       <SwitchRow icon={<Emoji24Regular />} title={m.emotes} description={m.emotesDesc}
         checked={mate.emotes} onChange={(emotes) => patch({ emotes })} />
