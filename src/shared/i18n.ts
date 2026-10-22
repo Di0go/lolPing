@@ -16,7 +16,7 @@ export function resolveLang(pref: LanguagePref, locale: string): Lang {
   return /^zh/i.test(locale) ? 'zh-CN' : 'en';
 }
 
-/** The teammate's windows: bubble, card, words box and History. */
+/** The teammate's windows: bubble, card, words box, consent card and History. */
 const enMateUi = {
   more: 'More',
   dismiss: 'Close',
@@ -48,6 +48,14 @@ const enMateUi = {
   noMatch: 'No thread matches.',
   historyDisabled: 'History is off. Turn it on in Settings → Teammate.',
   historyUnavailable: 'History is off because this system can’t encrypt it.',
+  /** The consent card's questions (the sentence the card shows) and buttons. */
+  consentPaste: (app: string) => `Paste this into ${app}?`,
+  consentReplace: (app: string) => `Replace the selected text in ${app}?`,
+  consentEvent: 'Add this event to your calendar?',
+  consentOpen: 'Open this link?',
+  allowOnce: 'Allow once',
+  alwaysAllow: 'Always allow',
+  decline: 'Decline',
 };
 
 /** What a file's sections are: PDF pages, slides, sheets, or parts of a text or Word file. */
@@ -903,6 +911,13 @@ const zh: Strings = {
       noMatch: '没有匹配的对话。',
       historyDisabled: '历史已关闭。可在“设置 → 队友”中打开。',
       historyUnavailable: '这个系统无法加密历史，所以历史已关闭。',
+      consentPaste: (app: string) => `把这段粘贴到 ${app}？`,
+      consentReplace: (app: string) => `替换 ${app} 里选中的文字？`,
+      consentEvent: '把这个日程加到日历？',
+      consentOpen: '打开这个链接？',
+      allowOnce: '允许一次',
+      alwaysAllow: '总是允许',
+      decline: '拒绝',
     },
     ask: {
       failed: {

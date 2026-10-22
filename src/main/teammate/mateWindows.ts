@@ -1,22 +1,23 @@
 import { BrowserWindow, ipcMain, nativeTheme, screen, type BrowserWindowConstructorOptions, type IpcMainEvent } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
-  parseMateAction, parseMateSize, TEAMMATE_CH, type BubbleState, type CardState, type HistoryState, type MateAction,
+  parseMateAction, parseMateSize, TEAMMATE_CH, type BubbleState, type CardState, type ConsentState, type HistoryState, type MateAction,
   type MateLeave, type MateState, type MateView, type WordsState,
 } from '../../shared/teammateIpc';
-import { placeInside } from '../coords';
+import { besideSpot, placeInside } from '../coords';
 import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from '../paths';
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
 
-const VIEWS: readonly MateView[] = ['bubble', 'card', 'words', 'history'];
+const VIEWS: readonly MateView[] = ['bubble', 'card', 'words', 'history', 'consent'];
 /** First size of each window in DIPs; the bubble and the card then take the size their page reports. */
 const START_SIZE: Record<MateView, Size> = {
   bubble: { width: 360, height: 72 },
   card: { width: 480, height: 240 },
   words: { width: 460, height: 112 },
   history: { width: 760, height: 600 },
+  consent: { width: 384, height: 220 },
 };
 /** Long enough for the page's leave animation (150 ms, or the 600 ms stale fade) to finish before the window hides. */
 const LEAVE_MS: Record<MateLeave, number> = { fast: 170, stale: 620 };
@@ -24,6 +25,7 @@ const LEAVE_MS: Record<MateLeave, number> = { fast: 170, stale: 620 };
 const FOCUS_WAIT_MS = 2000;
 
 interface Slot {
+  view: MateView;
   win: BrowserWindow | null;
   loaded: boolean;
   /** The latest state; sent as soon as the page has loaded, and again by an update. */
@@ -32,7 +34,7 @@ interface Slot {
   shown: boolean;
   at: Point;
   size: Size;
-  /** The words box has asked or cancelled: nothing more comes from it. */
+  /** The words box has asked or cancelled, or the consent card has decided: nothing more comes from it. */
   ended: boolean;
   leaveTimer: ReturnType<typeof setTimeout> | null;
   /** The card has had keyboard focus: hiding it would keep the foreground, so it is closed instead. */
@@ -40,19 +42,20 @@ interface Slot {
 }
 
 const emptySlot = (view: MateView): Slot => ({
-  win: null, loaded: false, state: null, shown: false, at: { x: 0, y: 0 }, size: { ...START_SIZE[view] }, ended: false,
+  view, win: null, loaded: false, state: null, shown: false, at: { x: 0, y: 0 }, size: { ...START_SIZE[view] }, ended: false,
   leaveTimer: null, hadFocus: false,
 });
 
 /**
  * The teammate's windows. The bubble takes clicks without focus; the card takes focus only when clicked, so the app
  * underneath keeps the keyboard until the user replies; the words box takes focus and gives it back when it closes;
- * History is a normal window. Emits 'action' with `{ view, action }`, already validated for that view. It only shows
+ * History is a normal window; the consent card never takes focus, as the bubble. Emits 'action' with `{ view, action }`, already validated for that view. It only shows
  * state and passes actions on: what an action does is up to the caller.
  */
 export class MateWindows extends EventEmitter {
   private readonly slots: Record<MateView, Slot> = {
     bubble: emptySlot('bubble'), card: emptySlot('card'), words: emptySlot('words'), history: emptySlot('history'),
+    consent: emptySlot('consent'),
   };
   private captureExcluded = false;
 
@@ -86,6 +89,25 @@ export class MateWindows extends EventEmitter {
 
   hideCard(): void {
     this.leave('card', 'fast');
+  }
+
+  /**
+   * "Paste this into Chrome?" beside the spot `at` (a screen point in DIPs), on the side away from the edge it would
+   * leave. It takes clicks but never the keyboard, so the app underneath keeps typing. One decision per card.
+   */
+  showConsent(at: Point, s: ConsentState): void {
+    const slot = this.slots.consent;
+    slot.ended = false;
+    this.showPopup('consent', at, this.withSide(slot, at, s));
+  }
+
+  updateConsent(s: ConsentState): void {
+    const slot = this.slots.consent;
+    this.update('consent', this.withSide(slot, slot.at, s));
+  }
+
+  hideConsent(): void {
+    this.leave('consent', 'fast');
   }
 
   /** Whether the open card, or the one just closed, has had keyboard focus. Cleared when the next card opens. */
@@ -185,7 +207,7 @@ export class MateWindows extends EventEmitter {
     }
   }
 
-  private showPopup(view: 'bubble' | 'card', at: Point, s: MateState): void {
+  private showPopup(view: 'bubble' | 'card' | 'consent', at: Point, s: MateState): void {
     const slot = this.slots[view];
     if (slot.leaveTimer) clearTimeout(slot.leaveTimer);
     slot.leaveTimer = null;
@@ -222,6 +244,10 @@ export class MateWindows extends EventEmitter {
     };
   }
 
+  private withSide(slot: Slot, at: Point, s: ConsentState): ConsentState {
+    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side };
+  }
+
   private update(view: MateView, s: MateState): void {
     const slot = this.slots[view];
     if (!slot.shown) return;
@@ -229,7 +255,7 @@ export class MateWindows extends EventEmitter {
     this.push(slot);
   }
 
-  private leave(view: 'bubble' | 'card', how: MateLeave): void {
+  private leave(view: 'bubble' | 'card' | 'consent', how: MateLeave): void {
     const slot = this.slots[view];
     if (!slot.shown) return;
     slot.shown = false;
@@ -260,9 +286,14 @@ export class MateWindows extends EventEmitter {
     if (slot.win && !slot.win.isDestroyed()) slot.win.close();
   }
 
+  private workArea(at: Point): Electron.Rectangle {
+    return screen.getDisplayNearestPoint(at).workArea;
+  }
+
   private rect(slot: Slot): { x: number; y: number; width: number; height: number } {
-    const area = screen.getDisplayNearestPoint(slot.at).workArea;
-    return { ...placeInside(slot.at, slot.size, area), ...slot.size };
+    const area = this.workArea(slot.at);
+    const { x, y } = slot.view === 'consent' ? besideSpot(slot.at, slot.size, area) : placeInside(slot.at, slot.size, area);
+    return { x, y, ...slot.size };
   }
 
   private push(slot: Slot): void {
@@ -285,7 +316,7 @@ export class MateWindows extends EventEmitter {
     slot.win = w;
     slot.loaded = false;
     if (this.captureExcluded) w.setContentProtection(true);
-    if (view === 'bubble' || view === 'card') {
+    if (view === 'bubble' || view === 'card' || view === 'consent') {
       w.setAlwaysOnTop(true, 'screen-saver'); // above the overlay and a game's borderless window
       if (IS_LINUX) w.setVisibleOnAllWorkspaces(true);
       if (IS_MAC) w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
@@ -343,6 +374,12 @@ export class MateWindows extends EventEmitter {
     if (!action) return;
     // The words box's job ends with an ask or a cancel: it closes, and the keyboard goes back where it was.
     if (view === 'words') return this.endWords(this.slots.words, action);
+    if (view === 'consent') {
+      const slot = this.slots.consent;
+      // One decision per card, and no Always allow for a card that didn't offer it.
+      if (slot.ended || (action.t === 'always' && !(slot.state?.view === 'consent' && slot.state.always))) return;
+      slot.ended = true;
+    }
     this.emit('action', { view, action });
   };
 

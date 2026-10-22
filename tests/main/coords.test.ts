@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { physicalToDip, physicalToLocal, placeInside, type DisplayMap } from '../../src/main/coords';
+import { besideSpot, physicalToDip, physicalToLocal, placeInside, type DisplayMap } from '../../src/main/coords';
 
 // Ultrawide primary at 100% + a 1080p monitor at 150% to its right + a 1440p monitor at 125% to its left.
 const A: DisplayMap = { id: 1, scale: 1, dip: { x: 0, y: 0, width: 3440, height: 1440 }, phys: { x: 0, y: 0, width: 3440, height: 1440 } };
@@ -54,5 +54,28 @@ describe('placeInside', () => {
 
   it('works on a display that sits left of the primary', () => {
     expect(placeInside({ x: -100, y: 500 }, box, { x: -1920, y: 0, width: 1920, height: 1080 })).toEqual({ x: -420, y: 500 });
+  });
+});
+
+describe('besideSpot', () => {
+  const area = { x: 0, y: 0, width: 1920, height: 1040 };
+  const box = { width: 384, height: 200 };
+
+  it('puts the box right of the spot, centred on it vertically', () => {
+    expect(besideSpot({ x: 500, y: 400 }, box, area)).toEqual({ x: 516, y: 300, side: 'right' });
+  });
+
+  it('puts it left of the spot when the right side would run off the area', () => {
+    expect(besideSpot({ x: 1700, y: 400 }, box, area)).toEqual({ x: 1300, y: 300, side: 'left' });
+  });
+
+  it('keeps it inside the area when the spot is near the top or bottom', () => {
+    expect(besideSpot({ x: 500, y: 20 }, box, area)).toMatchObject({ y: 0, side: 'right' });
+    expect(besideSpot({ x: 500, y: 1035 }, box, area)).toMatchObject({ y: 840, side: 'right' });
+  });
+
+  it('works on a display left of the primary', () => {
+    const left = { x: -1920, y: 0, width: 1920, height: 1080 };
+    expect(besideSpot({ x: -100, y: 500 }, box, left)).toEqual({ x: -500, y: 400, side: 'left' });
   });
 });

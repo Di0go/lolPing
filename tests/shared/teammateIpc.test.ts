@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseMateAction, parseMateSize, type MateView } from '../../src/shared/teammateIpc';
 
-const VIEWS: MateView[] = ['bubble', 'card', 'words', 'history'];
+const VIEWS: MateView[] = ['bubble', 'card', 'words', 'history', 'consent'];
 const SAMPLES: Record<string, unknown> = {
   more: { t: 'more' },
   dismiss: { t: 'dismiss' },
@@ -17,12 +17,16 @@ const SAMPLES: Record<string, unknown> = {
   continue: { t: 'continue', id: 'a1b2-c3' },
   delete: { t: 'delete', id: 'a1b2-c3' },
   search: { t: 'search', query: 'invoice' },
+  allow: { t: 'allow' },
+  always: { t: 'always' },
+  decline: { t: 'decline' },
 };
 const ALLOWED: Record<MateView, string[]> = {
   bubble: ['more', 'dismiss'],
   card: ['close', 'copy', 'reply', 'deep', 'history', 'link'],
   words: ['ask', 'cancel'],
   history: ['open', 'continue', 'delete', 'search'],
+  consent: ['allow', 'always', 'decline'],
 };
 
 describe('parseMateAction', () => {
@@ -33,6 +37,18 @@ describe('parseMateAction', () => {
     }
     expect(parseMateAction(SAMPLES.ask, 'words')).toEqual({ t: 'ask', text: 'what is this?', newThread: true });
     expect(parseMateAction(SAMPLES.search, 'history')).toEqual({ t: 'search', query: 'invoice' });
+  });
+
+  it('accepts only allow, always and decline from the consent view', () => {
+    for (const t of ['allow', 'always', 'decline']) expect(parseMateAction({ t }, 'consent')).toEqual({ t });
+    for (const t of ['more', 'dismiss', 'close', 'cancel', 'deep', 'history', 'copy', 'reply', 'ask', 'open', 'delete', 'search', 'link']) {
+      expect(parseMateAction(SAMPLES[t], 'consent'), t).toBeNull();
+    }
+    for (const view of ['bubble', 'card', 'words', 'history'] as const) {
+      for (const t of ['allow', 'always', 'decline']) expect(parseMateAction({ t }, view), `${view} ${t}`).toBeNull();
+    }
+    expect(parseMateAction({ t: 'allow', extra: 1 }, 'consent')).toEqual({ t: 'allow' });
+    expect(parseMateAction({ t: 'Allow' }, 'consent')).toBeNull();
   });
 
   it('refuses non-web links and long replies', () => {

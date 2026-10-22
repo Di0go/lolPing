@@ -14,6 +14,21 @@ export function placeInside(at: { x: number; y: number }, size: { width: number;
   };
 }
 
+/** Space between the spot and a box placed beside it. */
+const SPOT_GAP = 16;
+
+/**
+ * Where a box of `size` sits beside a spot: right of it, or left when the right side would leave `area`, vertically
+ * centred on it and kept inside `area`. `side` is the side of the spot the box is on.
+ */
+export function besideSpot(
+  spot: { x: number; y: number }, size: { width: number; height: number }, area: Rect,
+): { x: number; y: number; side: 'left' | 'right' } {
+  const side = spot.x + SPOT_GAP + size.width <= area.x + area.width ? 'right' : 'left';
+  const x = side === 'right' ? spot.x + SPOT_GAP : spot.x - SPOT_GAP - size.width;
+  return { ...placeInside({ x, y: spot.y - size.height / 2 }, size, area), side };
+}
+
 /** One monitor: its rect in DIPs (Electron) and in physical pixels (the hook helper). */
 export interface DisplayMap {
   id: number;

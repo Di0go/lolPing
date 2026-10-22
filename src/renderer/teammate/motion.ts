@@ -68,6 +68,35 @@ export const useMotion = makeStyles({
     animationFillMode: 'forwards',
     ...still,
   },
+  /** The consent card slides 12 px in from the side it sits on (spec §7.6); it leaves the same way. */
+  slideInRight: {
+    animationName: { from: { opacity: 0, transform: 'translateX(12px)' }, to: { opacity: 1, transform: 'none' } },
+    animationDuration: tokens.durationNormal,
+    animationTimingFunction: tokens.curveDecelerateMax,
+    animationFillMode: 'both',
+    ...still,
+  },
+  slideInLeft: {
+    animationName: { from: { opacity: 0, transform: 'translateX(-12px)' }, to: { opacity: 1, transform: 'none' } },
+    animationDuration: tokens.durationNormal,
+    animationTimingFunction: tokens.curveDecelerateMax,
+    animationFillMode: 'both',
+    ...still,
+  },
+  slideOutRight: {
+    animationName: { from: { opacity: 1, transform: 'none' }, to: { opacity: 0, transform: 'translateX(12px)' } },
+    animationDuration: tokens.durationFast,
+    animationTimingFunction: tokens.curveAccelerateMid,
+    animationFillMode: 'forwards',
+    ...still,
+  },
+  slideOutLeft: {
+    animationName: { from: { opacity: 1, transform: 'none' }, to: { opacity: 0, transform: 'translateX(-12px)' } },
+    animationDuration: tokens.durationFast,
+    animationTimingFunction: tokens.curveAccelerateMid,
+    animationFillMode: 'forwards',
+    ...still,
+  },
   /** A new line or entry settles in from just below; with `stagger`, one after another. */
   rise: {
     animationName: { from: { opacity: 0, transform: 'translateY(6px)' }, to: { opacity: 1, transform: 'none' } },

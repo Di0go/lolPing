@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BubbleState, CardState, HistoryState, WordsState } from '../../../src/shared/teammateIpc';
+import type { BubbleState, CardState, ConsentState, HistoryState, WordsState } from '../../../src/shared/teammateIpc';
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -114,6 +114,9 @@ const card: CardState = {
   streaming: false, footer: { profile: 'Default', model: 'm', tokens: null, used: [] },
 };
 const words: WordsState = { view: 'words', lang: 'en', tag, thread: null, continueByDefault: false };
+const consent: ConsentState = {
+  view: 'consent', lang: 'en', tag, action: 'paste', text: 'Paste this into Chrome?', detail: 'Hello there', always: true, seconds: 30,
+};
 const history: HistoryState = { view: 'history', lang: 'en', available: true, query: '', threads: [] };
 
 type Mod = typeof import('../../../src/main/teammate/mateWindows');
@@ -226,6 +229,75 @@ describe('MateWindows', () => {
     expect(w.webContents.send).toHaveBeenCalledWith('mate:state', history);
     sendAction(0, { t: 'search', query: 'abc' });
     expect(actions).toEqual([{ view: 'history', action: { t: 'search', query: 'abc' } }]);
+  });
+});
+
+describe('MateWindows consent card', () => {
+  const openConsent = (state: ConsentState = consent, at = { x: 500, y: 400 }): (typeof h.windows)[number] => {
+    mate.showConsent(at, state);
+    const w = h.windows[h.windows.length - 1];
+    w.webContents.emit('did-finish-load');
+    return w;
+  };
+
+  it('shows the consent card without taking focus', () => {
+    const w = openConsent();
+    expect(w.opts.focusable).toBe(false);
+    expect(w.visible).toBe(true);
+    expect(w.focused).toBe(0);
+  });
+
+  it('places the card beside the spot and tells the page which side it is on', () => {
+    const w = openConsent();
+    expect(w.bounds.x).toBeGreaterThan(500);
+    expect(w.bounds.y + w.bounds.height / 2).toBeCloseTo(400, -1);
+    expect(w.webContents.send).toHaveBeenCalledWith('mate:state', { ...consent, side: 'right' });
+    const far = openConsent(consent, { x: 1900, y: 400 });
+    expect(far.bounds.x + far.bounds.width).toBeLessThanOrEqual(1900);
+    expect(far.webContents.send).toHaveBeenCalledWith('mate:state', { ...consent, side: 'left' });
+  });
+
+  it('passes on allow, always and decline, once per card', () => {
+    openConsent();
+    sendAction(0, { t: 'more' });
+    sendAction(0, { t: 'allow' });
+    sendAction(0, { t: 'allow' });
+    sendAction(0, { t: 'decline' });
+    expect(actions).toEqual([{ view: 'consent', action: { t: 'allow' } }]);
+    mate.showConsent({ x: 500, y: 400 }, consent);
+    sendAction(0, { t: 'always' });
+    expect(actions).toHaveLength(2);
+    expect(actions[1]).toEqual({ view: 'consent', action: { t: 'always' } });
+  });
+
+  it('refuses Always allow when the card did not offer it', () => {
+    openConsent({ ...consent, action: 'fill', always: false });
+    sendAction(0, { t: 'always' });
+    expect(actions).toEqual([]);
+    sendAction(0, { t: 'allow' });
+    expect(actions).toEqual([{ view: 'consent', action: { t: 'allow' } }]);
+  });
+
+  it('updates the card in place and hides it without closing it', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = openConsent();
+      mate.updateConsent({ ...consent, detail: 'Changed' });
+      expect(w.webContents.send).toHaveBeenLastCalledWith('mate:state', { ...consent, detail: 'Changed', side: 'right' });
+      mate.hideConsent();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(w.visible).toBe(false);
+      expect(w.destroyed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resizes to the height the page reports and keeps the card beside the spot', () => {
+    const w = openConsent();
+    h.handlers.get('mate:size')?.({ sender: w.webContents }, { width: 384, height: 260 });
+    expect(w.bounds).toMatchObject({ width: 384, height: 260 });
+    expect(w.bounds.y + 130).toBeCloseTo(400, -1);
   });
 });
 

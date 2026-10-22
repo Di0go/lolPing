@@ -1,6 +1,7 @@
 import type { Lang } from './i18n';
 import type { PingTag } from './ipc';
 import type { PingId } from './pings';
+import type { PutAction } from './teammate/doRules';
 
 /** state, leave (play the closing motion; the window hides after it): main → page. action, size: page → main. */
 export const TEAMMATE_CH = { state: 'mate:state', leave: 'mate:leave', action: 'mate:action', size: 'mate:size' } as const;
@@ -8,7 +9,7 @@ export const TEAMMATE_CH = { state: 'mate:state', leave: 'mate:leave', action: '
 /** How a bubble or card leaves: the quick close, or the slow fade of a stale signal. */
 export type MateLeave = 'fast' | 'stale';
 
-export type MateView = 'bubble' | 'card' | 'history' | 'words';
+export type MateView = 'bubble' | 'card' | 'history' | 'words' | 'consent';
 
 /** The words box at the spot: what the user types becomes an ask. */
 export interface WordsState {
@@ -64,7 +65,28 @@ export interface HistoryState {
   threads: HistoryThread[];
 }
 
-export type MateState = BubbleState | CardState | WordsState | HistoryState;
+/** "Paste this into Chrome?": the teammate asks before it acts. The window never takes the keyboard. */
+export interface ConsentState {
+  view: 'consent';
+  lang: Lang;
+  tag: PingTag;
+  action: PutAction;
+  /** The question, already worded for the action ("Paste your reply into Chrome?"). */
+  text: string;
+  /** What will be pasted (its first 200 characters), the URL, or the event's title and time. */
+  detail: string;
+  /** Offer Always allow. */
+  always: boolean;
+  /** The countdown bar's total length; ending it is the caller's job, the page only draws it. */
+  seconds: number;
+  /** Which side of the spot the card is on, so it slides in from there. Set by the window; the right when absent. */
+  side?: 'left' | 'right';
+}
+
+export type MateState = BubbleState | CardState | WordsState | HistoryState | ConsentState;
+
+/** What the consent card sends. */
+export type ConsentAction = { t: 'allow' } | { t: 'always' } | { t: 'decline' };
 
 export type MateAction =
   | { t: 'more' }
@@ -80,7 +102,8 @@ export type MateAction =
   | { t: 'open'; id: string }
   | { t: 'continue'; id: string }
   | { t: 'delete'; id: string }
-  | { t: 'search'; query: string };
+  | { t: 'search'; query: string }
+  | ConsentAction;
 
 export interface MateApi {
   /** Calls `cb` with every state the main process sends; returns the way to stop. */
@@ -101,18 +124,20 @@ const QUERY_MAX = 200;
 /** The same rule as HistoryStore uses before an id reaches a file name. */
 const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
-/** What each window may ask for: the words box asks, the card replies, the bubble only opens or closes. */
+/** What each window may ask for: the words box asks, the card replies, the bubble opens or closes, consent decides. */
 const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
   bubble: new Set(['more', 'dismiss']),
   card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link']),
   words: new Set(['ask', 'cancel']),
   history: new Set(['open', 'continue', 'delete', 'search']),
+  consent: new Set(['allow', 'always', 'decline']),
 };
 
 /** Size limits in DIPs for the windows that fit their content. */
 const SIZE_LIMITS: Partial<Record<MateView, { minW: number; maxW: number; minH: number; maxH: number }>> = {
   bubble: { minW: 160, maxW: 440, minH: 40, maxH: 220 },
   card: { minW: 200, maxW: 480, minH: 60, maxH: 600 },
+  consent: { minW: 200, maxW: 480, minH: 60, maxH: 400 },
 };
 
 const words = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '' && v.length <= MATE_TEXT_MAX;
@@ -136,6 +161,9 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'deep':
     case 'history':
     case 'cancel':
+    case 'allow':
+    case 'always':
+    case 'decline':
       return { t: a.t };
     case 'copy':
       return typeof a.text === 'string' && a.text.length <= MATE_COPY_MAX ? { t: 'copy', text: a.text } : null;

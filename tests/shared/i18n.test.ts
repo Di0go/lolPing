@@ -39,7 +39,7 @@ describe('language', () => {
     const zh = strings('zh-CN').teammate.ui;
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
     for (const [key, value] of Object.entries(zh)) {
-      const text = typeof value === 'function' ? value(1200) : value;
+      const text = typeof value === 'function' ? (value as (arg: number | string) => string)(1200) : value;
       expect(text.trim(), key).not.toBe('');
     }
   });

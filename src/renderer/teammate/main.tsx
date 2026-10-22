@@ -5,13 +5,14 @@ import { strings } from '../../shared/i18n';
 import type { MateAction, MateLeave, MateState, MateView } from '../../shared/teammateIpc';
 import { Bubble } from './Bubble';
 import { Card } from './Card';
+import { Consent } from './Consent';
 import { History } from './History';
 import { Words } from './Words';
 import './teammate.css';
 
 const api = window.mateApi;
 /** Each teammate window loads this page with its view in the hash. */
-const VIEW: MateView = (['bubble', 'card', 'words', 'history'] as const).find((v) => location.hash === `#${v}`) ?? 'bubble';
+const VIEW: MateView = (['bubble', 'card', 'words', 'history', 'consent'] as const).find((v) => location.hash === `#${v}`) ?? 'bubble';
 const act = (a: MateAction): void => api.act(a);
 
 function useDarkMode(): boolean {
@@ -89,6 +90,9 @@ function Root() {
       break;
     case 'card':
       view = <Sized><Card s={state} t={ui} act={act} leaving={leaving} /></Sized>;
+      break;
+    case 'consent':
+      view = <Sized><Consent s={state} t={ui} act={act} leaving={leaving} /></Sized>;
       break;
     case 'words':
       view = <Words s={state} t={ui} act={act} />;
