@@ -1131,6 +1131,18 @@ std::string comparable(const std::string& text) {
 
 }  // namespace
 
+std::string clickTarget(const FieldFacts& under, const std::string& expected) {
+  if (expected.empty()) return under.kind == "text" || under.kind == "multiline" ? "" : "window";
+  if (under.id == expected) return "";
+  // A clear or emoji button inside the field would do something of its own.
+  if (under.activatable) return "window";
+  for (size_t i = 0; i < under.ancestors.size() && i < kFieldAncestors; ++i) {
+    const AncestorFacts& a = under.ancestors[i];
+    if (a.id == expected) return a.secure || neverFillLabel(a.label) ? "secure" : "";
+  }
+  return "window";
+}
+
 std::vector<ClipFormat> formatsToRestore(const std::vector<ClipFormat>& listed) {
   std::vector<ClipFormat> out;
   for (const ClipFormat& f : listed) {
@@ -1198,7 +1210,11 @@ Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
           secure = !facts(click, under) || secureField(under);
           // The page may have moved since the ask: a click lands only on the field it was meant for, never on a
           // button that took its place.
-          checks->onField = expected.empty() ? under.kind == "text" || under.kind == "multiline" : under.id == expected;
+          if (!secure) {
+            const std::string target = clickTarget(under, expected);
+            secure = target == "secure";
+            checks->onField = target.empty();
+          }
         }
         checks->secure = secure;
         checks->secureChecked = true;

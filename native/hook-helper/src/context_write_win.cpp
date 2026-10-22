@@ -455,6 +455,57 @@ FieldFacts factsOf(IUIAutomation* uia, IUIAutomationElement* el) {
   return f;
 }
 
+// Whether a click on the element does something of its own: its kind, or a pattern that invokes or toggles it.
+bool activatable(IUIAutomationElement* el) {
+  CONTROLTYPEID type = 0;
+  if (FAILED(el->get_CurrentControlType(&type))) return true;
+  switch (type) {
+    case UIA_ButtonControlTypeId:
+    case UIA_HyperlinkControlTypeId:
+    case UIA_MenuItemControlTypeId:
+    case UIA_CheckBoxControlTypeId:
+    case UIA_RadioButtonControlTypeId:
+    case UIA_ListItemControlTypeId:
+    case UIA_TabItemControlTypeId:
+    case UIA_ComboBoxControlTypeId:
+      return true;
+    default:
+      break;
+  }
+  for (const PATTERNID id : {UIA_InvokePatternId, UIA_TogglePatternId}) {
+    winrt::com_ptr<IUnknown> pattern;
+    if (SUCCEEDED(el->GetCurrentPattern(id, pattern.put())) && pattern) return true;
+  }
+  return false;
+}
+
+// The first kFieldAncestors elements above `el`, read through one cache request each step.
+std::vector<AncestorFacts> ancestorsOf(IUIAutomation* uia, IUIAutomationElement* el) {
+  std::vector<AncestorFacts> out;
+  winrt::com_ptr<IUIAutomationTreeWalker> walker;
+  winrt::com_ptr<IUIAutomationCacheRequest> request;
+  if (FAILED(uia->get_ControlViewWalker(walker.put())) || FAILED(uia->CreateCacheRequest(request.put()))) return out;
+  if (FAILED(request->AddProperty(UIA_IsPasswordPropertyId)) || FAILED(request->AddProperty(UIA_NamePropertyId))) {
+    return out;
+  }
+  winrt::com_ptr<IUIAutomationElement> node;
+  node.copy_from(el);
+  while (out.size() < kFieldAncestors) {
+    winrt::com_ptr<IUIAutomationElement> parent;
+    if (FAILED(walker->GetParentElementBuildCache(node.get(), request.get(), parent.put())) || !parent) break;
+    AncestorFacts a;
+    a.id = runtimeIdOf(parent.get());
+    // A password flag that can't be read counts as a password field.
+    BOOL password = TRUE;
+    a.secure = FAILED(parent->get_CachedIsPassword(&password)) || password != FALSE;
+    Bstr name;
+    if (SUCCEEDED(parent->get_CachedName(&name.s))) a.label = oneLine(name.text());
+    out.push_back(std::move(a));
+    node = parent;
+  }
+  return out;
+}
+
 bool fieldFactsAt(std::optional<Point> at, FieldFacts& out) {
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -463,6 +514,11 @@ bool fieldFactsAt(std::optional<Point> at, FieldFacts& out) {
     const HRESULT found = at ? uia->ElementFromPoint(POINT{at->x, at->y}, el.put()) : uia->GetFocusedElement(el.put());
     if (FAILED(found) || !el) return false;
     out = factsOf(uia.get(), el.get());
+    if (at) {
+      // What the click would hit may be a part of the field, or a button in it: clickTarget decides.
+      out.activatable = activatable(el.get());
+      out.ancestors = ancestorsOf(uia.get(), el.get());
+    }
     return true;
   } catch (const winrt::hresult_error&) {
     return false;

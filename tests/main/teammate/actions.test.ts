@@ -497,19 +497,28 @@ describe('ActionRunner', () => {
     expect(h.described).toEqual([]);
   });
 
-  it('stops a fill when the paste into a refusing field finds the window gone', async () => {
+  it('keeps filling after a refusing field could not be pasted into, and stops for an app that hangs', async () => {
     const fields = [field('1', 'Name'), field('2', 'Email')];
-    const h = harness({
-      setField: { 1: 'refused' }, clipboardForForms: true, pastes: [{ result: 'window' }],
-    });
-    h.runner.take(info({ fields }), {
-      tool: 'fill', fields: [{ id: '1', value: 'Ada' }, { id: '2', value: 'ada@example.com' }],
-    });
-    await flush();
-    h.runner.onAction('form', { t: 'fill', ids: ['1', '2'], serial: h.preview() });
-    await flush();
-    expect(h.of('setField')).toEqual([{ window: ASK_WINDOW, field: '1', value: 'Ada' }]);
-    expect(h.runner.described()).toEqual([t.didFill(0, 2)]);
+    const fill = async (result: PasteResult) => {
+      const h = harness({ setField: { 1: 'refused' }, clipboardForForms: true, pastes: [{ result }] });
+      h.runner.take(info({ fields }), {
+        tool: 'fill', fields: [{ id: '1', value: 'Ada' }, { id: '2', value: 'ada@example.com' }],
+      });
+      await flush();
+      h.runner.onAction('form', { t: 'fill', ids: ['1', '2'], serial: h.preview() });
+      await flush();
+      return h;
+    };
+    // `window` may only mean something else is under that field's point: the next field still gets its value.
+    const missed = await fill('window');
+    expect(missed.of('setField')).toEqual([
+      { window: ASK_WINDOW, field: '1', value: 'Ada' },
+      { window: ASK_WINDOW, field: '2', value: 'ada@example.com' },
+    ]);
+    expect(missed.runner.described()).toEqual([t.didFill(1, 1)]);
+    const hung = await fill('hung');
+    expect(hung.of('setField')).toEqual([{ window: ASK_WINDOW, field: '1', value: 'Ada' }]);
+    expect(hung.runner.described()).toEqual([t.didFill(0, 2)]);
   });
 
   it('clicks the field under the spot only when nothing had the keyboard', async () => {

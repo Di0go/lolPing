@@ -114,13 +114,34 @@ constexpr int kRestoreReserveMs = 500;
  */
 constexpr int kPasteDeadlineMs = 5500;
 
+/** How far above the element under a paste's click its field is looked for: the browser's hit test often lands on a
+ *  paragraph or text node inside the field. */
+constexpr size_t kFieldAncestors = 3;
+
+/** An element above the one under a click: its runtime id, name and password flag. */
+struct AncestorFacts {
+  std::string id;
+  std::string label;
+  bool secure = false;
+};
+
 /** What a write needs to know about a field first: its kind (RawField's), label, password flag and runtime id. */
 struct FieldFacts {
   std::string kind;
   std::string label;
   bool secure = false;
   std::string id;
+  /** Under a click only: the element does something when clicked (a button, link, check box, list item and such). */
+  bool activatable = false;
+  /** Under a click only: the first kFieldAncestors elements above it, nearest first. */
+  std::vector<AncestorFacts> ancestors;
 };
+
+/**
+ * Where a paste's click on `under` lands, for a paste meant for field `expected`: "" on that field, "secure" on it
+ * when it is a password field, else "window". Without an id the element itself must be a text field.
+ */
+std::string clickTarget(const FieldFacts& under, const std::string& expected);
 
 constexpr int kMaxSpots = 4;
 

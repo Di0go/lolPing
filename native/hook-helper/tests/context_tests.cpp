@@ -1292,6 +1292,45 @@ static void test_paste_clicks_only_on_the_field_it_was_meant_for() {
   CHECK(parseCommand(pasteLine(R"("field":")" + std::string(121, '1') + R"(",)")).kind == Command::Kind::Bad);
 }
 
+static void test_paste_click_finds_its_field_above_the_element_hit() {
+  const auto run = [](const std::function<void(PasteState&)>& set) {
+    const auto s = std::make_shared<PasteState>();
+    set(*s);
+    const std::string result =
+        pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200","field":"42.7.1",)"));
+    if (result != "ok") CHECK(!s->saw("open") && !s->saw("click") && !s->saw("ctrl+v"));
+    return result;
+  };
+  const auto paragraph = [](std::vector<AncestorFacts> above) {
+    FieldFacts f{"other", "", false, "42.7.1.5"};
+    f.ancestors = std::move(above);
+    return f;
+  };
+  // The browser's hit test lands on a paragraph inside the field: its parent is the field.
+  CHECK(run([&](PasteState& s) { s.atClick = paragraph({{"42.7.1", "Message", false}}); }) == "ok");
+  CHECK(run([&](PasteState& s) {
+          s.atClick = paragraph({{"42.7.1.4", "", false}, {"42.7.1.3", "", false}, {"42.7.1", "Message", false}});
+        }) == "ok");
+  // A button inside the field, such as a clear or emoji button, is not the field.
+  CHECK(run([&](PasteState& s) {
+          s.atClick = paragraph({{"42.7.1", "Message", false}});
+          s.atClick.activatable = true;
+        }) == "window");
+  // Four levels up is too far to be the field the click meant.
+  CHECK(run([&](PasteState& s) {
+          s.atClick = paragraph({{"9.1", "", false}, {"9.2", "", false}, {"9.3", "", false}, {"42.7.1", "", false}});
+        }) == "window");
+  // The matched field is a password field, though the element hit says nothing of it.
+  CHECK(run([&](PasteState& s) { s.atClick = paragraph({{"42.7.1", "Message", true}}); }) == "secure");
+  CHECK(run([&](PasteState& s) { s.atClick = paragraph({{"42.7.1", "Card number", false}}); }) == "secure");
+  CHECK(run([&](PasteState& s) { s.atClick = paragraph({{"42.7.1", "Message", false}}); s.atClick.secure = true; }) ==
+        "secure");
+  // The field hit directly is fine even when it reports a click action of its own.
+  CHECK(clickTarget(FieldFacts{"text", "Message", false, "42.7.1", true, {}}, "42.7.1").empty());
+  // Without an id the element hit must itself be a text field: a parent field does not count.
+  CHECK(clickTarget(paragraph({{"42.7.1", "Message", false}}), "") == "window");
+}
+
 static void test_paste_checks_again_right_before_the_click() {
   const std::vector<ClipFormat> mine = {format(0xC09E, "HTML Format", "<i>mine</i>")};
   // The click point now lands in another window (the field scrolled away, a window opened over it).
@@ -1439,6 +1478,7 @@ int main() {
   test_paste_gives_up_on_a_busy_clipboard();
   test_paste_clicks_presses_ctrl_v_and_restores_a_second_later();
   test_paste_clicks_only_on_the_field_it_was_meant_for();
+  test_paste_click_finds_its_field_above_the_element_hit();
   test_paste_checks_again_right_before_the_click();
   test_paste_finishes_inside_its_deadline();
   test_paste_puts_the_clipboard_back_or_says_it_could_not();

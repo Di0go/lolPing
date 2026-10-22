@@ -503,13 +503,14 @@ export class ActionRunner extends EventEmitter {
   /** A text field that refuses its value gets it by the clipboard route, with a click on the field. */
   private async pasteInto(
     run: RunInfo, field: FormField, box: Rect, text: string, signal: AbortSignal,
-  ): Promise<{ result: 'ok' | 'refused' | 'window' | 'hung' | 'error'; restored: boolean }> {
+  ): Promise<{ result: 'ok' | 'refused' | 'hung' | 'error'; restored: boolean }> {
     this.deps.windows.hideBubble();
     try {
       const r = await this.deps.context.paste(
         { window: run.window, text, click: centre(box), field: field.id, mode: 'insert', asked: '' }, signal);
-      // A window that went away or stopped answering stops the fill, as it does for setField.
-      const result = r.result === 'ok' || r.result === 'window' || r.result === 'hung' ? r.result : 'refused';
+      // An app that stopped answering stops the fill, as it does for setField. `window` here may only mean something
+      // else is under this field's point; if the window itself went away, the next setField says so and stops it.
+      const result = r.result === 'ok' || r.result === 'hung' ? r.result : 'refused';
       return { result, restored: r.restored };
     } catch {
       return { result: 'error', restored: true };
