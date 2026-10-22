@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseMateAction, parseMateSize, type MateView } from '../../src/shared/teammateIpc';
 
-const VIEWS: MateView[] = ['bubble', 'card', 'words', 'history', 'consent'];
+const VIEWS: MateView[] = ['bubble', 'card', 'words', 'history', 'consent', 'form'];
 const SAMPLES: Record<string, unknown> = {
   more: { t: 'more' },
   dismiss: { t: 'dismiss' },
@@ -20,6 +20,7 @@ const SAMPLES: Record<string, unknown> = {
   allow: { t: 'allow' },
   always: { t: 'always' },
   decline: { t: 'decline' },
+  fill: { t: 'fill', ids: ['f1', 'f2'] },
 };
 const ALLOWED: Record<MateView, string[]> = {
   bubble: ['more', 'dismiss'],
@@ -27,6 +28,7 @@ const ALLOWED: Record<MateView, string[]> = {
   words: ['ask', 'cancel'],
   history: ['open', 'continue', 'delete', 'search'],
   consent: ['allow', 'always', 'decline'],
+  form: ['cancel', 'fill'],
 };
 
 describe('parseMateAction', () => {
@@ -49,6 +51,18 @@ describe('parseMateAction', () => {
     }
     expect(parseMateAction({ t: 'allow', extra: 1 }, 'consent')).toEqual({ t: 'allow' });
     expect(parseMateAction({ t: 'Allow' }, 'consent')).toBeNull();
+  });
+
+  it('accepts fill with known ids only', () => {
+    expect(parseMateAction({ t: 'fill', ids: ['f1', 'f2'] }, 'form')).toEqual({ t: 'fill', ids: ['f1', 'f2'] });
+    expect(parseMateAction({ t: 'fill', ids: ['f1'], extra: 1 }, 'form')).toEqual({ t: 'fill', ids: ['f1'] });
+    for (const ids of [[], 'f1', [1], ['f1', null], [''], ['x'.repeat(201)], Array.from({ length: 61 }, (_, i) => `f${i}`)]) {
+      expect(parseMateAction({ t: 'fill', ids }, 'form'), JSON.stringify(ids)).toBeNull();
+    }
+    expect(parseMateAction({ t: 'fill' }, 'form')).toBeNull();
+    for (const view of ['bubble', 'card', 'words', 'history', 'consent'] as const) {
+      expect(parseMateAction({ t: 'fill', ids: ['f1'] }, view), view).toBeNull();
+    }
   });
 
   it('refuses non-web links and long replies', () => {
@@ -81,5 +95,6 @@ describe('parseMateSize', () => {
     expect(parseMateSize({ width: Number.NaN, height: 10 }, 'card')).toBeNull();
     expect(parseMateSize({ width: 100 }, 'bubble')).toBeNull();
     expect(parseMateSize({ width: 300, height: 100 }, 'history')).toBeNull();
+    expect(parseMateSize({ width: 9000, height: 9000 }, 'form')).toEqual({ width: 420, height: 520 });
   });
 });

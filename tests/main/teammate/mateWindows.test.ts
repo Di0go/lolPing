@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BubbleState, CardState, ConsentState, HistoryState, WordsState } from '../../../src/shared/teammateIpc';
+import type { BubbleState, CardState, ConsentState, FormState, HistoryState, WordsState } from '../../../src/shared/teammateIpc';
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -116,6 +116,14 @@ const card: CardState = {
 const words: WordsState = { view: 'words', lang: 'en', tag, thread: null, continueByDefault: false };
 const consent: ConsentState = {
   view: 'consent', lang: 'en', tag, action: 'paste', text: 'Paste this into Chrome?', detail: 'Hello there', always: true, seconds: 30,
+};
+const form: FormState = {
+  view: 'form', lang: 'en', tag, app: 'Chrome',
+  rows: [
+    { id: 'f1', label: 'Name', value: 'Ada Lovelace', checked: true },
+    { id: 'f2', label: 'Email', value: 'ada@example.com', checked: true },
+  ],
+  left: [{ label: 'Password', reason: 'secure' }],
 };
 const history: HistoryState = { view: 'history', lang: 'en', available: true, query: '', threads: [] };
 
@@ -324,6 +332,93 @@ describe('MateWindows consent card', () => {
     h.handlers.get('mate:size')?.({ sender: w.webContents }, { width: 384, height: 260 });
     expect(w.bounds).toMatchObject({ width: 384, height: 260 });
     expect(w.bounds.y + 130).toBeCloseTo(400, -1);
+  });
+});
+
+describe('MateWindows form preview', () => {
+  const openForm = (state: FormState = form, at = { x: 500, y: 400 }): (typeof h.windows)[number] => {
+    mate.showForm(at, state);
+    const w = h.windows[h.windows.length - 1];
+    w.webContents.emit('did-finish-load');
+    return w;
+  };
+
+  it('shows the form preview without taking focus', () => {
+    const w = openForm();
+    expect(w.opts.focusable).toBe(false);
+    expect(w.visible).toBe(true);
+    expect(w.focused).toBe(0);
+  });
+
+  it('places the preview beside the spot and tells the page which side it is on', () => {
+    const w = openForm();
+    expect(w.bounds.x).toBeGreaterThan(500);
+    expect(w.webContents.send).toHaveBeenCalledWith('mate:state', { ...form, side: 'right', serial: 1 });
+    const far = openForm(form, { x: 1900, y: 400 });
+    expect(far.bounds.x + far.bounds.width).toBeLessThanOrEqual(1900);
+    expect(far.webContents.send).toHaveBeenCalledWith('mate:state', { ...form, side: 'left', serial: 2 });
+  });
+
+  it('passes on a fill of listed rows once, with each id once', () => {
+    openForm();
+    sendAction(0, { t: 'fill', ids: ['f2', 'f1', 'f2'] });
+    sendAction(0, { t: 'fill', ids: ['f1'] });
+    sendAction(0, { t: 'cancel' });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f2', 'f1'] } }]);
+  });
+
+  it('drops a fill that names a field the preview did not list, and keeps waiting for the user', () => {
+    openForm();
+    sendAction(0, { t: 'fill', ids: ['f1', 'f9'] });
+    sendAction(0, { t: 'fill', ids: ['f9'] });
+    expect(actions).toEqual([]);
+    sendAction(0, { t: 'fill', ids: ['f1'] });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f1'] } }]);
+  });
+
+  it('takes the listed rows from the latest state it sent', () => {
+    openForm();
+    mate.updateForm({ ...form, rows: [{ id: 'f3', label: 'Phone', value: '555', checked: true }] });
+    sendAction(0, { t: 'fill', ids: ['f1'] });
+    expect(actions).toEqual([]);
+    sendAction(0, { t: 'fill', ids: ['f3'] });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f3'] } }]);
+  });
+
+  it('passes on a cancel once, and takes a decision again for the next preview', () => {
+    openForm();
+    sendAction(0, { t: 'cancel' });
+    sendAction(0, { t: 'fill', ids: ['f1'] });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'cancel' } }]);
+    mate.showForm({ x: 500, y: 400 }, form);
+    sendAction(0, { t: 'fill', ids: ['f1'] });
+    expect(actions).toHaveLength(2);
+  });
+
+  it('ignores a click on a preview that was hidden', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = openForm();
+      mate.hideForm();
+      await vi.advanceTimersByTimeAsync(100); // inside the leave motion
+      sendAction(0, { t: 'fill', ids: ['f1'] });
+      expect(actions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(w.visible).toBe(false);
+      expect(w.destroyed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('grows with the page up to 420 by 520 and keeps the preview beside the spot', () => {
+    const w = openForm();
+    const size = h.handlers.get('mate:size');
+    size?.({ sender: w.webContents }, { width: 420, height: 380 });
+    expect(w.bounds).toMatchObject({ width: 420, height: 380 });
+    expect(w.bounds.y + 190).toBeCloseTo(400, -1);
+    size?.({ sender: w.webContents }, { width: 900, height: 2000 });
+    expect(w.bounds).toMatchObject({ width: 420, height: 520 });
   });
 });
 

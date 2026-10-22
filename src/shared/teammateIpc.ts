@@ -1,7 +1,7 @@
 import type { Lang } from './i18n';
 import type { PingTag } from './ipc';
 import type { PingId } from './pings';
-import type { PutAction } from './teammate/doRules';
+import type { LeftField, PreviewRow, PutAction } from './teammate/doRules';
 
 /** state, leave (play the closing motion; the window hides after it): main → page. action, size: page → main. */
 export const TEAMMATE_CH = { state: 'mate:state', leave: 'mate:leave', action: 'mate:action', size: 'mate:size' } as const;
@@ -9,7 +9,7 @@ export const TEAMMATE_CH = { state: 'mate:state', leave: 'mate:leave', action: '
 /** How a bubble or card leaves: the quick close, or the slow fade of a stale signal. */
 export type MateLeave = 'fast' | 'stale';
 
-export type MateView = 'bubble' | 'card' | 'history' | 'words' | 'consent';
+export type MateView = 'bubble' | 'card' | 'history' | 'words' | 'consent' | 'form';
 
 /** The words box at the spot: what the user types becomes an ask. */
 export interface WordsState {
@@ -85,10 +85,27 @@ export interface ConsentState {
   serial?: number;
 }
 
-export type MateState = BubbleState | CardState | WordsState | HistoryState | ConsentState;
+/** "Fill this form in Chrome?": the fields the teammate will fill, each with a checkbox, and those left to the user. */
+export interface FormState {
+  view: 'form';
+  lang: Lang;
+  tag: PingTag;
+  app: string;
+  rows: PreviewRow[];
+  left: LeftField[];
+  /** Which side of the spot the window is on, so it slides in from there. Set by the window; the right when absent. */
+  side?: 'left' | 'right';
+  /** Changes with every new preview, so the page starts its slide and its ticks again. Set by the window. */
+  serial?: number;
+}
+
+export type MateState = BubbleState | CardState | WordsState | HistoryState | ConsentState | FormState;
 
 /** What the consent card sends. */
 export type ConsentAction = { t: 'allow' } | { t: 'always' } | { t: 'decline' };
+
+/** What the form preview sends: the ids of the checked rows, or nothing. */
+export type FormAction = { t: 'fill'; ids: string[] } | { t: 'cancel' };
 
 export type MateAction =
   | { t: 'more' }
@@ -105,7 +122,8 @@ export type MateAction =
   | { t: 'continue'; id: string }
   | { t: 'delete'; id: string }
   | { t: 'search'; query: string }
-  | ConsentAction;
+  | ConsentAction
+  | FormAction;
 
 export interface MateApi {
   /** Calls `cb` with every state the main process sends; returns the way to stop. */
@@ -123,16 +141,20 @@ export const MATE_TEXT_MAX = 2000;
 export const MATE_COPY_MAX = 100_000;
 const URL_MAX = 2048;
 const QUERY_MAX = 200;
+/** The most fields one fill may name (the plan's limit), and the longest id a field has. */
+const FILL_IDS_MAX = 60;
+const FIELD_ID_MAX = 200;
 /** The same rule as HistoryStore uses before an id reaches a file name. */
 const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
-/** What each window may ask for: the words box asks, the card replies, the bubble opens or closes, consent decides. */
+/** What each window may ask for: the words box asks, the card replies, the bubble opens or closes, the rest decide. */
 const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
   bubble: new Set(['more', 'dismiss']),
   card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link']),
   words: new Set(['ask', 'cancel']),
   history: new Set(['open', 'continue', 'delete', 'search']),
   consent: new Set(['allow', 'always', 'decline']),
+  form: new Set(['fill', 'cancel']),
 };
 
 /** Size limits in DIPs for the windows that fit their content. */
@@ -140,6 +162,7 @@ const SIZE_LIMITS: Partial<Record<MateView, { minW: number; maxW: number; minH: 
   bubble: { minW: 160, maxW: 440, minH: 40, maxH: 220 },
   card: { minW: 200, maxW: 480, minH: 60, maxH: 600 },
   consent: { minW: 200, maxW: 480, minH: 60, maxH: 400 },
+  form: { minW: 200, maxW: 420, minH: 60, maxH: 520 },
 };
 
 const words = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '' && v.length <= MATE_TEXT_MAX;
@@ -181,6 +204,16 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'continue':
     case 'delete':
       return threadId(a.id) ? { t: a.t, id: a.id } : null;
+    case 'fill': {
+      const ids: unknown = a.ids;
+      if (!Array.isArray(ids) || ids.length < 1 || ids.length > FILL_IDS_MAX) return null;
+      const list: string[] = [];
+      for (const id of ids as unknown[]) {
+        if (typeof id !== 'string' || id === '' || id.length > FIELD_ID_MAX) return null;
+        list.push(id);
+      }
+      return { t: 'fill', ids: list };
+    }
     case 'search':
       return typeof a.query === 'string' && a.query.length <= QUERY_MAX ? { t: 'search', query: a.query } : null;
     default:

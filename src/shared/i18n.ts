@@ -56,6 +56,16 @@ const enMateUi = {
   allowOnce: 'Allow once',
   alwaysAllow: 'Always allow',
   decline: 'Decline',
+  /** The form preview: the question, the buttons, the fields left for the user and why, and the note under the buttons. */
+  formTitle: (app: string) => `Fill this form in ${app}?`,
+  formFill: (n: number) => (n === 1 ? 'Fill 1 field' : `Fill ${n} fields`),
+  formCancel: 'Cancel',
+  formLeft: 'Left for you',
+  formWhySecure: 'password or card field',
+  formWhyUnknown: 'not on this form',
+  formWhyKind: 'can’t set this kind',
+  formWhyOption: 'not one of the choices',
+  formNote: 'lolPing won’t press Submit. Fill can’t be undone with Ctrl + Z.',
 };
 
 /** What a file's sections are: PDF pages, slides, sheets, or parts of a text or Word file. */
@@ -918,6 +928,15 @@ const zh: Strings = {
       allowOnce: '允许一次',
       alwaysAllow: '总是允许',
       decline: '拒绝',
+      formTitle: (app: string) => `填写 ${app} 里的这份表单？`,
+      formFill: (n: number) => `填写 ${n} 个字段`,
+      formCancel: '取消',
+      formLeft: '留给你自己填',
+      formWhySecure: '密码或银行卡字段',
+      formWhyUnknown: '不在这份表单上',
+      formWhyKind: '这种字段无法填写',
+      formWhyOption: '不是可选项之一',
+      formNote: 'lolPing 不会点“提交”。填写后不能用 Ctrl + Z 撤销。',
     },
     ask: {
       failed: {

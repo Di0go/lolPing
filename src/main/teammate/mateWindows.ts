@@ -1,8 +1,8 @@
 import { BrowserWindow, ipcMain, nativeTheme, screen, type BrowserWindowConstructorOptions, type IpcMainEvent } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
-  parseMateAction, parseMateSize, TEAMMATE_CH, type BubbleState, type CardState, type ConsentState, type HistoryState, type MateAction,
-  type MateLeave, type MateState, type MateView, type WordsState,
+  parseMateAction, parseMateSize, TEAMMATE_CH, type BubbleState, type CardState, type ConsentState, type FormState,
+  type HistoryState, type MateAction, type MateLeave, type MateState, type MateView, type WordsState,
 } from '../../shared/teammateIpc';
 import { besideSpot, placeInside } from '../coords';
 import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from '../paths';
@@ -10,7 +10,7 @@ import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from '../paths';
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
 
-const VIEWS: readonly MateView[] = ['bubble', 'card', 'words', 'history', 'consent'];
+const VIEWS: readonly MateView[] = ['bubble', 'card', 'words', 'history', 'consent', 'form'];
 /** First size of each window in DIPs; the bubble and the card then take the size their page reports. */
 const START_SIZE: Record<MateView, Size> = {
   bubble: { width: 360, height: 72 },
@@ -18,6 +18,7 @@ const START_SIZE: Record<MateView, Size> = {
   words: { width: 460, height: 112 },
   history: { width: 760, height: 600 },
   consent: { width: 384, height: 220 },
+  form: { width: 420, height: 300 },
 };
 /** Long enough for the page's leave animation (150 ms, or the 600 ms stale fade) to finish before the window hides. */
 const LEAVE_MS: Record<MateLeave, number> = { fast: 170, stale: 620 };
@@ -34,33 +35,35 @@ interface Slot {
   shown: boolean;
   at: Point;
   size: Size;
-  /** The words box has asked or cancelled, or the consent card has decided: nothing more comes from it. */
+  /** The words box has asked or cancelled, or the consent card or form preview has decided: nothing more comes. */
   ended: boolean;
   leaveTimer: ReturnType<typeof setTimeout> | null;
   /** The card has had keyboard focus: hiding it would keep the foreground, so it is closed instead. */
   hadFocus: boolean;
+  /** The rows of the form preview last sent: a fill may name only these. */
+  formIds: ReadonlySet<string>;
 }
 
 const emptySlot = (view: MateView): Slot => ({
   view, win: null, loaded: false, state: null, shown: false, at: { x: 0, y: 0 }, size: { ...START_SIZE[view] }, ended: false,
-  leaveTimer: null, hadFocus: false,
+  leaveTimer: null, hadFocus: false, formIds: new Set(),
 });
 
 /**
  * The teammate's windows. The bubble takes clicks without focus; the card takes focus only when clicked, so the app
  * underneath keeps the keyboard until the user replies; the words box takes focus and gives it back when it closes;
- * History is a normal window; the consent card never takes focus, as the bubble. Emits 'action' with
- * `{ view, action }`, already validated for that view. It only shows state and passes actions on: what an action
+ * History is a normal window; the consent card and the form preview never take focus, as the bubble. Emits
+ * 'action' with `{ view, action }`, already validated for that view. It only shows state and passes actions on: what an action
  * does is up to the caller.
  */
 export class MateWindows extends EventEmitter {
   private readonly slots: Record<MateView, Slot> = {
     bubble: emptySlot('bubble'), card: emptySlot('card'), words: emptySlot('words'), history: emptySlot('history'),
-    consent: emptySlot('consent'),
+    consent: emptySlot('consent'), form: emptySlot('form'),
   };
   private captureExcluded = false;
-  /** Counts showConsent calls, so the page can tell a new card from an update of the open one. */
-  private consentShows = 0;
+  /** Counts showConsent and showForm calls, so a page can tell a new window from an update of the open one. */
+  private sideShows = 0;
 
   constructor() {
     super();
@@ -101,7 +104,7 @@ export class MateWindows extends EventEmitter {
   showConsent(at: Point, s: ConsentState): void {
     const slot = this.slots.consent;
     slot.ended = false;
-    this.consentShows++;
+    this.sideShows++;
     this.showPopup('consent', at, this.withSide(slot, at, s));
   }
 
@@ -114,6 +117,31 @@ export class MateWindows extends EventEmitter {
   hideConsent(): void {
     this.slots.consent.ended = true;
     this.leave('consent', 'fast');
+  }
+
+  /**
+   * "Fill 5 fields in Chrome?" beside the spot `at`, as the consent card: clicks but never the keyboard. One decision
+   * per preview, and a fill may name only the rows of the state last sent.
+   */
+  showForm(at: Point, s: FormState): void {
+    const slot = this.slots.form;
+    slot.ended = false;
+    slot.formIds = new Set(s.rows.map((r) => r.id));
+    this.sideShows++;
+    this.showPopup('form', at, this.withSide(slot, at, s));
+  }
+
+  updateForm(s: FormState): void {
+    const slot = this.slots.form;
+    if (!slot.shown) return;
+    slot.formIds = new Set(s.rows.map((r) => r.id));
+    this.update('form', this.withSide(slot, slot.at, s));
+  }
+
+  /** The preview is decided: clicks during its leave motion no longer count. */
+  hideForm(): void {
+    this.slots.form.ended = true;
+    this.leave('form', 'fast');
   }
 
   /** Whether the open card, or the one just closed, has had keyboard focus. Cleared when the next card opens. */
@@ -213,7 +241,7 @@ export class MateWindows extends EventEmitter {
     }
   }
 
-  private showPopup(view: 'bubble' | 'card' | 'consent', at: Point, s: MateState): void {
+  private showPopup(view: 'bubble' | 'card' | 'consent' | 'form', at: Point, s: MateState): void {
     const slot = this.slots[view];
     if (slot.leaveTimer) clearTimeout(slot.leaveTimer);
     slot.leaveTimer = null;
@@ -250,8 +278,8 @@ export class MateWindows extends EventEmitter {
     };
   }
 
-  private withSide(slot: Slot, at: Point, s: ConsentState): ConsentState {
-    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side, serial: this.consentShows };
+  private withSide<S extends ConsentState | FormState>(slot: Slot, at: Point, s: S): S {
+    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side, serial: this.sideShows };
   }
 
   private update(view: MateView, s: MateState): void {
@@ -261,7 +289,7 @@ export class MateWindows extends EventEmitter {
     this.push(slot);
   }
 
-  private leave(view: 'bubble' | 'card' | 'consent', how: MateLeave): void {
+  private leave(view: 'bubble' | 'card' | 'consent' | 'form', how: MateLeave): void {
     const slot = this.slots[view];
     if (!slot.shown) return;
     slot.shown = false;
@@ -298,7 +326,8 @@ export class MateWindows extends EventEmitter {
 
   private rect(slot: Slot): { x: number; y: number; width: number; height: number } {
     const area = this.workArea(slot.at);
-    const { x, y } = slot.view === 'consent' ? besideSpot(slot.at, slot.size, area) : placeInside(slot.at, slot.size, area);
+    const beside = slot.view === 'consent' || slot.view === 'form';
+    const { x, y } = beside ? besideSpot(slot.at, slot.size, area) : placeInside(slot.at, slot.size, area);
     return { x, y, ...slot.size };
   }
 
@@ -322,7 +351,7 @@ export class MateWindows extends EventEmitter {
     slot.win = w;
     slot.loaded = false;
     if (this.captureExcluded) w.setContentProtection(true);
-    if (view === 'bubble' || view === 'card' || view === 'consent') {
+    if (view === 'bubble' || view === 'card' || view === 'consent' || view === 'form') {
       w.setAlwaysOnTop(true, 'screen-saver'); // above the overlay and a game's borderless window
       if (IS_LINUX) w.setVisibleOnAllWorkspaces(true);
       if (IS_MAC) w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
@@ -376,7 +405,7 @@ export class MateWindows extends EventEmitter {
   private readonly onAction = (event: IpcMainEvent, raw: unknown): void => {
     const view = this.viewOf(event);
     if (!view) return;
-    const action = parseMateAction(raw, view);
+    let action = parseMateAction(raw, view);
     if (!action) return;
     // The words box's job ends with an ask or a cancel: it closes, and the keyboard goes back where it was.
     if (view === 'words') return this.endWords(this.slots.words, action);
@@ -384,6 +413,16 @@ export class MateWindows extends EventEmitter {
       const slot = this.slots.consent;
       // One decision per card, and no Always allow for a card that didn't offer it.
       if (slot.ended || (action.t === 'always' && !(slot.state?.view === 'consent' && slot.state.always))) return;
+      slot.ended = true;
+    }
+    if (view === 'form') {
+      const slot = this.slots.form;
+      if (slot.ended) return;
+      if (action.t === 'fill') {
+        // Only rows the preview listed, each once. A fill naming anything else is not the user's choice: stay open.
+        if (!action.ids.every((id) => slot.formIds.has(id))) return;
+        action = { t: 'fill', ids: [...new Set(action.ids)] };
+      }
       slot.ended = true;
     }
     this.emit('action', { view, action });

@@ -6,13 +6,14 @@ import type { MateAction, MateLeave, MateState, MateView } from '../../shared/te
 import { Bubble } from './Bubble';
 import { Card } from './Card';
 import { Consent } from './Consent';
+import { FormPreview } from './FormPreview';
 import { History } from './History';
 import { Words } from './Words';
 import './teammate.css';
 
 const api = window.mateApi;
 /** Each teammate window loads this page with its view in the hash. */
-const VIEW: MateView = (['bubble', 'card', 'words', 'history', 'consent'] as const).find((v) => location.hash === `#${v}`) ?? 'bubble';
+const VIEW: MateView = (['bubble', 'card', 'words', 'history', 'consent', 'form'] as const).find((v) => location.hash === `#${v}`) ?? 'bubble';
 const act = (a: MateAction): void => api.act(a);
 
 function useDarkMode(): boolean {
@@ -56,9 +57,10 @@ function Root() {
     () =>
       api.on((s) => {
         if (s.view !== VIEW) return;
-        // A consent card shown again without hiding first is a new card: it mounts afresh too.
-        const fresh = s.view === 'consent' && serial.current !== undefined && s.serial !== serial.current;
-        if (s.view === 'consent') serial.current = s.serial;
+        // A consent card or form preview shown again without hiding first is a new one: it mounts afresh too.
+        const sided = s.view === 'consent' || s.view === 'form';
+        const fresh = sided && serial.current !== undefined && s.serial !== serial.current;
+        if (sided) serial.current = s.serial;
         if (fresh && !left.current) setRound((r) => r + 1);
         if (left.current) {
           left.current = false;
@@ -98,6 +100,9 @@ function Root() {
       break;
     case 'consent':
       view = <Sized><Consent s={state} t={ui} act={act} leaving={leaving} /></Sized>;
+      break;
+    case 'form':
+      view = <Sized><FormPreview s={state} t={ui} act={act} leaving={leaving} /></Sized>;
       break;
     case 'words':
       view = <Words s={state} t={ui} act={act} />;
