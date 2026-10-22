@@ -1,8 +1,9 @@
 import { Button, Caption1, makeStyles, mergeClasses, Text, tokens } from '@fluentui/react-components';
 import { Dismiss16Regular } from '@fluentui/react-icons';
+import { useState } from 'react';
 import type { Strings } from '../../shared/i18n';
 import type { BubbleState, MateAction, MateLeave } from '../../shared/teammateIpc';
-import { putLabel } from './cardText';
+import { bubbleButtons, PutGuard, putLabel } from './cardText';
 import { useMotion } from './motion';
 import { NameTag } from './NameTag';
 
@@ -48,6 +49,8 @@ export function Bubble({ s, t, act, leaving }: {
   const m = useMotion();
   const leave = leaving === 'stale' ? m.stale : leaving === 'fast' ? m.fadeOut : undefined;
   const put = putLabel(s.put, t);
+  const [guard] = useState(() => new PutGuard(() => performance.now()));
+  guard.show(put);
   return (
     <div className={sf.frame}>
       <div className={mergeClasses(sf.surface, st.bubble, m.appear, leave)}>
@@ -66,17 +69,21 @@ export function Bubble({ s, t, act, leaving }: {
           <div className={st.body}>
             {/* Keyed by the line, so a new line settles in instead of swapping in place. */}
             <Text key={s.line} className={mergeClasses(st.line, m.rise)}>{s.line}</Text>
-            {/* Keyed by the label, so Paste turning into Paste when ready pops in again. */}
-            {put && (
-              <Button key={put} className={m.pop} size="small" onClick={() => act({ t: 'put' })}>
-                {put}
-              </Button>
-            )}
-            {s.more && (
-              <Button className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'more' })}>
+            {bubbleButtons(s.more, put).map((b) => (b === 'more' ? (
+              <Button key="more" className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'more' })}>
                 {t.more}
               </Button>
-            )}
+            ) : (
+              // Keyed by the label, so Paste turning into Paste when ready pops in again.
+              <Button
+                key={`put:${put}`}
+                className={m.pop}
+                size="small"
+                onClick={() => guard.click() && act({ t: 'put' })}
+              >
+                {put}
+              </Button>
+            )))}
           </div>
         )}
       </div>

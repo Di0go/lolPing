@@ -17,3 +17,24 @@ export function spawnGlow(layer: HTMLElement, g: MateGlow): void {
   layer.append(el);
   setTimeout(() => el.remove(), GLOW_MS);
 }
+
+/** The glows of one display's overlay. A fill's later fields wait their delay; clear() drops those still waiting. */
+export class GlowStage {
+  private readonly pending = new Set<ReturnType<typeof setTimeout>>();
+
+  constructor(private readonly layer: HTMLElement) {}
+
+  spawn(g: MateGlow): void {
+    const timer = setTimeout(() => {
+      this.pending.delete(timer);
+      spawnGlow(this.layer, g);
+    }, g.delay);
+    this.pending.add(timer);
+  }
+
+  /** A pause, mate:clear or a new ask: no field of the old answer lights up after it. */
+  clear(): void {
+    for (const timer of this.pending) clearTimeout(timer);
+    this.pending.clear();
+  }
+}

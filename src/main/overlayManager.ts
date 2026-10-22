@@ -245,6 +245,8 @@ export class OverlayManager extends EventEmitter {
 
   /** Outlines the fields the teammate just wrote (boxes in physical px) in its tag's colour, one after another. */
   glow(boxes: readonly Rect[], tag: PingTag): void {
+    // The boxes are mapped before anything is sent, so the maps must be current first.
+    this.refreshDisplays();
     const ticket = this.mateTicket === null ? {} : { ticket: this.mateTicket };
     boxes.forEach((box, i) => {
       const at = physicalBoxToLocal(box, this.maps);

@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type CardState, type MateAction, type MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
-import { copyText, footerText, putLabel } from './cardText';
+import { cardButtons, copyText, footerText, PutGuard, putLabel } from './cardText';
 import { renderMarkdown } from './markdown';
 import { stagger, useMotion } from './motion';
 import { NameTag } from './NameTag';
@@ -153,6 +153,47 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
   };
   const leave = leaving === 'stale' ? m.stale : leaving === 'fast' ? m.shrink : undefined;
   const put = putLabel(s.put, t);
+  const [guard] = useState(() => new PutGuard(() => performance.now()));
+  guard.show(put);
+  const button = (b: ReturnType<typeof cardButtons>[number]) => {
+    switch (b) {
+      case 'copy':
+        return (
+          <Button
+            key="copy"
+            size="small"
+            icon={copied ? <Checkmark16Regular className={m.pop} /> : <Copy16Regular />}
+            onClick={copyAll}
+          >
+            {copied ? t.copied : t.copy}
+          </Button>
+        );
+      case 'deep':
+        return (
+          <Button key="deep" size="small" onClick={() => act({ t: 'deep' })}>
+            {t.wholePicture}
+          </Button>
+        );
+      case 'history':
+        return (
+          <Button key="history" size="small" icon={<History16Regular />} onClick={() => act({ t: 'history' })}>
+            {t.history}
+          </Button>
+        );
+      case 'put':
+        return (
+          <Button
+            key={`put:${put}`}
+            className={m.pop}
+            size="small"
+            appearance="primary"
+            onClick={() => guard.click() && act({ t: 'put' })}
+          >
+            {put}
+          </Button>
+        );
+    }
+  };
   return (
     <div className={sf.frame}>
       <FluentCard className={mergeClasses(sf.surface, st.card, m.grow, leave)}>
@@ -205,26 +246,8 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
             );
           })}
         </div>
-        <div className={st.buttons}>
-          {put && (
-            <Button key={put} className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'put' })}>
-              {put}
-            </Button>
-          )}
-          <Button
-            size="small"
-            icon={copied ? <Checkmark16Regular className={m.pop} /> : <Copy16Regular />}
-            onClick={copyAll}
-          >
-            {copied ? t.copied : t.copy}
-          </Button>
-          <Button size="small" onClick={() => act({ t: 'deep' })}>
-            {t.wholePicture}
-          </Button>
-          <Button size="small" icon={<History16Regular />} onClick={() => act({ t: 'history' })}>
-            {t.history}
-          </Button>
-        </div>
+        {/* The put button is last: its arrival moves none of the others from under the pointer. */}
+        <div className={st.buttons}>{cardButtons(put).map(button)}</div>
         <Input
           className={st.reply}
           size="small"

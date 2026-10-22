@@ -763,9 +763,9 @@ function start(): void {
         showForm: (at, s) => windows.showForm(at, s),
         hideForm: () => windows.hideForm(),
         cardHadFocus: () => windows.cardHadFocus(),
-        // Through the controller, which keeps track of what it has on screen.
-        hideCard: () => controller.onTeammateAction('card', { t: 'close' }),
-        hideBubble: () => controller.onTeammateAction('bubble', { t: 'dismiss' }),
+        // Through the controller, which keeps track of what it has on screen and brings back what a paste hid.
+        hideCard: () => controller.hideCardForPut(),
+        hideBubble: () => controller.hideBubbleForPut(),
       },
       overlay: overlays,
       zoneOffset: (d) => -d.getTimezoneOffset(),

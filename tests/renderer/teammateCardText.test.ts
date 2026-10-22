@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { strings } from '../../src/shared/i18n';
 import { parseMateAction } from '../../src/shared/teammateIpc';
-import { copyText, footerText, putLabel } from '../../src/renderer/teammate/cardText';
+import {
+  bubbleButtons, cardButtons, copyText, footerText, PUT_ARM_MS, PutGuard, putLabel,
+} from '../../src/renderer/teammate/cardText';
 
 const footer = { profile: 'Default', model: 'gpt-x', tokens: 1234, used: ['screen', 'file'] };
 
@@ -37,5 +39,34 @@ describe('cardText', () => {
     expect(putLabel('ready', en)).toBe('Paste when ready');
     expect(putLabel(null, en)).toBeNull();
     expect(putLabel('ready', strings('zh-CN').teammate.ui)).toBe('准备好后粘贴');
+  });
+
+  it('adds the put button after every other button, so none moves from under the pointer', () => {
+    expect(bubbleButtons(true, null)).toEqual(['more']);
+    expect(bubbleButtons(true, 'Paste')).toEqual(['more', 'put']);
+    expect(bubbleButtons(false, 'Paste')).toEqual(['put']);
+    expect(bubbleButtons(false, null)).toEqual([]);
+    expect(cardButtons(null)).toEqual(['copy', 'deep', 'history']);
+    expect(cardButtons('Fill')).toEqual(['copy', 'deep', 'history', 'put']);
+  });
+
+  it('ignores a put click that comes before the button has been there 400 ms', () => {
+    let now = 1000;
+    const guard = new PutGuard(() => now);
+    expect(guard.click()).toBe(false); // no button
+    guard.show('Paste');
+    now += PUT_ARM_MS - 1;
+    expect(guard.click()).toBe(false);
+    guard.show('Paste'); // the same label drawn again keeps its time
+    now += 1;
+    expect(guard.click()).toBe(true);
+    // Paste turning into Paste when ready is a new button under the pointer.
+    guard.show('Paste when ready');
+    now += 100;
+    expect(guard.click()).toBe(false);
+    now += PUT_ARM_MS;
+    expect(guard.click()).toBe(true);
+    guard.show(null);
+    expect(guard.click()).toBe(false);
   });
 });

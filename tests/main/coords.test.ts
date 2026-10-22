@@ -37,11 +37,17 @@ describe('coords', () => {
     expect(physicalToLocal(0, 0, maps, 99)).toBeNull();
   });
 
-  it('maps a field box into the overlay of the display its corner is on, scaled to that display', () => {
+  it('maps a field box into the overlay of the display its centre is on, scaled to that display', () => {
     expect(physicalBoxToLocal({ x: 3440 + 300, y: 150, w: 600, h: 90 }, maps))
       .toEqual({ displayId: 2, x: 200, y: 100, w: 400, h: 60 });
     expect(physicalBoxToLocal({ x: -1280, y: 720, w: 250, h: 50 }, maps))
       .toEqual({ displayId: 3, x: 1024, y: 576, w: 200, h: 40 });
+    // Its corner is on A, most of it on B: it is drawn on B, starting just left of B's edge.
+    expect(physicalBoxToLocal({ x: 3440 - 30, y: 150, w: 600, h: 90 }, maps))
+      .toEqual({ displayId: 2, x: -20, y: 100, w: 400, h: 60 });
+    // Off every display: the nearest one.
+    expect(physicalBoxToLocal({ x: 1000, y: 2000, w: 100, h: 20 }, maps))
+      .toEqual({ displayId: 1, x: 1000, y: 2000, w: 100, h: 20 });
     expect(physicalBoxToLocal({ x: 0, y: 0, w: 10, h: 10 }, [])).toBeNull();
   });
 });

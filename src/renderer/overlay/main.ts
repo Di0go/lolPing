@@ -13,7 +13,7 @@ import { tagColorCss } from '../../shared/roomColors';
 import { DEFAULT_SETTINGS, overlaySettings, soundLevel, type OverlaySettings } from '../../shared/settings';
 import '../shared/emoteFx.css';
 import { EmoteStage } from './emoteStage';
-import { spawnGlow } from './glowFx';
+import { GlowStage } from './glowFx';
 import { spawnPing } from './pingFx';
 import { SoundBank } from './soundBank';
 import { showToast } from './toast';
@@ -37,6 +37,7 @@ pingLayer.after(emoteLayer);
 const sounds = new SoundBank();
 const stage = new EmoteStage(emoteLayer);
 const texts = new TextStage(textLayer);
+const glows = new GlowStage(pingLayer);
 let settings: OverlaySettings = overlaySettings(DEFAULT_SETTINGS);
 const [fallbackPing] = pingsFor([DEFAULT_CLICK_PING]);
 const volume = (): number => soundLevel(settings);
@@ -100,6 +101,7 @@ const staleMate = (p: { ticket?: string }): boolean => p.ticket !== undefined &&
 const mateMarks = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-owner="mate"]')];
 
 function clearMate(): void {
+  glows.clear();
   for (const el of mateMarks()) el.remove();
   stage.clear('mate');
 }
@@ -174,6 +176,7 @@ window.overlay.on('text:spawn', (t) => texts.spawn(t));
 window.overlay.on('mate:clear', clearMate);
 window.overlay.on('mate:fade', fadeMate);
 window.overlay.on('mate:ticket', (t) => {
+  if (t.id !== mateTicket) glows.clear(); // glows still waiting belong to the ask before
   mateTicket = t.id;
 });
 window.overlay.on('mate:said', () => {
@@ -181,11 +184,7 @@ window.overlay.on('mate:said', () => {
 });
 window.overlay.on('mate:glow', (raw) => {
   const g = parseMateGlow(raw);
-  if (!g) return;
-  // A fill's later fields wait their turn; one whose ask was replaced meanwhile is dropped.
-  setTimeout(() => {
-    if (!staleMate(g)) spawnGlow(pingLayer, g);
-  }, g.delay);
+  if (g && !staleMate(g)) glows.spawn(g);
 });
 
 /** Resolves with `label` when the image at `url` doesn't load. */

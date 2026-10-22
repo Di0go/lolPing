@@ -213,6 +213,11 @@ export class AskController extends EventEmitter {
   private entry: { ask: string; at: number; thread: Promise<string | null> } | null = null;
   /** The runner's put button for the answer on screen: the bubble and the card show it. */
   private put: PutState = null;
+  /**
+   * The run whose bubble or card the runner hid for a paste. Only that one comes back (as the bubble) when the paste
+   * doesn't land; one the user closed, or whose time ran out, stays closed.
+   */
+  private hiddenForPut: Run | null = null;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -335,6 +340,20 @@ export class AskController extends EventEmitter {
       default:
         break;
     }
+  }
+
+  /** The runner hides the bubble before a click paste, so nothing of lolPing's is over the point it clicks. */
+  hideBubbleForPut(): void {
+    if (!this.bubbleShown) return;
+    this.hideBubble();
+    this.hiddenForPut = this.shown;
+  }
+
+  /** The runner closes a card that had focus before a paste, so the keyboard goes back to the app. */
+  hideCardForPut(): void {
+    if (!this.cardShown) return;
+    this.hideCard();
+    this.hiddenForPut = this.shown;
   }
 
   /** Stops the running ask, if any, and clears everything the teammate has on screen. */
@@ -780,15 +799,21 @@ export class AskController extends EventEmitter {
 
   /**
    * The put button changed, or a paste didn't land and the button stays. The card or the bubble shows it; when neither
-   * is up (the bubble hid for the paste's click, or its time ran out), the bubble comes back with it.
+   * is up because the runner hid it for the paste, the bubble comes back with it.
    */
   private showPut(state: PutState): void {
     this.put = state;
     const run = this.shown;
     if (!run) return;
-    if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, this.alive(run)));
-    else if (this.bubbleShown) this.deps.windows.updateBubble(this.bubbleState(run, run.line));
-    else if (state !== null) this.showLine(run, run.line);
+    if (this.cardShown) {
+      this.deps.windows.updateCard(this.cardState(run, this.alive(run)));
+    } else if (this.bubbleShown) {
+      this.deps.windows.updateBubble(this.bubbleState(run, run.line));
+      // A button that just came deserves the line's whole reading time, not what was left of it.
+      if (state !== null) this.armBubble(run, run.line);
+    } else if (state !== null && this.hiddenForPut === run) {
+      this.showLine(run, run.line);
+    }
   }
 
   /** An action of the last answer was done after its entry went into history: the entry says so too. */
@@ -828,6 +853,7 @@ export class AskController extends EventEmitter {
   }
 
   private showLine(run: Run, line: string): void {
+    this.hiddenForPut = null;
     const state = this.bubbleState(run, line);
     if (this.bubbleShown) this.deps.windows.updateBubble(state);
     else this.deps.windows.showBubble(this.popupAt(run), state);
@@ -920,7 +946,9 @@ export class AskController extends EventEmitter {
     this.marksShown = false;
   }
 
+  /** Any hide but the runner's own (a dismiss, the line's time, a new ask, a pause) keeps the bubble from coming back. */
   private hideBubble(): void {
+    this.hiddenForPut = null;
     this.clearTimer('bubble');
     this.bubbleEndsAt = 0;
     if (!this.bubbleShown) return;
@@ -929,6 +957,7 @@ export class AskController extends EventEmitter {
   }
 
   private hideCard(): void {
+    this.hiddenForPut = null;
     if (!this.cardShown) return;
     this.deps.windows.hideCard();
     this.cardShown = false;

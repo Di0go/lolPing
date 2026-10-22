@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GLOW_MS, spawnGlow } from '../../src/renderer/overlay/glowFx';
+import { GLOW_MS, GlowStage, spawnGlow } from '../../src/renderer/overlay/glowFx';
 import { tagColorCss } from '../../src/shared/roomColors';
 
 /** Just enough of the DOM for spawnGlow: an element with a style, a dataset and a parent it can leave. */
@@ -49,6 +49,26 @@ describe('spawnGlow', () => {
     vi.advanceTimersByTime(GLOW_MS - 1);
     expect(layer.children).toHaveLength(1);
     vi.advanceTimersByTime(1);
+    expect(layer.children).toHaveLength(0);
+  });
+});
+
+describe('GlowStage', () => {
+  const glow = (delay: number) => ({ box: { x: 10, y: 20, w: 200, h: 24 }, color: 3, rgb: null, delay });
+
+  it('lights the fields of a fill after their delays, and drops the ones still waiting when cleared', () => {
+    const layer = new FakeElement();
+    const stage = new GlowStage(layer as unknown as HTMLElement);
+    stage.spawn(glow(0));
+    stage.spawn(glow(120));
+    stage.spawn(glow(240));
+    vi.advanceTimersByTime(0);
+    expect(layer.children).toHaveLength(1);
+    vi.advanceTimersByTime(120);
+    expect(layer.children).toHaveLength(2);
+    // A pause or a new ask: the third field never lights up.
+    stage.clear();
+    vi.advanceTimersByTime(1000);
     expect(layer.children).toHaveLength(0);
   });
 });

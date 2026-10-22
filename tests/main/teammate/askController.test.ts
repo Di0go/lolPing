@@ -1152,7 +1152,7 @@ describe('AskController', () => {
       h.runner.emit('put', 'paste');
       expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Ok.', put: 'paste' }));
       // A click paste hides the bubble first; the helper then answers `hands`.
-      h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+      h.ctl.hideBubbleForPut();
       const shown = h.of('bubble').length;
       h.runner.emit('put', 'ready');
       // The bubble comes back, so Paste when ready has somewhere to be.
@@ -1175,6 +1175,82 @@ describe('AskController', () => {
       expect(h.of('bubble')).toHaveLength(bubbles);
       h.ctl.onTeammateAction('card', { t: 'put' });
       expect(h.putClicks.at(-1)).toEqual([h.tickets[0], 'card']);
+    });
+
+    it('brings back only a bubble the paste hid, never one the user closed or whose time ran out', async () => {
+      const steps = (): Parameters<typeof harness>[0] => ({
+        recordActions: true,
+        steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
+      });
+      const closed = harness(steps());
+      closed.ctl.ask(spot('omw'));
+      await flush();
+      closed.runner.emit('put', 'paste');
+      closed.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+      const shown = closed.of('bubble').length;
+      closed.runner.emit('put', 'ready');
+      expect(closed.of('bubble')).toHaveLength(shown);
+
+      const ran = harness(steps());
+      ran.ctl.ask(spot('omw'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(bubbleMs('Ok.'));
+      expect(ran.of('bubbleHidden')).toHaveLength(1);
+      const before = ran.of('bubble').length;
+      ran.runner.emit('put', 'paste');
+      expect(ran.of('bubble')).toHaveLength(before);
+
+      // Hidden for the paste, then closed by the user before the reply: it stays closed.
+      const both = harness(steps());
+      both.ctl.ask(spot('omw'));
+      await flush();
+      both.ctl.hideBubbleForPut();
+      both.ctl.cancel('pause');
+      const after = both.of('bubble').length;
+      both.runner.emit('put', 'ready');
+      expect(both.of('bubble')).toHaveLength(after);
+    });
+
+    it('brings the bubble back with the button when a paste closed the card that had focus', async () => {
+      const h = harness({
+        recordActions: true,
+        steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      h.ctl.hideCardForPut();
+      expect(h.of('cardHidden')).toHaveLength(1);
+      h.runner.emit('put', 'ready');
+      expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Ok.', put: 'ready' }));
+
+      // A card the user closed stays closed, and brings no bubble.
+      const user = harness({
+        recordActions: true,
+        steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
+      });
+      user.ctl.ask(spot('omw'));
+      await flush();
+      user.ctl.onTeammateAction('bubble', { t: 'more' });
+      user.ctl.onTeammateAction('card', { t: 'close' });
+      const shown = user.of('bubble').length;
+      user.runner.emit('put', 'ready');
+      expect(user.of('bubble')).toHaveLength(shown);
+    });
+
+    it('gives the bubble its reading time again when it gets a put button', async () => {
+      const h = harness({
+        recordActions: true,
+        steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(bubbleMs('Ok.') - 500);
+      h.runner.emit('put', 'ready');
+      await vi.advanceTimersByTimeAsync(bubbleMs('Ok.') - 1);
+      expect(h.of('bubbleHidden')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.of('bubbleHidden')).toHaveLength(1);
     });
 
     it('sends no put click for an answer that has no action', async () => {
