@@ -45,6 +45,12 @@ interface Options {
   foreground?: string[];
   cardHadFocus?: boolean;
   openPathError?: string;
+  /** The helper's paste fails (a timeout, a `bad` error) instead of replying. */
+  pasteThrows?: boolean;
+  /** Pastes and openPath wait until release() is called. */
+  hold?: boolean;
+  writeFileFails?: boolean;
+  openExternalFails?: boolean;
 }
 
 /** Lets every pending promise settle, without moving the clock. */
@@ -66,6 +72,9 @@ function harness(opts: Options = {}) {
   const pastes = [...(opts.pastes ?? [{ result: 'ok' as const }])];
   const front = [...(opts.foreground ?? [ASK_WINDOW])];
   const next = <T>(list: T[]): T | undefined => (list.length > 1 ? list.shift() : list[0]);
+  let shows = { consent: 0, form: 0 };
+  const held: (() => void)[] = [];
+  const wait = (): Promise<void> => (opts.hold ? new Promise((resolve) => held.push(resolve)) : Promise.resolve());
 
   const deps: ActionDeps = {
     settings: () => settings,
@@ -76,6 +85,8 @@ function harness(opts: Options = {}) {
     context: {
       paste: async (req) => {
         log.push(['paste', req]);
+        await wait();
+        if (opts.pasteThrows) throw new Error('bad: the helper refused the command');
         const r = next(pastes) ?? { result: 'ok' };
         return { result: r.result, restored: r.restored ?? true };
       },
@@ -92,16 +103,31 @@ function harness(opts: Options = {}) {
     clipboard: { write: async (item) => void log.push(['clip', item]) },
     openPath: async (file) => {
       log.push(['openPath', file]);
+      await wait();
       return opts.openPathError ?? '';
     },
     showInFolder: (file) => log.push(['showInFolder', file]),
-    openExternal: async (url) => void log.push(['openExternal', url]),
-    writeFile: async (file, text) => void log.push(['writeFile', { file, text }]),
+    openExternal: async (url) => {
+      log.push(['openExternal', url]);
+      if (opts.openExternalFails) throw new Error('no browser');
+    },
+    writeFile: async (file, text) => {
+      log.push(['writeFile', { file, text }]);
+      if (opts.writeFileFails) throw new Error('disk full');
+    },
     tempDir: () => 'tmp',
     windows: {
-      showConsent: (at, s) => log.push(['consent', { at, ...s }]),
+      showConsent: (at, s) => {
+        log.push(['consent', { at, ...s }]);
+        shows = { ...shows, consent: shows.consent + 1 };
+        return shows.consent;
+      },
       hideConsent: () => log.push(['consentHidden', null]),
-      showForm: (at, s) => log.push(['form', { at, ...s }]),
+      showForm: (at, s) => {
+        log.push(['form', { at, ...s }]);
+        shows = { ...shows, form: shows.form + 1 };
+        return shows.form;
+      },
       hideForm: () => log.push(['formHidden', null]),
       cardHadFocus: () => opts.cardHadFocus ?? false,
       hideCard: () => log.push(['cardHidden', null]),
@@ -128,9 +154,18 @@ function harness(opts: Options = {}) {
   runner.on('put', (s: unknown) => puts.push(s));
 
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
+  const described: unknown[] = [];
+  runner.on('described', (_ask: string, done: string[]) => described.push(done));
   return {
-    runner, log, of, puts,
+    runner, log, of, puts, described,
     kinds: () => log.map((e) => e[0]),
+    /** The serial of the consent card and of the form preview now shown, as their clicks carry it. */
+    card: () => shows.consent,
+    preview: () => shows.form,
+    release: () => {
+      for (const resolve of held.splice(0)) resolve();
+    },
+    liveTimers: () => timers.filter((x) => x.live).length,
     /** Moves the clock, firing each timer that comes due in order and letting what it starts settle. */
     advance: async (ms: number) => {
       const end = clock + ms;
@@ -176,7 +211,7 @@ describe('ActionRunner', () => {
     }]);
     expect(h.runner.putState).toBe('paste');
 
-    h.runner.onAction('consent', { t: 'allow' });
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
     await flush();
     const req: PasteRequest = { window: ASK_WINDOW, text: 'Friday works.', click: null, mode: 'insert', asked: '' };
     expect(h.of('paste')).toEqual([req]);
@@ -194,7 +229,7 @@ describe('ActionRunner', () => {
     const h = harness();
     h.runner.take(info(), paste());
     await flush();
-    h.runner.onAction('consent', { t: 'always' });
+    h.runner.onAction('consent', { t: 'always', serial: h.card() });
     await flush();
     expect(h.of('permissions')).toEqual([['fast:paste']]);
     expect(h.of('paste')).toHaveLength(1);
@@ -323,7 +358,158 @@ describe('ActionRunner', () => {
     const h = harness({ permissions: ['fast:paste'], pastes: [{ result: 'ok', restored: false }] });
     h.runner.take(info(), paste());
     await flush();
-    expect(h.of('toast')).toEqual([`${t.pasted} ${t.clipboardNotRestored}`]);
+    // Two sentences, each with its full stop.
+    expect(h.of('toast')).toEqual(['Pasted. Ctrl + Z to undo. Your clipboard couldn’t be restored.']);
+    expect(strings('zh-CN').teammate.ui.pasted).toMatch(/。$/);
+  });
+
+  it('names the reason for each paste the helper refused, and copies instead', async () => {
+    const cases: [Options, string][] = [
+      [{ pastes: [{ result: 'elevated' }] }, t.pasteElevated('Chrome')],
+      [{ pastes: [{ result: 'busy' }] }, t.pasteFailed],
+      [{ pastes: [{ result: 'selection' }] }, t.pasteSelection],
+      [{ pasteThrows: true }, t.pasteFailed], // a `bad` reply or a timeout
+    ];
+    for (const [opts, toast] of cases) {
+      const h = harness({ permissions: ['fast:paste'], ...opts });
+      h.runner.take(info(), paste());
+      await flush();
+      expect(h.of('clip'), toast).toEqual([{ text: 'Friday works.' }]);
+      expect(h.of('toast'), toast).toEqual([toast]);
+      expect(h.runner.described()).toEqual([t.didCopyText(1)]);
+    }
+  });
+
+  it('copies a replace when nothing was selected at the ask, and says to select the text', async () => {
+    const h = harness({ permissions: ['fast:paste'] });
+    h.runner.take(info({ selection: '' }), paste('Better.', 'replace'));
+    await flush();
+    expect(h.of('paste')).toEqual([]);
+    expect(h.of('toast')).toEqual([t.pasteSelection]);
+  });
+
+  it('says it could not paste when the ask had no window, not that the user moved', async () => {
+    const h = harness({ permissions: ['fast:paste'], foreground: [''] });
+    h.runner.take(info({ window: '' }), paste());
+    await flush();
+    expect(h.of('paste')).toEqual([]);
+    expect(h.of('toast')).toEqual([t.pasteFailed]);
+  });
+
+  it('takes the Paste button away for a password field', async () => {
+    const h = harness({ permissions: ['fast:paste'], pastes: [{ result: 'secure' }] });
+    h.runner.take(info(), paste());
+    await flush();
+    expect(h.runner.putState).toBeNull();
+    // Other refusals keep it, so the user can try again.
+    const hung = harness({ permissions: ['fast:paste'], pastes: [{ result: 'hung' }] });
+    hung.runner.take(info(), paste());
+    await flush();
+    expect(hung.runner.putState).toBe('paste');
+  });
+
+  it('ignores an answer meant for the card before', async () => {
+    const h = harness();
+    h.runner.take(info(), { tool: 'open', url: 'https://example.com/one' });
+    h.runner.take(info(), { tool: 'open', url: 'https://example.com/two' });
+    await flush();
+    const first = h.card();
+    h.runner.onAction('consent', { t: 'decline', serial: first });
+    await flush();
+    expect(h.card()).toBe(first + 1);
+    // A second click on the first card lands after the second card replaced it.
+    h.runner.onAction('consent', { t: 'allow', serial: first });
+    await flush();
+    expect(h.of('openExternal')).toEqual([]);
+    expect(h.of('consentHidden')).toHaveLength(1);
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    await flush();
+    expect(h.of('openExternal')).toEqual(['https://example.com/two']);
+
+    const form = harness();
+    form.runner.take(info({ fields: FIELDS }), { tool: 'fill', fields: [{ id: '1', value: 'Ada' }] });
+    await flush();
+    form.runner.onAction('form', { t: 'fill', ids: ['1'], serial: form.preview() + 1 });
+    form.runner.onAction('form', { t: 'cancel' });
+    await flush();
+    expect(form.of('setField')).toEqual([]);
+    expect(form.of('formHidden')).toEqual([]);
+  });
+
+  it('drops a paste reply that comes after a new ask: no toast, no copy, nothing for history', async () => {
+    const h = harness({ permissions: ['fast:paste'], hold: true, pastes: [{ result: 'hung' }] });
+    h.runner.take(info(), paste());
+    await flush();
+    expect(h.of('paste')).toHaveLength(1);
+    h.runner.cancel();
+    h.release();
+    await flush();
+    expect(h.of('toast')).toEqual([]);
+    expect(h.of('clip')).toEqual([]);
+    expect(h.described).toEqual([]);
+    expect(h.runner.described()).toEqual([]);
+  });
+
+  it('stops waiting for the ask window when cancelled, leaving no timer behind', async () => {
+    const h = harness({ permissions: ['fast:paste'], cardHadFocus: true, foreground: ['card'] });
+    h.runner.take(info(), paste());
+    await flush();
+    expect(h.liveTimers()).toBe(1);
+    h.runner.cancel();
+    await flush();
+    expect(h.liveTimers()).toBe(0);
+    await h.advance(1000);
+    expect(h.of('paste')).toEqual([]);
+    expect(h.of('toast')).toEqual([]);
+  });
+
+  it('says when an event file or a link could not be opened', async () => {
+    const write = harness({ permissions: ['fast:event'], writeFileFails: true });
+    write.runner.take(info(), { tool: 'event', title: 'Dentist', start: '2026-11-05' });
+    await flush();
+    expect(write.of('openPath')).toEqual([]);
+    expect(write.of('toast')).toEqual([t.eventFailed]);
+    expect(write.runner.described()).toEqual([]);
+
+    const bad = harness({ permissions: ['fast:event'] });
+    bad.runner.take(info(), { tool: 'event', title: 'Dentist', start: 'next Friday' });
+    await flush();
+    expect(bad.of('writeFile')).toEqual([]);
+    expect(bad.of('toast')).toEqual([t.eventFailed]);
+
+    const link = harness({ permissions: ['fast:open'], openExternalFails: true });
+    link.runner.take(info(), { tool: 'open', url: 'https://example.com/' });
+    await flush();
+    expect(link.of('toast')).toEqual([t.openFailed]);
+    expect(link.runner.described()).toEqual([]);
+  });
+
+  it('stops an event when cancelled while the calendar app opens', async () => {
+    const h = harness({ permissions: ['fast:event'], hold: true, openPathError: 'No application is associated' });
+    h.runner.take(info(), { tool: 'event', title: 'Dentist', start: '2026-11-05' });
+    await flush();
+    expect(h.of('openPath')).toHaveLength(1);
+    h.runner.cancel();
+    h.release();
+    await flush();
+    expect(h.of('showInFolder')).toEqual([]);
+    expect(h.of('toast')).toEqual([]);
+    expect(h.described).toEqual([]);
+  });
+
+  it('stops a fill when the paste into a refusing field finds the window gone', async () => {
+    const fields = [field('1', 'Name'), field('2', 'Email')];
+    const h = harness({
+      setField: { 1: 'refused' }, clipboardForForms: true, pastes: [{ result: 'window' }],
+    });
+    h.runner.take(info({ fields }), {
+      tool: 'fill', fields: [{ id: '1', value: 'Ada' }, { id: '2', value: 'ada@example.com' }],
+    });
+    await flush();
+    h.runner.onAction('form', { t: 'fill', ids: ['1', '2'], serial: h.preview() });
+    await flush();
+    expect(h.of('setField')).toEqual([{ window: ASK_WINDOW, field: '1', value: 'Ada' }]);
+    expect(h.runner.described()).toEqual([t.didFill(0, 2)]);
   });
 
   it('clicks the field under the spot only when nothing had the keyboard', async () => {
@@ -332,7 +518,7 @@ describe('ActionRunner', () => {
     h.runner.take(info({ focus: null, fields: [reply] }), paste());
     await flush();
     expect(h.of('paste')).toEqual([
-      { window: ASK_WINDOW, text: 'Friday works.', click: { x: 1100, y: 800 }, mode: 'insert', asked: '' },
+      { window: ASK_WINDOW, text: 'Friday works.', click: { x: 1100, y: 800 }, field: '9', mode: 'insert', asked: '' },
     ]);
     // The bubble may be over the point: lolPing's own window there would make the helper refuse.
     expect(h.kinds().indexOf('bubbleHidden')).toBeLessThan(h.kinds().indexOf('paste'));
@@ -366,7 +552,7 @@ describe('ActionRunner', () => {
     });
     await flush();
     // The user unchecked Email.
-    h.runner.onAction('form', { t: 'fill', ids: ['1', '4'] });
+    h.runner.onAction('form', { t: 'fill', ids: ['1', '4'], serial: h.preview() });
     await flush();
     expect(h.of('formHidden')).toHaveLength(1);
     expect(h.of('setField')).toEqual([
@@ -390,7 +576,7 @@ describe('ActionRunner', () => {
     const off = harness({ setField: { 1: 'refused' } });
     off.runner.take(info({ fields: FIELDS }), fill);
     await flush();
-    off.runner.onAction('form', { t: 'fill', ids: ['1'] });
+    off.runner.onAction('form', { t: 'fill', ids: ['1'], serial: off.preview() });
     await flush();
     expect(off.of('paste')).toEqual([]);
     expect(off.of('ping')).toEqual([{ displayId: 1, x: 100, y: 55, id: 'missing', label: 'Name', tag: TAG }]);
@@ -399,10 +585,10 @@ describe('ActionRunner', () => {
     const on = harness({ setField: { 1: 'refused' }, clipboardForForms: true });
     on.runner.take(info({ fields: FIELDS }), fill);
     await flush();
-    on.runner.onAction('form', { t: 'fill', ids: ['1'] });
+    on.runner.onAction('form', { t: 'fill', ids: ['1'], serial: on.preview() });
     await flush();
     expect(on.of('paste')).toEqual([
-      { window: ASK_WINDOW, text: 'Ada', click: { x: 200, y: 110 }, mode: 'insert', asked: '' },
+      { window: ASK_WINDOW, text: 'Ada', click: { x: 200, y: 110 }, field: '1', mode: 'insert', asked: '' },
     ]);
     expect(on.kinds().indexOf('bubbleHidden')).toBeLessThan(on.kinds().indexOf('paste'));
     expect(on.of('ping')).toEqual([{ displayId: 1, x: 100, y: 55, id: 'visioncleared', label: 'Name', tag: TAG }]);
@@ -438,13 +624,13 @@ describe('ActionRunner', () => {
     expect(h.of('consent')[0]).toMatchObject({
       action: 'open', text: t.consentOpen, detail: 'https://example.com/a%20b',
     });
-    h.runner.onAction('consent', { t: 'decline' });
+    h.runner.onAction('consent', { t: 'decline', serial: h.card() });
     await flush();
     expect(h.of('openExternal')).toEqual([]);
 
     h.runner.take(info({ id: 'ask2' }), { tool: 'open', url: 'https://Example.com/a b' });
     await flush();
-    h.runner.onAction('consent', { t: 'allow' });
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
     await flush();
     expect(h.of('openExternal')).toEqual(['https://example.com/a%20b']);
     expect(h.runner.described()).toEqual([t.didOpen]);
@@ -456,13 +642,13 @@ describe('ActionRunner', () => {
     h.runner.take(info(), { tool: 'open', url: 'https://example.com/' });
     await flush();
     expect(h.of('consent')).toHaveLength(1);
-    h.runner.onAction('consent', { t: 'allow' });
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
     await flush();
     expect(h.of('paste')).toHaveLength(1);
     expect((h.of('consent') as ConsentState[]).map((c) => c.action)).toEqual(['paste', 'open']);
     // An answer from the form preview does nothing while a consent card is up; this one is for the open.
-    h.runner.onAction('form', { t: 'cancel' });
-    h.runner.onAction('consent', { t: 'allow' });
+    h.runner.onAction('form', { t: 'cancel', serial: h.preview() });
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
     await flush();
     expect(h.of('openExternal')).toEqual(['https://example.com/']);
   });
@@ -475,7 +661,7 @@ describe('ActionRunner', () => {
     h.runner.cancel();
     expect(h.of('consentHidden')).toHaveLength(1);
     expect(h.runner.putState).toBeNull();
-    h.runner.onAction('consent', { t: 'allow' });
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
     await h.advance(30_000);
     expect(h.of('consent')).toHaveLength(1);
     expect(h.of('paste')).toEqual([]);
@@ -487,7 +673,7 @@ describe('ActionRunner', () => {
     form.runner.take(info({ fields: FIELDS }), { tool: 'fill', fields: [{ id: '1', value: 'Ada' }] });
     await flush();
     form.runner.cancel();
-    form.runner.onAction('form', { t: 'fill', ids: ['1'] });
+    form.runner.onAction('form', { t: 'fill', ids: ['1'], serial: form.preview() });
     await flush();
     expect(form.of('formHidden')).toHaveLength(1);
     expect(form.of('setField')).toEqual([]);

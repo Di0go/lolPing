@@ -101,11 +101,15 @@ export interface FormState {
 
 export type MateState = BubbleState | CardState | WordsState | HistoryState | ConsentState | FormState;
 
-/** What the consent card sends. */
-export type ConsentAction = { t: 'allow' } | { t: 'always' } | { t: 'decline' };
+/**
+ * What the consent card sends, with the serial of the card it was clicked on: a click that arrives after that card
+ * was decided, and another one shown in its place, must not answer the new one.
+ */
+export type ConsentAction =
+  | { t: 'allow'; serial: number } | { t: 'always'; serial: number } | { t: 'decline'; serial: number };
 
-/** What the form preview sends: the ids of the checked rows, or nothing. */
-export type FormAction = { t: 'fill'; ids: string[] } | { t: 'cancel' };
+/** What the form preview sends: the ids of the checked rows, or nothing; with its serial, as the consent card's. */
+export type FormAction = { t: 'fill'; ids: string[]; serial: number } | { t: 'cancel'; serial?: number };
 
 export type MateAction =
   | { t: 'more' }
@@ -166,6 +170,7 @@ const SIZE_LIMITS: Partial<Record<MateView, { minW: number; maxW: number; minH: 
 };
 
 const words = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '' && v.length <= MATE_TEXT_MAX;
+const isSerial = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const threadId = (v: unknown): v is string => typeof v === 'string' && THREAD_ID_RE.test(v);
 
 function webUrl(v: unknown): string | null {
@@ -185,11 +190,13 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'close':
     case 'deep':
     case 'history':
+      return { t: a.t };
     case 'cancel':
+      return isSerial(a.serial) ? { t: 'cancel', serial: a.serial } : { t: 'cancel' };
     case 'allow':
     case 'always':
     case 'decline':
-      return { t: a.t };
+      return isSerial(a.serial) ? { t: a.t, serial: a.serial } : null;
     case 'copy':
       return typeof a.text === 'string' && a.text.length <= MATE_COPY_MAX ? { t: 'copy', text: a.text } : null;
     case 'reply':
@@ -212,7 +219,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
         if (typeof id !== 'string' || id === '' || id.length > FIELD_ID_MAX) return null;
         list.push(id);
       }
-      return { t: 'fill', ids: list };
+      return isSerial(a.serial) ? { t: 'fill', ids: list, serial: a.serial } : null;
     }
     case 'search':
       return typeof a.query === 'string' && a.query.length <= QUERY_MAX ? { t: 'search', query: a.query } : null;
@@ -225,7 +232,10 @@ function parse(a: Record<string, unknown>): MateAction | null {
 export function parseMateAction(raw: unknown, view: MateView): MateAction | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const action = parse(raw as Record<string, unknown>);
-  return action && ALLOWED[view].has(action.t) ? action : null;
+  if (!action || !ALLOWED[view].has(action.t)) return null;
+  // The form preview's Cancel is a decision too: it carries its preview's serial, as every decision does.
+  if (view === 'form' && action.t === 'cancel' && !('serial' in action)) return null;
+  return action;
 }
 
 /** A size a page reported, clamped to its view's limits; null for views with a fixed size or a bad report. */

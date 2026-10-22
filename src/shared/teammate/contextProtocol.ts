@@ -19,7 +19,8 @@ export type ContextCommand =
   }
   | { type: 'foreground'; id: string }
   | {
-    type: 'paste'; id: string; window: string; text: string; click: string; mode: 'insert' | 'replace'; asked: string;
+    type: 'paste'; id: string; window: string; text: string; click: string; field: string; mode: 'insert' | 'replace';
+    asked: string;
   }
   | { type: 'setField'; id: string; window: string; field: string; value: string }
   | { type: 'ping'; id: string }
@@ -45,6 +46,8 @@ export interface PasteRequest {
   window: string;
   text: string;
   click: Point | null;
+  /** The form field a click must land on (FormField.id); without it the helper wants any text field there. */
+  field?: string;
   mode: 'insert' | 'replace';
   asked: string;
 }
@@ -157,6 +160,7 @@ export function pasteCommand(id: string, req: PasteRequest): ContextCommand {
     window: req.window,
     text: helperText(req.text),
     click: req.click ? `${Math.round(req.click.x)},${Math.round(req.click.y)}` : '',
+    field: req.field ?? '',
     mode: req.mode,
     asked: helperText(req.asked),
   };

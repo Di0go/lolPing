@@ -268,22 +268,22 @@ describe('MateWindows consent card', () => {
   it('passes on allow, always and decline, once per card', () => {
     openConsent();
     sendAction(0, { t: 'more' });
-    sendAction(0, { t: 'allow' });
-    sendAction(0, { t: 'allow' });
-    sendAction(0, { t: 'decline' });
-    expect(actions).toEqual([{ view: 'consent', action: { t: 'allow' } }]);
-    mate.showConsent({ x: 500, y: 400 }, consent);
-    sendAction(0, { t: 'always' });
+    sendAction(0, { t: 'allow', serial: 1 });
+    sendAction(0, { t: 'allow', serial: 1 });
+    sendAction(0, { t: 'decline', serial: 1 });
+    expect(actions).toEqual([{ view: 'consent', action: { t: 'allow', serial: 1 } }]);
+    expect(mate.showConsent({ x: 500, y: 400 }, consent)).toBe(2);
+    sendAction(0, { t: 'always', serial: 2 });
     expect(actions).toHaveLength(2);
-    expect(actions[1]).toEqual({ view: 'consent', action: { t: 'always' } });
+    expect(actions[1]).toEqual({ view: 'consent', action: { t: 'always', serial: 2 } });
   });
 
   it('refuses Always allow when the card did not offer it', () => {
     openConsent({ ...consent, action: 'fill', always: false });
-    sendAction(0, { t: 'always' });
+    sendAction(0, { t: 'always', serial: 1 });
     expect(actions).toEqual([]);
-    sendAction(0, { t: 'allow' });
-    expect(actions).toEqual([{ view: 'consent', action: { t: 'allow' } }]);
+    sendAction(0, { t: 'allow', serial: 1 });
+    expect(actions).toEqual([{ view: 'consent', action: { t: 'allow', serial: 1 } }]);
   });
 
   it('updates the card in place and hides it without closing it', async () => {
@@ -307,13 +307,13 @@ describe('MateWindows consent card', () => {
       const w = openConsent();
       mate.hideConsent();
       await vi.advanceTimersByTimeAsync(100); // inside the leave motion
-      sendAction(0, { t: 'allow' });
+      sendAction(0, { t: 'allow', serial: 1 });
       expect(actions).toEqual([]);
       await vi.advanceTimersByTimeAsync(1000);
       mate.showConsent({ x: 500, y: 400 }, consent);
       expect(w.visible).toBe(true);
-      sendAction(0, { t: 'allow' });
-      expect(actions).toEqual([{ view: 'consent', action: { t: 'allow' } }]);
+      sendAction(0, { t: 'allow', serial: 2 });
+      expect(actions).toEqual([{ view: 'consent', action: { t: 'allow', serial: 2 } }]);
     } finally {
       vi.useRealTimers();
     }
@@ -325,6 +325,17 @@ describe('MateWindows consent card', () => {
     mate.updateConsent({ ...consent, detail: 'Second, changed' });
     const serials = w.webContents.send.mock.calls.map(([, state]) => (state as ConsentState).serial);
     expect(serials).toEqual([1, 2, 2]);
+  });
+
+  it('ignores a click meant for the card before, and lets the card now shown decide', () => {
+    openConsent();
+    mate.showConsent({ x: 500, y: 400 }, { ...consent, detail: 'The next one' });
+    // Clicked on the first card just as the second replaced it.
+    sendAction(0, { t: 'allow', serial: 1 });
+    sendAction(0, { t: 'allow' });
+    expect(actions).toEqual([]);
+    sendAction(0, { t: 'decline', serial: 2 });
+    expect(actions).toEqual([{ view: 'consent', action: { t: 'decline', serial: 2 } }]);
   });
 
   it('resizes to the height the page reports and keeps the card beside the spot', () => {
@@ -373,37 +384,40 @@ describe('MateWindows form preview', () => {
 
   it('passes on a fill of listed rows once, with each id once', () => {
     openForm();
-    sendAction(0, { t: 'fill', ids: ['f2', 'f1', 'f2'] });
-    sendAction(0, { t: 'fill', ids: ['f1'] });
-    sendAction(0, { t: 'cancel' });
-    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f2', 'f1'] } }]);
+    sendAction(0, { t: 'fill', ids: ['f2', 'f1', 'f2'], serial: 1 });
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
+    sendAction(0, { t: 'cancel', serial: 1 });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f2', 'f1'], serial: 1 } }]);
   });
 
   it('drops a fill that names a field the preview did not list, and keeps waiting for the user', () => {
     openForm();
-    sendAction(0, { t: 'fill', ids: ['f1', 'f9'] });
-    sendAction(0, { t: 'fill', ids: ['f9'] });
+    sendAction(0, { t: 'fill', ids: ['f1', 'f9'], serial: 1 });
+    sendAction(0, { t: 'fill', ids: ['f9'], serial: 1 });
     expect(actions).toEqual([]);
-    sendAction(0, { t: 'fill', ids: ['f1'] });
-    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f1'] } }]);
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f1'], serial: 1 } }]);
   });
 
   it('takes the listed rows from the latest state it sent', () => {
     openForm();
     mate.updateForm({ ...form, rows: [{ id: 'f3', label: 'Phone', value: '555', checked: true }] });
-    sendAction(0, { t: 'fill', ids: ['f1'] });
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
     expect(actions).toEqual([]);
-    sendAction(0, { t: 'fill', ids: ['f3'] });
-    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f3'] } }]);
+    sendAction(0, { t: 'fill', ids: ['f3'], serial: 1 });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f3'], serial: 1 } }]);
   });
 
   it('passes on a cancel once, and takes a decision again for the next preview', () => {
     openForm();
-    sendAction(0, { t: 'cancel' });
-    sendAction(0, { t: 'fill', ids: ['f1'] });
-    expect(actions).toEqual([{ view: 'form', action: { t: 'cancel' } }]);
-    mate.showForm({ x: 500, y: 400 }, form);
-    sendAction(0, { t: 'fill', ids: ['f1'] });
+    sendAction(0, { t: 'cancel', serial: 1 });
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'cancel', serial: 1 } }]);
+    expect(mate.showForm({ x: 500, y: 400 }, form)).toBe(2);
+    // A click on the preview before is no answer to this one.
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
+    expect(actions).toHaveLength(1);
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 2 });
     expect(actions).toHaveLength(2);
   });
 
@@ -413,7 +427,7 @@ describe('MateWindows form preview', () => {
       const w = openForm();
       mate.hideForm();
       await vi.advanceTimersByTimeAsync(100); // inside the leave motion
-      sendAction(0, { t: 'fill', ids: ['f1'] });
+      sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
       expect(actions).toEqual([]);
       await vi.advanceTimersByTimeAsync(1000);
       expect(w.visible).toBe(false);

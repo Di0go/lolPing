@@ -101,12 +101,14 @@ export class MateWindows extends EventEmitter {
   /**
    * "Paste this into Chrome?" beside the spot `at` (a screen point in DIPs), on the side away from the edge it would
    * leave. It takes clicks but never the keyboard, so the app underneath keeps typing. One decision per card.
+   * Returns the card's serial, which its actions carry.
    */
-  showConsent(at: Point, s: ConsentState): void {
+  showConsent(at: Point, s: ConsentState): number {
     const slot = this.slots.consent;
     slot.ended = false;
     this.shows.consent++;
     this.showPopup('consent', at, this.withSide(slot, at, s));
+    return this.shows.consent;
   }
 
   updateConsent(s: ConsentState): void {
@@ -122,14 +124,15 @@ export class MateWindows extends EventEmitter {
 
   /**
    * "Fill 5 fields in Chrome?" beside the spot `at`, as the consent card: clicks but never the keyboard. One decision
-   * per preview, and a fill may name only the rows of the state last sent.
+   * per preview, and a fill may name only the rows of the state last sent. Returns the preview's serial.
    */
-  showForm(at: Point, s: FormState): void {
+  showForm(at: Point, s: FormState): number {
     const slot = this.slots.form;
     slot.ended = false;
     slot.formIds = new Set(s.rows.map((r) => r.id));
     this.shows.form++;
     this.showPopup('form', at, this.withSide(slot, at, s));
+    return this.shows.form;
   }
 
   updateForm(s: FormState): void {
@@ -410,6 +413,12 @@ export class MateWindows extends EventEmitter {
     if (!action) return;
     // The words box's job ends with an ask or a cancel: it closes, and the keyboard goes back where it was.
     if (view === 'words') return this.endWords(this.slots.words, action);
+    // A click from a card that has since been replaced by the next one is not an answer to the new one.
+    if (view === 'consent' || view === 'form') {
+      const state = this.slots[view].state;
+      const serial = state?.view === view ? state.serial : undefined;
+      if (!('serial' in action) || action.serial !== serial) return;
+    }
     if (view === 'consent') {
       const slot = this.slots.consent;
       // One decision per card, and no Always allow for a card that didn't offer it.
@@ -422,7 +431,7 @@ export class MateWindows extends EventEmitter {
       if (action.t === 'fill') {
         // Only rows the preview listed, each once. A fill naming anything else is not the user's choice: stay open.
         if (!action.ids.every((id) => slot.formIds.has(id))) return;
-        action = { t: 'fill', ids: [...new Set(action.ids)] };
+        action = { ...action, ids: [...new Set(action.ids)] };
       }
       slot.ended = true;
     }

@@ -75,6 +75,8 @@ export function FormPreview({ s, t, act, leaving }: {
   const send = (a: MateAction): void => {
     if (!leaving) act(a);
   };
+  // Main drops a click whose serial isn't the preview on screen now.
+  const serial = s.serial ?? 0;
   const left = s.side === 'left';
   const enter = left ? m.slideInLeft : m.slideInRight;
   const leave = leaving ? (left ? m.slideOutLeft : m.slideOutRight) : undefined;
@@ -121,11 +123,11 @@ export function FormPreview({ s, t, act, leaving }: {
             size="small"
             appearance="primary"
             disabled={ids.length === 0}
-            onClick={() => send({ t: 'fill', ids })}
+            onClick={() => send({ t: 'fill', ids, serial })}
           >
             {t.formFill(ids.length)}
           </Button>
-          <Button size="small" onClick={() => send({ t: 'cancel' })}>{t.formCancel}</Button>
+          <Button size="small" onClick={() => send({ t: 'cancel', serial })}>{t.formCancel}</Button>
         </div>
         <Caption1 className={st.note}>{t.formNote}</Caption1>
       </FluentCard>

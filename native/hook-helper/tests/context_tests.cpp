@@ -1270,6 +1270,28 @@ static void test_paste_clicks_presses_ctrl_v_and_restores_a_second_later() {
   CHECK(!moved->saw("ctrl+v") && moved->writes.size() == 2);
 }
 
+static void test_paste_clicks_only_on_the_field_it_was_meant_for() {
+  const auto run = [](const std::function<void(PasteState&)>& set, const std::string& extra) {
+    const auto s = std::make_shared<PasteState>();
+    set(*s);
+    const std::string result = pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200",)" + extra));
+    // A refused click touches nothing: no clipboard, no click, no Ctrl+V.
+    if (result != "ok") CHECK(!s->saw("open") && !s->saw("click") && !s->saw("ctrl+v"));
+    return result;
+  };
+  const std::string reply = R"("field":"42.7.1",)";
+  CHECK(parseCommand(pasteLine(R"("click":"-1820,200",)" + reply)).paste.field == "42.7.1");
+  CHECK(run([](PasteState& s) { s.atClick.id = "42.7.1"; }, reply) == "ok");
+  // The page moved since the ask: another element is under the point now.
+  CHECK(run([](PasteState& s) { s.atClick.id = "42.7.9"; }, reply) == "window");
+  CHECK(run([](PasteState& s) { s.atClick = FieldFacts{"other", "Send", false, "42.7.1"}; }, R"("field":"",)") ==
+        "window");
+  // Without an id the point must still be on a text field, never a button.
+  CHECK(run([](PasteState& s) { s.atClick = FieldFacts{"other", "Send", false, "9.9"}; }, "") == "window");
+  CHECK(run([](PasteState& s) { s.atClick = FieldFacts{"multiline", "Notes", false, "9.9"}; }, "") == "ok");
+  CHECK(parseCommand(pasteLine(R"("field":")" + std::string(121, '1') + R"(",)")).kind == Command::Kind::Bad);
+}
+
 static void test_paste_checks_again_right_before_the_click() {
   const std::vector<ClipFormat> mine = {format(0xC09E, "HTML Format", "<i>mine</i>")};
   // The click point now lands in another window (the field scrolled away, a window opened over it).
@@ -1416,6 +1438,7 @@ int main() {
   test_hands_off_ignores_released_keys();
   test_paste_gives_up_on_a_busy_clipboard();
   test_paste_clicks_presses_ctrl_v_and_restores_a_second_later();
+  test_paste_clicks_only_on_the_field_it_was_meant_for();
   test_paste_checks_again_right_before_the_click();
   test_paste_finishes_inside_its_deadline();
   test_paste_puts_the_clipboard_back_or_says_it_could_not();

@@ -242,6 +242,8 @@ Command parsePaste(const Fields& m, const std::string& id) {
   if (r.replace && r.click) return bad(id, "a replace has no click");
   stringField(m, "asked", r.asked);
   if (charCount(r.asked) > kSelectionMax) return bad(id, "asked is too long");
+  stringField(m, "field", r.field);
+  if (r.field.size() > kFieldIdMax) return bad(id, "field is too long");
   return c;
 }
 
@@ -1112,6 +1114,7 @@ struct PasteChecks {
   std::atomic<bool> secureChecked{false};
   bool secure = true;
   bool selectionHolds = false;
+  bool onField = true;  // the element under the click is the field meant
 };
 
 // Text as the paste command carries it: without the control characters the client leaves out (helperText in
@@ -1183,15 +1186,19 @@ Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
   const bool replace = r.replace;
   const std::string asked = comparable(r.asked);
   const std::optional<Point> click = r.click;
+  const std::string expected = r.field;
   // Any of these can block on an app that stopped answering after the check above: they get a deadline of their own,
   // and one that can't answer in time, or at all, refuses the paste.
   const bool done = runWithBudget(
-      [checks, selection, facts, replace, asked, click] {
+      [checks, selection, facts, replace, asked, click, expected] {
         FieldFacts focus;
         bool secure = !facts(std::nullopt, focus) || secureField(focus);
         if (!secure && click) {
           FieldFacts under;
           secure = !facts(click, under) || secureField(under);
+          // The page may have moved since the ask: a click lands only on the field it was meant for, never on a
+          // button that took its place.
+          checks->onField = expected.empty() ? under.kind == "text" || under.kind == "multiline" : under.id == expected;
         }
         checks->secure = secure;
         checks->secureChecked = true;
@@ -1202,6 +1209,7 @@ Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
       budgetMs * 4 / 5);
   if (!done) return reply(checks->secureChecked ? "selection" : "secure", true);
   if (checks->secure) return reply("secure");
+  if (!checks->onField) return reply("window");
   if (replace && !checks->selectionHolds) return reply("selection");
 
   if (!openClipboardSoon(p)) return reply("busy");

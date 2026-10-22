@@ -48,6 +48,7 @@ struct PasteRequest {
   std::string window;           // the foreground reply's window id
   std::string text;             // UTF-8, 1 to kPasteTextMax characters
   std::optional<Point> click;   // clicked first to put the caret in the field; insert only
+  std::string field;            // the field the click must land on (RawField::id); empty: any text field
   bool replace = false;         // replace pastes only while the selection still holds `asked`
   std::string asked;
 };
@@ -113,11 +114,12 @@ constexpr int kRestoreReserveMs = 500;
  */
 constexpr int kPasteDeadlineMs = 5500;
 
-/** What a write needs to know about a field first: its kind (RawField's), label and password flag. */
+/** What a write needs to know about a field first: its kind (RawField's), label, password flag and runtime id. */
 struct FieldFacts {
   std::string kind;
   std::string label;
   bool secure = false;
+  std::string id;
 };
 
 constexpr int kMaxSpots = 4;

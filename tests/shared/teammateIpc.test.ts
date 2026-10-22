@@ -12,15 +12,15 @@ const SAMPLES: Record<string, unknown> = {
   history: { t: 'history' },
   link: { t: 'link', url: 'https://example.com/a' },
   ask: { t: 'ask', text: 'what is this?', newThread: true },
-  cancel: { t: 'cancel' },
+  cancel: { t: 'cancel', serial: 1 },
   open: { t: 'open', id: 'a1b2-c3' },
   continue: { t: 'continue', id: 'a1b2-c3' },
   delete: { t: 'delete', id: 'a1b2-c3' },
   search: { t: 'search', query: 'invoice' },
-  allow: { t: 'allow' },
-  always: { t: 'always' },
-  decline: { t: 'decline' },
-  fill: { t: 'fill', ids: ['f1', 'f2'] },
+  allow: { t: 'allow', serial: 1 },
+  always: { t: 'always', serial: 1 },
+  decline: { t: 'decline', serial: 1 },
+  fill: { t: 'fill', ids: ['f1', 'f2'], serial: 1 },
 };
 const ALLOWED: Record<MateView, string[]> = {
   bubble: ['more', 'dismiss'],
@@ -42,26 +42,42 @@ describe('parseMateAction', () => {
   });
 
   it('accepts only allow, always and decline from the consent view', () => {
-    for (const t of ['allow', 'always', 'decline']) expect(parseMateAction({ t }, 'consent')).toEqual({ t });
+    for (const t of ['allow', 'always', 'decline']) {
+      expect(parseMateAction({ t, serial: 3 }, 'consent')).toEqual({ t, serial: 3 });
+    }
     for (const t of ['more', 'dismiss', 'close', 'cancel', 'deep', 'history', 'copy', 'reply', 'ask', 'open', 'delete', 'search', 'link']) {
       expect(parseMateAction(SAMPLES[t], 'consent'), t).toBeNull();
     }
     for (const view of ['bubble', 'card', 'words', 'history'] as const) {
-      for (const t of ['allow', 'always', 'decline']) expect(parseMateAction({ t }, view), `${view} ${t}`).toBeNull();
+      for (const t of ['allow', 'always', 'decline']) {
+        expect(parseMateAction({ t, serial: 1 }, view), `${view} ${t}`).toBeNull();
+      }
     }
-    expect(parseMateAction({ t: 'allow', extra: 1 }, 'consent')).toEqual({ t: 'allow' });
-    expect(parseMateAction({ t: 'Allow' }, 'consent')).toBeNull();
+    expect(parseMateAction({ t: 'allow', serial: 0, extra: 1 }, 'consent')).toEqual({ t: 'allow', serial: 0 });
+    expect(parseMateAction({ t: 'Allow', serial: 1 }, 'consent')).toBeNull();
+  });
+
+  it('takes a decision only with the serial of the card it was clicked on', () => {
+    for (const serial of [undefined, -1, 1.5, '1', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(parseMateAction({ t: 'allow', serial }, 'consent'), String(serial)).toBeNull();
+      expect(parseMateAction({ t: 'fill', ids: ['f1'], serial }, 'form'), String(serial)).toBeNull();
+      expect(parseMateAction({ t: 'cancel', serial }, 'form'), String(serial)).toBeNull();
+    }
+    // The words box's Cancel decides nothing that could be replaced: it needs none.
+    expect(parseMateAction({ t: 'cancel' }, 'words')).toEqual({ t: 'cancel' });
   });
 
   it('accepts fill with known ids only', () => {
-    expect(parseMateAction({ t: 'fill', ids: ['f1', 'f2'] }, 'form')).toEqual({ t: 'fill', ids: ['f1', 'f2'] });
-    expect(parseMateAction({ t: 'fill', ids: ['f1'], extra: 1 }, 'form')).toEqual({ t: 'fill', ids: ['f1'] });
+    expect(parseMateAction({ t: 'fill', ids: ['f1', 'f2'], serial: 2 }, 'form'))
+      .toEqual({ t: 'fill', ids: ['f1', 'f2'], serial: 2 });
+    expect(parseMateAction({ t: 'fill', ids: ['f1'], serial: 2, extra: 1 }, 'form'))
+      .toEqual({ t: 'fill', ids: ['f1'], serial: 2 });
     for (const ids of [[], 'f1', [1], ['f1', null], [''], ['x'.repeat(201)], Array.from({ length: 61 }, (_, i) => `f${i}`)]) {
-      expect(parseMateAction({ t: 'fill', ids }, 'form'), JSON.stringify(ids)).toBeNull();
+      expect(parseMateAction({ t: 'fill', ids, serial: 2 }, 'form'), JSON.stringify(ids)).toBeNull();
     }
-    expect(parseMateAction({ t: 'fill' }, 'form')).toBeNull();
+    expect(parseMateAction({ t: 'fill', serial: 2 }, 'form')).toBeNull();
     for (const view of ['bubble', 'card', 'words', 'history', 'consent'] as const) {
-      expect(parseMateAction({ t: 'fill', ids: ['f1'] }, view), view).toBeNull();
+      expect(parseMateAction({ t: 'fill', ids: ['f1'], serial: 2 }, view), view).toBeNull();
     }
   });
 

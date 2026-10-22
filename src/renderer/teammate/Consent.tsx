@@ -58,6 +58,8 @@ export function Consent({ s, t, act, leaving }: {
   const send = (a: MateAction): void => {
     if (!leaving) act(a);
   };
+  // Main drops a click whose serial isn't the card on screen now.
+  const serial = s.serial ?? 0;
   const left = s.side === 'left';
   const enter = left ? m.slideInLeft : m.slideInRight;
   const leave = leaving ? (left ? m.slideOutLeft : m.slideOutRight) : undefined;
@@ -72,9 +74,9 @@ export function Consent({ s, t, act, leaving }: {
         <Text className={st.text}>{s.text}</Text>
         {s.detail && <Caption1 className={st.detail}>{s.detail}</Caption1>}
         <div className={st.buttons}>
-          <Button size="small" appearance="primary" onClick={() => send({ t: 'allow' })}>{t.allowOnce}</Button>
-          {s.always && <Button size="small" onClick={() => send({ t: 'always' })}>{t.alwaysAllow}</Button>}
-          <Button size="small" onClick={() => send({ t: 'decline' })}>{t.decline}</Button>
+          <Button size="small" appearance="primary" onClick={() => send({ t: 'allow', serial })}>{t.allowOnce}</Button>
+          {s.always && <Button size="small" onClick={() => send({ t: 'always', serial })}>{t.alwaysAllow}</Button>}
+          <Button size="small" onClick={() => send({ t: 'decline', serial })}>{t.decline}</Button>
         </div>
         <div
           className={st.bar}

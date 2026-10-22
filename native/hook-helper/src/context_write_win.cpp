@@ -449,6 +449,7 @@ FieldFacts factsOf(IUIAutomation* uia, IUIAutomationElement* el) {
   el->get_CurrentControlType(&type);
   f.kind = fieldKind(type);
   f.label = currentLabel(el);
+  f.id = runtimeIdOf(el);
   bool secure = false;
   f.secure = !readableElement(uia, el, secure) || secure;
   return f;

@@ -89,6 +89,8 @@ type Waiting =
 
 interface Shown {
   item: Waiting;
+  /** The serial the window gave the card or preview: an answer carrying another one was meant for an earlier card. */
+  serial: number;
   stop: () => void;
   /** The rows and left fields the form preview lists. */
   preview: { rows: PreviewRow[]; left: LeftField[] } | null;
@@ -147,6 +149,8 @@ export class ActionRunner extends EventEmitter {
   private ask: string | null = null;
   private done: string[] = [];
   private abort = new AbortController();
+  /** Ends the foreground poll's wait at once: cancel() must not leave a timer behind. */
+  private wake: (() => void) | null = null;
   private files = 0;
 
   constructor(private readonly deps: ActionDeps) {
@@ -207,6 +211,8 @@ export class ActionRunner extends EventEmitter {
     const shown = this.shown;
     if (!shown) return;
     const { item } = shown;
+    // A click that left an earlier card as this one replaced it is not an answer to this one.
+    if (a.serial !== shown.serial) return;
     if (view === 'consent' && item.kind === 'consent') {
       if (a.t !== 'allow' && a.t !== 'always' && a.t !== 'decline') return;
       this.closeShown();
@@ -228,6 +234,7 @@ export class ActionRunner extends EventEmitter {
   cancel(): void {
     this.abort.abort();
     this.abort = new AbortController();
+    this.wake?.();
     this.queue = [];
     this.closeShown();
     this.busy = false;
@@ -277,8 +284,8 @@ export class ActionRunner extends EventEmitter {
     const { run, call } = item;
     switch (call.tool) {
       case 'paste': return this.paste(run, call, signal);
-      case 'event': return this.event(run, call);
-      case 'open': return this.open(run, call);
+      case 'event': return this.event(run, call, signal);
+      case 'open': return this.open(run, call, signal);
     }
   }
 
@@ -289,7 +296,7 @@ export class ActionRunner extends EventEmitter {
     let text = t.consentOpen;
     if (call.tool === 'paste') text = call.mode === 'replace' ? t.consentReplace(app) : t.consentPaste(app);
     else if (call.tool === 'event') text = t.consentEvent;
-    this.deps.windows.showConsent(run.at, {
+    const serial = this.deps.windows.showConsent(run.at, {
       view: 'consent', lang: run.lang, tag: run.tag, action: item.action, text, detail: detailOf(call), always: true,
       seconds: CONSENT_MS / 1000,
     });
@@ -298,16 +305,16 @@ export class ActionRunner extends EventEmitter {
       this.closeShown(); // a Decline
       this.pump();
     });
-    this.shown = { item, stop, preview: null };
+    this.shown = { item, serial, stop, preview: null };
   }
 
   private showPreview(item: Extract<Waiting, { kind: 'form' }>): void {
     const { run, call } = item;
     const preview = formPreview(run.fields, call.fields);
-    this.deps.windows.showForm(run.at, {
+    const serial = this.deps.windows.showForm(run.at, {
       view: 'form', lang: run.lang, tag: run.tag, app: run.app || strings(run.lang).teammate.ui.thisApp, ...preview,
     });
-    this.shown = { item, stop: () => undefined, preview };
+    this.shown = { item, serial, stop: () => undefined, preview };
   }
 
   private closeShown(): void {
@@ -373,6 +380,8 @@ export class ActionRunner extends EventEmitter {
     const t = strings(run.lang).teammate.ui;
     const field = fieldAt(run);
     const secure = (run.focus !== null && neverFill(run.focus)) || (field !== null && neverFill(field));
+    // Without the ask's window there is nothing to paste into: say so plainly, not that the user moved.
+    if (run.window === '') return this.copyInstead(run, call.text, 'failed');
     const sameWindow = await this.askWindowInFront(run, signal);
     if (signal.aborted) return;
     // The helper compares the live selection with the asked one; here it only matters that there was one.
@@ -388,7 +397,7 @@ export class ActionRunner extends EventEmitter {
     let reply: Awaited<ReturnType<ActionDeps['context']['paste']>>;
     try {
       reply = await this.deps.context.paste({
-        window: run.window, text: call.text, click, mode: call.mode,
+        window: run.window, text: call.text, click, ...(click && field ? { field: field.id } : {}), mode: call.mode,
         asked: call.mode === 'replace' ? run.selection : '',
       }, signal);
     } catch {
@@ -409,6 +418,8 @@ export class ActionRunner extends EventEmitter {
 
   private async copyInstead(run: RunInfo, text: string, why: CopyWhy, extra = ''): Promise<void> {
     const t = strings(run.lang).teammate.ui;
+    // A password field stays one: a later click on Paste would only copy again.
+    if (why === 'secure') this.setPut(null);
     if (!(await this.write(run, { text }, extra))) return;
     this.toast(run, whyCopied(t, why, run.app || t.thisApp), extra);
     this.describe(run, t.didCopyText(lineCount(text)));
@@ -427,7 +438,15 @@ export class ActionRunner extends EventEmitter {
       if (run.window !== '' && front?.window === run.window) return true;
       if (signal.aborted || this.deps.now() >= until) return false;
       await new Promise<void>((resolve) => {
-        this.deps.timer(FRONT_POLL_MS, resolve);
+        const stop = this.deps.timer(FRONT_POLL_MS, () => {
+          this.wake = null;
+          resolve();
+        });
+        this.wake = () => {
+          this.wake = null;
+          stop();
+          resolve();
+        };
       });
     }
   }
@@ -459,10 +478,10 @@ export class ActionRunner extends EventEmitter {
       if (signal.aborted) return;
       const text = field.kind === 'text' || field.kind === 'multiline';
       if (result === 'refused' && forms && text && field.box) {
-        const pasted = await this.pasteInto(run, field.box, row.value, signal);
+        const pasted = await this.pasteInto(run, field, field.box, row.value, signal);
         if (signal.aborted) return;
         lost ||= !pasted.restored;
-        result = pasted.ok ? 'ok' : 'refused';
+        result = pasted.result;
       }
       if (result === 'ok') filled.push(field);
       else failed.push(field);
@@ -483,15 +502,17 @@ export class ActionRunner extends EventEmitter {
 
   /** A text field that refuses its value gets it by the clipboard route, with a click on the field. */
   private async pasteInto(
-    run: RunInfo, box: Rect, text: string, signal: AbortSignal,
-  ): Promise<{ ok: boolean; restored: boolean }> {
+    run: RunInfo, field: FormField, box: Rect, text: string, signal: AbortSignal,
+  ): Promise<{ result: 'ok' | 'refused' | 'window' | 'hung' | 'error'; restored: boolean }> {
     this.deps.windows.hideBubble();
     try {
       const r = await this.deps.context.paste(
-        { window: run.window, text, click: centre(box), mode: 'insert', asked: '' }, signal);
-      return { ok: r.result === 'ok', restored: r.restored };
+        { window: run.window, text, click: centre(box), field: field.id, mode: 'insert', asked: '' }, signal);
+      // A window that went away or stopped answering stops the fill, as it does for setField.
+      const result = r.result === 'ok' || r.result === 'window' || r.result === 'hung' ? r.result : 'refused';
+      return { result, restored: r.restored };
     } catch {
-      return { ok: false, restored: true };
+      return { result: 'error', restored: true };
     }
   }
 
@@ -514,24 +535,39 @@ export class ActionRunner extends EventEmitter {
     }
   }
 
-  private async event(run: RunInfo, call: EventCall): Promise<void> {
+  private async event(run: RunInfo, call: EventCall, signal: AbortSignal): Promise<void> {
     const t = strings(run.lang).teammate.ui;
     const now = this.deps.now();
     this.files += 1;
     const ics = eventIcs(call, { uid: `${now}-${this.files}@lolping`, now, zoneOffset: this.deps.zoneOffset });
-    if (ics === null) return;
+    if (ics === null) return this.toast(run, t.eventFailed);
     const file = join(this.deps.tempDir(), `event-${now}-${this.files}.ics`);
-    await this.deps.writeFile(file, ics);
+    try {
+      await this.deps.writeFile(file, ics);
+    } catch {
+      if (!signal.aborted) this.toast(run, t.eventFailed);
+      return;
+    }
+    if (signal.aborted) return;
+    const error = await this.deps.openPath(file);
+    if (signal.aborted) return;
     // No app took the file (no calendar app): show it, so the user can open it themselves.
-    if ((await this.deps.openPath(file)) !== '') {
+    if (error !== '') {
       this.deps.showInFolder(file);
       this.toast(run, t.eventOpenFile);
     }
     this.describe(run, t.didEvent);
   }
 
-  private async open(run: RunInfo, call: Open): Promise<void> {
-    await this.deps.openExternal(new URL(call.url).href);
-    this.describe(run, strings(run.lang).teammate.ui.didOpen);
+  private async open(run: RunInfo, call: Open, signal: AbortSignal): Promise<void> {
+    const t = strings(run.lang).teammate.ui;
+    try {
+      await this.deps.openExternal(new URL(call.url).href);
+    } catch {
+      if (!signal.aborted) this.toast(run, t.openFailed);
+      return;
+    }
+    if (signal.aborted) return;
+    this.describe(run, t.didOpen);
   }
 }

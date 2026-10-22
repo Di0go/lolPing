@@ -251,10 +251,15 @@ describe('contextProtocol', () => {
     expect(pasteCommand('r1', {
       window: '263544', text: 'line one\nline two', click: { x: 10.6, y: -20 }, mode: 'insert', asked: '',
     })).toEqual({
-      type: 'paste', id: 'r1', window: '263544', text: 'line one\nline two', click: '11,-20', mode: 'insert', asked: '',
+      type: 'paste', id: 'r1', window: '263544', text: 'line one\nline two', click: '11,-20', field: '', mode: 'insert',
+      asked: '',
     });
     expect(pasteCommand('r2', { window: '1', text: 'better', click: null, mode: 'replace', asked: 'old' }))
       .toMatchObject({ click: '', mode: 'replace', asked: 'old' });
+    // The field a click is meant for goes along, so the helper can refuse when something else is under the point.
+    const click = { x: 5, y: 6 };
+    expect(pasteCommand('r3', { window: '1', text: 'Ada', click, field: '42.7.1', mode: 'insert', asked: '' }))
+      .toMatchObject({ click: '5,6', field: '42.7.1' });
   });
 
   it('flattens a setField command', () => {
