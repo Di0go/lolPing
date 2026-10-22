@@ -262,8 +262,9 @@ function PermissionsCard({ s, patch }: { s: TeammateSettings; patch: Patch }) {
       </div>
       {rows.map((r) => (
         <div key={r.key} className="mateRead">
+          <span className="icon" />
           <div className="lbl">{r.text}</div>
-          <Button size="small" appearance="subtle" aria-label={`${m.permissionRemove}: ${r.text}`}
+          <Button size="small" appearance="subtle" aria-label={m.permissionRemoveLabel(r.text)}
             onClick={() => patch({ permissions: s.permissions.filter((p) => p !== r.key) })}>
             {m.permissionRemove}
           </Button>

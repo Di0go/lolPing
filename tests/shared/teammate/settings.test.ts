@@ -87,7 +87,7 @@ describe('normalizeTeammate', () => {
   it('drops permissions for a missing profile or an unknown action', () => {
     const t = normalizeTeammate({
       profiles: [validProfile],
-      permissions: ['a:paste', 'a:open', 'gone:paste', 'a:shred', 'a:', ':paste', 'a', 'a:paste', 7, null, 'a:event'],
+      permissions: ['a:paste', 'a:fill', 'a:open', 'gone:paste', 'a:shred', 'a:', ':paste', 'a', 'a:paste', 7, null, 'a:event'],
     }, win);
     expect(t.permissions).toEqual(['a:paste', 'a:open', 'a:event']);
   });

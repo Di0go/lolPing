@@ -3,7 +3,7 @@ import { isPingId, type PingId } from '../pings';
 import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from '../roomColors';
 import { sanitizeName } from '../roomProtocol';
 import type { EmoteTriggerKey, NamedTrigger, TriggerKey } from '../settings';
-import { parsePermissionKey } from './doRules';
+import { allowed, parsePermissionKey } from './doRules';
 import { PROVIDER_IDS, type ProviderId } from './providers';
 
 /** The ask key: a trigger key of its own, or the ping key ('same'). */
@@ -196,7 +196,8 @@ export function normalizeTeammate(
     ? r.permissions.filter((p): p is string => {
       if (typeof p !== 'string' || p.length > 200) return false;
       const k = parsePermissionKey(p);
-      return k !== null && known(k.profileId) !== null;
+      // allowed() refuses fill, which never gets Always allow.
+      return k !== null && allowed([p], k.profileId, k.action) && known(k.profileId) !== null;
     })
     : [];
   return {
