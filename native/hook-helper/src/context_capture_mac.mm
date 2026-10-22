@@ -13,6 +13,10 @@
 #include "context.h"
 
 namespace lp::ctx {
+
+// In context_write_mac.mm: the id of the app's topmost normal window, which the paste and setField commands name.
+std::string frontWindowId(pid_t pid);
+
 namespace {
 
 // One deadline for the whole grab (listing + screenshot), short of the main process's 3 s request timeout,
@@ -234,12 +238,13 @@ bool foreground(std::string& app, std::string& title, std::string& windowId, Fai
   @autoreleasepool {
     app.clear();
     title.clear();
-    windowId.clear();  // the window number comes with the macOS form-filling port
+    windowId.clear();
     // NSWorkspace learns about app switches from run loop notifications; this process blocks on stdin otherwise.
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate date]];
     NSRunningApplication* front = NSWorkspace.sharedWorkspace.frontmostApplication;
     if (!front) return true;
     if (front.localizedName) app = front.localizedName.UTF8String;
+    windowId = frontWindowId(front.processIdentifier);
     AXUIElementRef el = AXUIElementCreateApplication(front.processIdentifier);
     if (!el) return true;
     AXUIElementSetMessagingTimeout(el, 1.0f);  // a hung app must not stall the reply
@@ -265,6 +270,9 @@ bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<Raw
 bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail);
 bool elementBoxes(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail);
 bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail);
+// The form fields and the writes, in context_write_mac.mm.
+bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, Failure& fail);
+void addWriting(ContextPlatform& p);
 
 ContextPlatform nativePlatform() {
   NSApplicationLoad();  // a command-line process needs a window server connection for ScreenCaptureKit
@@ -277,6 +285,8 @@ ContextPlatform nativePlatform() {
   p.systemText = systemTextAt;
   p.fileOf = fileBehindWindow;
   p.boxes = elementBoxes;
+  p.formFields = formFieldsAt;
+  addWriting(p);
   return p;
 }
 

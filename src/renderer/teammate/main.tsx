@@ -81,7 +81,7 @@ function Root() {
   );
 
   const lang = state?.lang ?? 'en';
-  const t = strings(lang);
+  const t = strings(lang, api.platform);
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dataset.view = VIEW;

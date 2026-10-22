@@ -89,6 +89,25 @@ describe('language', () => {
     expect(strings('en', 'mac')).toBe(en); // stable identity: the settings page uses it as a React dependency
   });
 
+  it('names ⌘Z for undo on a Mac and Ctrl + Z elsewhere, in both languages', () => {
+    for (const platform of ['win', 'linux'] as const) {
+      for (const lang of ['en', 'zh-CN'] as const) {
+        const ui = strings(lang, platform).teammate.ui;
+        expect(ui.pasted, `${lang} ${platform} pasted`).toContain('Ctrl + Z');
+        expect(ui.formNote, `${lang} ${platform} note`).toContain('Ctrl + Z');
+      }
+    }
+    for (const lang of ['en', 'zh-CN'] as const) {
+      const ui = strings(lang, 'mac').teammate.ui;
+      expect(ui.pasted, `${lang} pasted`).toContain('⌘Z');
+      expect(ui.formNote, `${lang} note`).toContain('⌘Z');
+      expect(`${ui.pasted}${ui.formNote}`, lang).not.toContain('Ctrl');
+      expect(ui.formFill(2), lang).toBe(strings(lang).teammate.ui.formFill(2));
+    }
+    expect(strings('en', 'mac').teammate.ui.pasted).toBe('Pasted. ⌘Z to undo.');
+    expect(strings('zh-CN', 'mac').teammate.ui.pasted).toMatch(/。$/);
+  });
+
   it('words the update checker as specified, with a menu bar toast on a Mac', () => {
     const en = strings('en');
     expect(en.updateAvailable('0.5.1')).toBe('lolPing 0.5.1 is available');

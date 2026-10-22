@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ActionRunner, type ActionDeps, type RunInfo } from '../../../src/main/teammate/actions';
 import { strings } from '../../../src/shared/i18n';
+import type { Platform } from '../../../src/shared/platform';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
 import type { PasteRequest, PasteResult, SetFieldResult } from '../../../src/shared/teammate/contextProtocol';
 import type { FormField } from '../../../src/shared/teammate/doRules';
@@ -51,6 +52,7 @@ interface Options {
   hold?: boolean;
   writeFileFails?: boolean;
   openExternalFails?: boolean;
+  platform?: Platform;
 }
 
 /** Lets every pending promise settle, without moving the clock. */
@@ -139,6 +141,7 @@ function harness(opts: Options = {}) {
       toLocal: (p) => ({ displayId: 1, x: p.x / 2, y: p.y / 2 }),
       glow: (boxes, tag) => log.push(['glow', { boxes, tag }]),
     },
+    platform: opts.platform ?? 'win',
     zoneOffset: () => 0,
     now: () => clock,
     timer: (ms, fn) => {
@@ -395,6 +398,15 @@ describe('ActionRunner', () => {
     // Two sentences, each with its full stop.
     expect(h.of('toast')).toEqual(['Pasted. Ctrl + Z to undo. Your clipboard couldn’t be restored.']);
     expect(strings('zh-CN').teammate.ui.pasted).toMatch(/。$/);
+  });
+
+  it('names the undo key of the OS it runs on', async () => {
+    for (const [platform, toast] of [['win', 'Pasted. Ctrl + Z to undo.'], ['mac', 'Pasted. ⌘Z to undo.']] as const) {
+      const h = harness({ permissions: ['fast:paste'], platform });
+      h.runner.take(info(), paste());
+      await flush();
+      expect(h.of('toast'), platform).toEqual([toast]);
+    }
   });
 
   it('names the reason for each paste the helper refused, and copies instead', async () => {

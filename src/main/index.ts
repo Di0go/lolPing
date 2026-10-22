@@ -768,6 +768,7 @@ function start(): void {
         hideBubble: () => controller.hideBubbleForPut(),
       },
       overlay: overlays,
+      platform: PLATFORM,
       zoneOffset: (d) => -d.getTimezoneOffset(),
       now: Date.now,
       timer: (ms, fn) => {

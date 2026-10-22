@@ -12,7 +12,8 @@ case "$(uname -s)" in
       src/output.cpp src/json.cpp src/decision.cpp \
       -framework ApplicationServices -framework CoreFoundation -o build/hook-helper
     "$CXX" $FLAGS -fobjc-arc -O2 src/context_main_posix.cpp src/context_capture_mac.mm src/context_text_mac.mm \
-      src/context.cpp src/json.cpp -framework ScreenCaptureKit -framework CoreGraphics -framework ImageIO -framework AppKit \
+      src/context_write_mac.mm src/context.cpp src/json.cpp -framework ScreenCaptureKit -framework CoreGraphics \
+      -framework ImageIO -framework AppKit \
       -framework ApplicationServices -framework CoreFoundation -o build/context-helper
     ;;
   Linux)

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { strings, type Lang, type Strings } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
+import type { Platform } from '../../shared/platform';
 import type { Settings } from '../../shared/settings';
 import type { PasteResult } from '../../shared/teammate/contextProtocol';
 import type { Rect } from '../../shared/teammate/coords';
@@ -71,6 +72,8 @@ export interface ActionDeps {
   windows: Pick<MateWindows,
     'showConsent' | 'hideConsent' | 'showForm' | 'hideForm' | 'cardHadFocus' | 'hideCard' | 'hideBubble'>;
   overlay: Pick<OverlayManager, 'toast' | 'spawnMate' | 'toLocal' | 'glow'>;
+  /** Which OS the toasts are worded for (the undo key). */
+  platform: Platform;
   /** The local time minus UTC in minutes on a date, for event files. */
   zoneOffset: (d: Date) => number;
   now: () => number;
@@ -285,9 +288,13 @@ export class ActionRunner extends EventEmitter {
     }
   }
 
+  private text(run: RunInfo): Strings['teammate']['ui'] {
+    return strings(run.lang, this.deps.platform).teammate.ui;
+  }
+
   private showConsent(item: Extract<Waiting, { kind: 'consent' }>): void {
     const { run, call } = item;
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     const app = run.app || t.thisApp;
     let text = t.consentOpen;
     if (call.tool === 'paste') text = call.mode === 'replace' ? t.consentReplace(app) : t.consentPaste(app);
@@ -308,7 +315,7 @@ export class ActionRunner extends EventEmitter {
     const { run, call } = item;
     const preview = formPreview(run.fields, call.fields);
     const serial = this.deps.windows.showForm(run.at, {
-      view: 'form', lang: run.lang, tag: run.tag, app: run.app || strings(run.lang).teammate.ui.thisApp, ...preview,
+      view: 'form', lang: run.lang, tag: run.tag, app: run.app || this.text(run).thisApp, ...preview,
     });
     this.shown = { item, serial, stop: () => undefined, preview };
   }
@@ -348,7 +355,7 @@ export class ActionRunner extends EventEmitter {
   }
 
   private async copy(run: RunInfo, call: Copy): Promise<void> {
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     if ('table' in call) {
       const rows = call.table.length;
       const cols = call.table[0]?.length ?? 0;
@@ -367,14 +374,14 @@ export class ActionRunner extends EventEmitter {
       await this.deps.clipboard.write(item);
       return true;
     } catch {
-      this.toast(run, strings(run.lang).teammate.ui.copyFailed, extra);
+      this.toast(run, this.text(run).copyFailed, extra);
       return false;
     }
   }
 
   /** Spec §10.3 with §16: the clipboard route, run whole in the context helper, or a copy that says why. */
   private async paste(run: RunInfo, call: Paste, signal: AbortSignal): Promise<void> {
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     const field = fieldAt(run);
     const secure = (run.focus !== null && neverFill(run.focus)) || (field !== null && neverFill(field));
     // Without the ask's window there is nothing to paste into: say so plainly, not that the user moved.
@@ -414,7 +421,7 @@ export class ActionRunner extends EventEmitter {
   }
 
   private async copyInstead(run: RunInfo, text: string, why: CopyWhy, extra = ''): Promise<void> {
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     // A password field stays one: a later click on Paste would only copy again. Any other refusal keeps the button.
     if (why === 'secure') this.setPut(null);
     else if (this.state !== null) this.setPut(this.state, true);
@@ -454,7 +461,7 @@ export class ActionRunner extends EventEmitter {
     run: RunInfo, call: Fill, preview: { rows: PreviewRow[]; left: LeftField[] }, ids: ReadonlySet<string>,
     signal: AbortSignal,
   ): Promise<void> {
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     const forms = this.deps.settings().teammate.context.clipboardForForms;
     // Closes a card that had focus. Fields are found by id, so the fill goes on either way; a paste checks for itself.
     await this.askWindowInFront(run, signal);
@@ -537,7 +544,7 @@ export class ActionRunner extends EventEmitter {
   }
 
   private async event(run: RunInfo, call: EventCall, signal: AbortSignal): Promise<void> {
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     const now = this.deps.now();
     this.files += 1;
     const ics = eventIcs(call, { uid: `${now}-${this.files}@lolping`, now, zoneOffset: this.deps.zoneOffset });
@@ -561,7 +568,7 @@ export class ActionRunner extends EventEmitter {
   }
 
   private async open(run: RunInfo, call: Open, signal: AbortSignal): Promise<void> {
-    const t = strings(run.lang).teammate.ui;
+    const t = this.text(run);
     try {
       await this.deps.openExternal(new URL(call.url).href);
     } catch {

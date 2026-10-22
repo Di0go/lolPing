@@ -1162,6 +1162,8 @@ std::vector<ClipFormat> exclusionFormats() {
   return out;
 }
 
+bool isExclusionFormat(const std::string& name) { return isExclusionName(name); }
+
 bool handsOff(const std::vector<uint16_t>& states) {
   // The low bit says the key went down since the last call, even if it is up again: not a held key.
   return std::none_of(states.begin(), states.end(), [](uint16_t s) { return (s & 0x8000) != 0; });

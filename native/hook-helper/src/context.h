@@ -92,6 +92,12 @@ std::vector<ClipFormat> formatsToRestore(const std::vector<ClipFormat>& listed);
 /** The three formats that keep a write out of clipboard history, the cloud clipboard and clipboard monitors. */
 std::vector<ClipFormat> exclusionFormats();
 
+/**
+ * Whether a format name is one of exclusionFormats(). A platform with marker types of its own (macOS: the
+ * nspasteboard.org transient and concealed types) writes those in place of one when it sees it.
+ */
+bool isExclusionFormat(const std::string& name);
+
 /** Whether no watched key or button is held: each state as GetAsyncKeyState returns it, held with the top bit set. */
 bool handsOff(const std::vector<uint16_t>& states);
 

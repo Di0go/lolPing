@@ -1,6 +1,7 @@
 import type { Lang } from './i18n';
 import type { PingTag } from './ipc';
 import type { PingId } from './pings';
+import type { Platform } from './platform';
 import type { LeftField, PreviewRow, PutAction } from './teammate/doRules';
 
 /** state, leave (play the closing motion; the window hides after it): main → page. action, size: page → main. */
@@ -137,6 +138,8 @@ export type MateAction =
   | FormAction;
 
 export interface MateApi {
+  /** The OS, for wording that differs on macOS. */
+  platform: Platform;
   /** Calls `cb` with every state the main process sends; returns the way to stop. */
   on(cb: (state: MateState) => void): () => void;
   /** Calls `cb` when the window is about to hide; returns the way to stop. */

@@ -1107,6 +1107,13 @@ static void test_restore_keeps_every_saved_format() {
   }
 }
 
+static void test_exclusion_formats_are_recognised_by_name() {
+  const std::vector<ClipFormat> marks = exclusionFormats();
+  CHECK(marks.size() == 3);
+  for (const ClipFormat& f : marks) CHECK(isExclusionFormat(f.name));
+  CHECK(!isExclusionFormat("HTML Format") && !isExclusionFormat("") && !isExclusionFormat("0|public.utf8-plain-text"));
+}
+
 static void test_paste_marks_both_writes_as_excluded() {
   const auto s = std::make_shared<PasteState>();
   s->clip = {format(0xC09E, "HTML Format", "<i>mine</i>")};
@@ -1489,6 +1496,7 @@ int main() {
   test_parse_paste_command();
   test_parse_set_field_command();
   test_restore_keeps_every_saved_format();
+  test_exclusion_formats_are_recognised_by_name();
   test_paste_marks_both_writes_as_excluded();
   test_paste_refuses_a_window_that_does_not_answer();
   test_paste_refuses_another_window();

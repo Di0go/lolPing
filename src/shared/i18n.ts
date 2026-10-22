@@ -1342,10 +1342,30 @@ const LINUX: Record<Lang, Partial<Strings>> = {
   },
 };
 
+/** The teammate's wording that names the undo key: ⌘Z on macOS where the shared text says Ctrl + Z. */
+const MAC_MATE_UI: Record<Lang, Partial<Strings['teammate']['ui']>> = {
+  en: {
+    formNote: 'lolPing won’t press Submit. Fill can’t be undone with ⌘Z.',
+    pasted: 'Pasted. ⌘Z to undo.',
+  },
+  'zh-CN': {
+    formNote: 'lolPing 不会点“提交”。填写后不能用 ⌘Z 撤销。',
+    pasted: '已粘贴。按 ⌘Z 可撤销。',
+  },
+};
+
+const withMateUi = (base: Strings, ui: Partial<Strings['teammate']['ui']>): Strings => ({
+  ...base,
+  teammate: { ...base.teammate, ui: { ...base.teammate.ui, ...ui } },
+});
+
 const TABLES: Record<Platform, Record<Lang, Strings>> = {
   win: { en, 'zh-CN': zh },
   linux: { en: { ...en, ...LINUX.en }, 'zh-CN': { ...zh, ...LINUX['zh-CN'] } },
-  mac: { en: { ...en, ...MAC.en }, 'zh-CN': { ...zh, ...MAC['zh-CN'] } },
+  mac: {
+    en: withMateUi({ ...en, ...MAC.en }, MAC_MATE_UI.en),
+    'zh-CN': withMateUi({ ...zh, ...MAC['zh-CN'] }, MAC_MATE_UI['zh-CN']),
+  },
 };
 
 /** The same object for the same arguments, so it can be a React dependency. */
