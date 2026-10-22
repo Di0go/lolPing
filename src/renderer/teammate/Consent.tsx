@@ -54,6 +54,10 @@ export function Consent({ s, t, act, leaving }: {
   const st = useStyles();
   const sf = useSurfaceStyles();
   const m = useMotion();
+  // The card is already decided while it leaves: a click then does nothing.
+  const send = (a: MateAction): void => {
+    if (!leaving) act(a);
+  };
   const left = s.side === 'left';
   const enter = left ? m.slideInLeft : m.slideInRight;
   const leave = leaving ? (left ? m.slideOutLeft : m.slideOutRight) : undefined;
@@ -68,9 +72,9 @@ export function Consent({ s, t, act, leaving }: {
         <Text className={st.text}>{s.text}</Text>
         {s.detail && <Caption1 className={st.detail}>{s.detail}</Caption1>}
         <div className={st.buttons}>
-          <Button size="small" appearance="primary" onClick={() => act({ t: 'allow' })}>{t.allowOnce}</Button>
-          {s.always && <Button size="small" onClick={() => act({ t: 'always' })}>{t.alwaysAllow}</Button>}
-          <Button size="small" onClick={() => act({ t: 'decline' })}>{t.decline}</Button>
+          <Button size="small" appearance="primary" onClick={() => send({ t: 'allow' })}>{t.allowOnce}</Button>
+          {s.always && <Button size="small" onClick={() => send({ t: 'always' })}>{t.alwaysAllow}</Button>}
+          <Button size="small" onClick={() => send({ t: 'decline' })}>{t.decline}</Button>
         </div>
         <div
           className={st.bar}

@@ -251,10 +251,10 @@ describe('MateWindows consent card', () => {
     const w = openConsent();
     expect(w.bounds.x).toBeGreaterThan(500);
     expect(w.bounds.y + w.bounds.height / 2).toBeCloseTo(400, -1);
-    expect(w.webContents.send).toHaveBeenCalledWith('mate:state', { ...consent, side: 'right' });
+    expect(w.webContents.send).toHaveBeenCalledWith('mate:state', { ...consent, side: 'right', serial: 1 });
     const far = openConsent(consent, { x: 1900, y: 400 });
     expect(far.bounds.x + far.bounds.width).toBeLessThanOrEqual(1900);
-    expect(far.webContents.send).toHaveBeenCalledWith('mate:state', { ...consent, side: 'left' });
+    expect(far.webContents.send).toHaveBeenCalledWith('mate:state', { ...consent, side: 'left', serial: 2 });
   });
 
   it('passes on allow, always and decline, once per card', () => {
@@ -283,7 +283,7 @@ describe('MateWindows consent card', () => {
     try {
       const w = openConsent();
       mate.updateConsent({ ...consent, detail: 'Changed' });
-      expect(w.webContents.send).toHaveBeenLastCalledWith('mate:state', { ...consent, detail: 'Changed', side: 'right' });
+      expect(w.webContents.send).toHaveBeenLastCalledWith('mate:state', { ...consent, detail: 'Changed', side: 'right', serial: 1 });
       mate.hideConsent();
       await vi.advanceTimersByTimeAsync(1000);
       expect(w.visible).toBe(false);
@@ -291,6 +291,32 @@ describe('MateWindows consent card', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('ignores a click on a card that was hidden, and takes clicks again on the next one', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = openConsent();
+      mate.hideConsent();
+      await vi.advanceTimersByTimeAsync(100); // inside the leave motion
+      sendAction(0, { t: 'allow' });
+      expect(actions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1000);
+      mate.showConsent({ x: 500, y: 400 }, consent);
+      expect(w.visible).toBe(true);
+      sendAction(0, { t: 'allow' });
+      expect(actions).toEqual([{ view: 'consent', action: { t: 'allow' } }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives every shown card a new serial, and keeps it for updates, so the page restarts only for a new card', () => {
+    const w = openConsent();
+    mate.showConsent({ x: 500, y: 400 }, { ...consent, detail: 'Second' });
+    mate.updateConsent({ ...consent, detail: 'Second, changed' });
+    const serials = w.webContents.send.mock.calls.map(([, state]) => (state as ConsentState).serial);
+    expect(serials).toEqual([1, 2, 2]);
   });
 
   it('resizes to the height the page reports and keeps the card beside the spot', () => {

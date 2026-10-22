@@ -49,8 +49,9 @@ const emptySlot = (view: MateView): Slot => ({
 /**
  * The teammate's windows. The bubble takes clicks without focus; the card takes focus only when clicked, so the app
  * underneath keeps the keyboard until the user replies; the words box takes focus and gives it back when it closes;
- * History is a normal window; the consent card never takes focus, as the bubble. Emits 'action' with `{ view, action }`, already validated for that view. It only shows
- * state and passes actions on: what an action does is up to the caller.
+ * History is a normal window; the consent card never takes focus, as the bubble. Emits 'action' with
+ * `{ view, action }`, already validated for that view. It only shows state and passes actions on: what an action
+ * does is up to the caller.
  */
 export class MateWindows extends EventEmitter {
   private readonly slots: Record<MateView, Slot> = {
@@ -58,6 +59,8 @@ export class MateWindows extends EventEmitter {
     consent: emptySlot('consent'),
   };
   private captureExcluded = false;
+  /** Counts showConsent calls, so the page can tell a new card from an update of the open one. */
+  private consentShows = 0;
 
   constructor() {
     super();
@@ -98,6 +101,7 @@ export class MateWindows extends EventEmitter {
   showConsent(at: Point, s: ConsentState): void {
     const slot = this.slots.consent;
     slot.ended = false;
+    this.consentShows++;
     this.showPopup('consent', at, this.withSide(slot, at, s));
   }
 
@@ -106,7 +110,9 @@ export class MateWindows extends EventEmitter {
     this.update('consent', this.withSide(slot, slot.at, s));
   }
 
+  /** The card is decided: clicks during its leave motion no longer count. */
   hideConsent(): void {
+    this.slots.consent.ended = true;
     this.leave('consent', 'fast');
   }
 
@@ -245,7 +251,7 @@ export class MateWindows extends EventEmitter {
   }
 
   private withSide(slot: Slot, at: Point, s: ConsentState): ConsentState {
-    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side };
+    return { ...s, side: besideSpot(at, slot.size, this.workArea(at)).side, serial: this.consentShows };
   }
 
   private update(view: MateView, s: MateState): void {

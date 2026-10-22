@@ -50,11 +50,16 @@ function Root() {
   // Bumped when the window comes back after hiding, so the content mounts afresh and plays its arrival again.
   const [round, setRound] = useState(0);
   const left = useRef(false);
+  const serial = useRef<number | undefined>(undefined);
 
   useEffect(
     () =>
       api.on((s) => {
         if (s.view !== VIEW) return;
+        // A consent card shown again without hiding first is a new card: it mounts afresh too.
+        const fresh = s.view === 'consent' && serial.current !== undefined && s.serial !== serial.current;
+        if (s.view === 'consent') serial.current = s.serial;
+        if (fresh && !left.current) setRound((r) => r + 1);
         if (left.current) {
           left.current = false;
           setLeaving(null);

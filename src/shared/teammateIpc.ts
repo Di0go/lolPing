@@ -81,6 +81,8 @@ export interface ConsentState {
   seconds: number;
   /** Which side of the spot the card is on, so it slides in from there. Set by the window; the right when absent. */
   side?: 'left' | 'right';
+  /** Changes with every new card, so the page starts its slide and countdown again. Set by the window. */
+  serial?: number;
 }
 
 export type MateState = BubbleState | CardState | WordsState | HistoryState | ConsentState;
