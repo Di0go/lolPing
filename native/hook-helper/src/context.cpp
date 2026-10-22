@@ -1139,6 +1139,8 @@ std::string clickTarget(const FieldFacts& under, const std::string& expected) {
   for (size_t i = 0; i < under.ancestors.size() && i < kFieldAncestors; ++i) {
     const AncestorFacts& a = under.ancestors[i];
     if (a.id == expected) return a.secure || neverFillLabel(a.label) ? "secure" : "";
+    // The click would bubble up to a button or link inside the field on its way to the field.
+    if (a.activatable) return "window";
   }
   return "window";
 }

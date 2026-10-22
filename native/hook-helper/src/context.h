@@ -118,11 +118,12 @@ constexpr int kPasteDeadlineMs = 5500;
  *  paragraph or text node inside the field. */
 constexpr size_t kFieldAncestors = 3;
 
-/** An element above the one under a click: its runtime id, name and password flag. */
+/** An element above the one under a click: its runtime id, name, password flag and whether it acts on a click. */
 struct AncestorFacts {
   std::string id;
   std::string label;
   bool secure = false;
+  bool activatable = false;
 };
 
 /** What a write needs to know about a field first: its kind (RawField's), label, password flag and runtime id. */

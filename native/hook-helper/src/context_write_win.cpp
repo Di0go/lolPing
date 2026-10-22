@@ -456,9 +456,7 @@ FieldFacts factsOf(IUIAutomation* uia, IUIAutomationElement* el) {
 }
 
 // Whether a click on the element does something of its own: its kind, or a pattern that invokes or toggles it.
-bool activatable(IUIAutomationElement* el) {
-  CONTROLTYPEID type = 0;
-  if (FAILED(el->get_CurrentControlType(&type))) return true;
+bool clickableType(CONTROLTYPEID type) {
   switch (type) {
     case UIA_ButtonControlTypeId:
     case UIA_HyperlinkControlTypeId:
@@ -470,8 +468,23 @@ bool activatable(IUIAutomationElement* el) {
     case UIA_ComboBoxControlTypeId:
       return true;
     default:
-      break;
+      return false;
   }
+}
+
+// A cached boolean property; true when it can't be read, as a click that can't be ruled out counts as one.
+bool cachedFlagOrTrue(IUIAutomationElement* el, PROPERTYID id) {
+  VARIANT v;
+  VariantInit(&v);
+  const bool readable = SUCCEEDED(el->GetCachedPropertyValue(id, &v)) && v.vt == VT_BOOL;
+  const bool on = !readable || v.boolVal != VARIANT_FALSE;
+  VariantClear(&v);
+  return on;
+}
+
+bool activatable(IUIAutomationElement* el) {
+  CONTROLTYPEID type = 0;
+  if (FAILED(el->get_CurrentControlType(&type)) || clickableType(type)) return true;
   for (const PATTERNID id : {UIA_InvokePatternId, UIA_TogglePatternId}) {
     winrt::com_ptr<IUnknown> pattern;
     if (SUCCEEDED(el->GetCurrentPattern(id, pattern.put())) && pattern) return true;
@@ -485,8 +498,9 @@ std::vector<AncestorFacts> ancestorsOf(IUIAutomation* uia, IUIAutomationElement*
   winrt::com_ptr<IUIAutomationTreeWalker> walker;
   winrt::com_ptr<IUIAutomationCacheRequest> request;
   if (FAILED(uia->get_ControlViewWalker(walker.put())) || FAILED(uia->CreateCacheRequest(request.put()))) return out;
-  if (FAILED(request->AddProperty(UIA_IsPasswordPropertyId)) || FAILED(request->AddProperty(UIA_NamePropertyId))) {
-    return out;
+  for (const PROPERTYID id : {UIA_IsPasswordPropertyId, UIA_NamePropertyId, UIA_ControlTypePropertyId,
+                              UIA_IsInvokePatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId}) {
+    if (FAILED(request->AddProperty(id))) return out;
   }
   winrt::com_ptr<IUIAutomationElement> node;
   node.copy_from(el);
@@ -500,6 +514,11 @@ std::vector<AncestorFacts> ancestorsOf(IUIAutomation* uia, IUIAutomationElement*
     a.secure = FAILED(parent->get_CachedIsPassword(&password)) || password != FALSE;
     Bstr name;
     if (SUCCEEDED(parent->get_CachedName(&name.s))) a.label = oneLine(name.text());
+    // As activatable() for the element hit, from the same cache: no extra calls into the app.
+    CONTROLTYPEID type = 0;
+    a.activatable = FAILED(parent->get_CachedControlType(&type)) || clickableType(type) ||
+                    cachedFlagOrTrue(parent.get(), UIA_IsInvokePatternAvailablePropertyId) ||
+                    cachedFlagOrTrue(parent.get(), UIA_IsTogglePatternAvailablePropertyId);
     out.push_back(std::move(a));
     node = parent;
   }

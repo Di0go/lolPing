@@ -1331,6 +1331,27 @@ static void test_paste_click_finds_its_field_above_the_element_hit() {
   CHECK(clickTarget(paragraph({{"42.7.1", "Message", false}}), "") == "window");
 }
 
+static void test_paste_click_refuses_a_button_between_the_element_hit_and_its_field() {
+  const auto above = [](AncestorFacts between) {
+    FieldFacts f{"other", "", false, "42.7.1.5"};
+    f.ancestors = {std::move(between), AncestorFacts{"42.7.1", "Message", false, false}};
+    return f;
+  };
+  // <button><span>x</span></button> inside a contenteditable: the text hit passes, but the click reaches the button.
+  CHECK(clickTarget(above(AncestorFacts{"42.7.1.4", "Clear", false, true}), "42.7.1") == "window");
+  CHECK(clickTarget(above(AncestorFacts{"42.7.1.4", "example.com", false, true}), "42.7.1") == "window");  // a link
+  CHECK(clickTarget(above(AncestorFacts{"42.7.1.4", "", false, false}), "42.7.1").empty());
+  // The same through the paste: nothing is touched.
+  const auto s = std::make_shared<PasteState>();
+  s->atClick = above(AncestorFacts{"42.7.1.4", "Clear", false, true});
+  CHECK(pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200","field":"42.7.1",)")) == "window");
+  CHECK(!s->saw("open") && !s->saw("click") && !s->saw("ctrl+v"));
+  // The field matched is not judged by its own click action (an exact match, as for the element hit).
+  FieldFacts direct = above(AncestorFacts{"42.7.1.4", "", false, false});
+  direct.ancestors[1].activatable = true;
+  CHECK(clickTarget(direct, "42.7.1").empty());
+}
+
 static void test_paste_checks_again_right_before_the_click() {
   const std::vector<ClipFormat> mine = {format(0xC09E, "HTML Format", "<i>mine</i>")};
   // The click point now lands in another window (the field scrolled away, a window opened over it).
@@ -1479,6 +1500,7 @@ int main() {
   test_paste_clicks_presses_ctrl_v_and_restores_a_second_later();
   test_paste_clicks_only_on_the_field_it_was_meant_for();
   test_paste_click_finds_its_field_above_the_element_hit();
+  test_paste_click_refuses_a_button_between_the_element_hit_and_its_field();
   test_paste_checks_again_right_before_the_click();
   test_paste_finishes_inside_its_deadline();
   test_paste_puts_the_clipboard_back_or_says_it_could_not();
