@@ -426,6 +426,23 @@ std::string spotText(IUIAutomation* uia, Point p) {
   return cutText(name.empty() ? value : name + "\n" + value, kSpotTextMax);
 }
 
+// The selected text, ranges joined by line breaks; ranges in or over a password field are left out.
+std::string selectionOf(IUIAutomation* uia, IUIAutomationTextPattern* text) {
+  std::string out;
+  winrt::com_ptr<IUIAutomationTextRangeArray> ranges;
+  if (FAILED(text->GetSelection(ranges.put())) || !ranges) return out;
+  int count = 0;
+  ranges->get_Length(&count);
+  for (int i = 0; i < count && out.size() < kSelectionMax * 4; ++i) {
+    winrt::com_ptr<IUIAutomationTextRange> range;
+    if (FAILED(ranges->GetElement(i, range.put())) || !range || touchesPassword(uia, range.get())) continue;
+    const std::string part = rangeText(range.get(), kSelectionMax);
+    if (part.empty()) continue;
+    out += (out.empty() ? "" : "\n") + part;
+  }
+  return cutText(out, kSelectionMax);
+}
+
 // The focused element's kind, label, value and selection; nothing when it is lolPing's own.
 void readFocus(IUIAutomation* uia, SystemText& out) {
   winrt::com_ptr<IUIAutomationElement> el;
@@ -456,18 +473,7 @@ void readFocus(IUIAutomation* uia, SystemText& out) {
       out.focusValue = rangeText(document.get(), kFocusValueMax);
     }
   }
-  winrt::com_ptr<IUIAutomationTextRangeArray> ranges;
-  if (FAILED(text->GetSelection(ranges.put())) || !ranges) return;
-  int count = 0;
-  ranges->get_Length(&count);
-  for (int i = 0; i < count && out.selection.size() < kSelectionMax * 4; ++i) {
-    winrt::com_ptr<IUIAutomationTextRange> range;
-    if (FAILED(ranges->GetElement(i, range.put())) || !range || touchesPassword(uia, range.get())) continue;
-    const std::string part = rangeText(range.get(), kSelectionMax);
-    if (part.empty()) continue;
-    out.selection += (out.selection.empty() ? "" : "\n") + part;
-  }
-  out.selection = cutText(out.selection, kSelectionMax);
+  out.selection = selectionOf(uia, text.get());
 }
 
 // The first edit in the browser window whose value reads as an address; password fields are never read.
@@ -734,6 +740,25 @@ bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText&
     return true;
   } catch (const winrt::hresult_error& e) {
     fail.message = failed("UI Automation", e.code());
+    return false;
+  }
+}
+
+bool readableElement(IUIAutomation* uia, IUIAutomationElement* el, bool& secure) { return readable(uia, el, secure); }
+
+bool focusedSelection(std::string& out) {
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    const auto uia = winrt::create_instance<IUIAutomation>(CLSID_CUIAutomation);
+    winrt::com_ptr<IUIAutomationElement> el;
+    bool secure = false;
+    if (FAILED(uia->GetFocusedElement(el.put())) || !el || !readable(uia.get(), el.get(), secure)) return false;
+    const auto text = textPatternOf(el.get());
+    if (!text) return false;
+    // The same reading as the ask's, so an unchanged selection compares equal.
+    out = selectionOf(uia.get(), text.get());
+    return true;
+  } catch (const winrt::hresult_error&) {
     return false;
   }
 }

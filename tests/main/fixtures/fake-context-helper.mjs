@@ -1,6 +1,7 @@
 // Stand-in for context-helper in ContextClient tests. Mode comes from argv[2]:
-// ok answers everything, silent answers nothing, denied refuses captures for missing permission, slow answers a read
-// with its file layer `slow`; after that, like the real helper, it reads nothing more and exits.
+// ok answers everything (a paste with ok, a setField with refused), silent answers nothing, denied refuses captures
+// for missing permission, slow answers a read with its file layer `slow`; after that, like the real helper, it reads
+// nothing more and exits.
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -68,6 +69,8 @@ process.stdin.on('data', (chunk) => {
     else if (cmd.type === 'foreground') reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
     else if (cmd.type === 'read') read(cmd);
     else if (cmd.type === 'ping') reply({ type: 'pong', id: cmd.id });
+    else if (cmd.type === 'paste') reply({ type: 'pasted', id: cmd.id, result: 'ok' });
+    else if (cmd.type === 'setField') reply({ type: 'set', id: cmd.id, result: 'refused' });
   }
 });
 process.stdin.on('end', () => process.exit(0));

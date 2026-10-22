@@ -18,8 +18,42 @@ export type ContextCommand =
     boxes: boolean; fields: boolean; dir: string;
   }
   | { type: 'foreground'; id: string }
+  | {
+    type: 'paste'; id: string; window: string; text: string; click: string; mode: 'insert' | 'replace'; asked: string;
+  }
+  | { type: 'setField'; id: string; window: string; field: string; value: string }
   | { type: 'ping'; id: string }
   | { type: 'shutdown' };
+
+/**
+ * What a paste did: `ok` pasted; the rest pasted nothing and left the clipboard as it was. `window`: another window is
+ * in front (or the click would land in one); `hung`: the app doesn't answer; `selection`: a replace's selection no
+ * longer holds the asked text; `secure`: a password or never-fill field; `hands`: a key or button stayed held for 3 s;
+ * `busy`: the clipboard or the input could not be used.
+ */
+export type PasteResult = 'ok' | 'hung' | 'window' | 'hands' | 'selection' | 'secure' | 'busy';
+
+/** What a setField did: `gone`: no such field in the window; `refused`: the field didn't take the value. */
+export type SetFieldResult = 'ok' | 'gone' | 'refused' | 'secure' | 'window' | 'hung';
+
+/**
+ * A paste into the ask's window. `click` puts the caret in the field first (insert only: a click would drop the
+ * selection a replace pastes over); `asked` is the selection the ask saw, which a replace must still find.
+ */
+export interface PasteRequest {
+  window: string;
+  text: string;
+  click: Point | null;
+  mode: 'insert' | 'replace';
+  asked: string;
+}
+
+/** A form field's new value; checkboxes and radios take 'on' or 'off'. */
+export interface SetFieldRequest {
+  window: string;
+  field: string;
+  value: string;
+}
 
 export type ContextErrorCode = 'capture' | 'permission' | 'bad';
 
@@ -55,6 +89,8 @@ export type ContextReply =
   | ({ type: 'read'; id: string } & ReadResult)
   /** `window` is the window's id (the HWND in decimal on Windows), or '' where the helper has none. */
   | { type: 'foreground'; id: string; app: string; title: string; window: string }
+  | { type: 'pasted'; id: string; result: PasteResult }
+  | { type: 'set'; id: string; result: SetFieldResult }
   | { type: 'pong'; id: string }
   | { type: 'error'; id: string; code: ContextErrorCode; message: string };
 
@@ -103,6 +139,31 @@ export function readCommand(
   };
 }
 
+/**
+ * `text` without what JSON.stringify writes as an escape the helper's flat parser doesn't read (\b, \f, \u00XX, a lone
+ * surrogate as \uDXXX), so a paste never fails on a stray control character. Tabs and line breaks stay.
+ */
+const helperText = (text: string): string => text.replace(
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+  '',
+);
+
+export function pasteCommand(id: string, req: PasteRequest): ContextCommand {
+  return {
+    type: 'paste',
+    id,
+    window: req.window,
+    text: helperText(req.text),
+    click: req.click ? `${Math.round(req.click.x)},${Math.round(req.click.y)}` : '',
+    mode: req.mode,
+    asked: helperText(req.asked),
+  };
+}
+
+export function setFieldCommand(id: string, req: SetFieldRequest): ContextCommand {
+  return { type: 'setField', id, window: req.window, field: req.field, value: helperText(req.value) };
+}
+
 export const serializeContextCommand = (cmd: ContextCommand): string => `${JSON.stringify(cmd)}\n`;
 
 const isPositiveInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
@@ -112,6 +173,10 @@ const isLayerStatus = (v: unknown): v is LayerStatus => (
   v === 'off' || v === 'ok' || v === 'slow' || v === 'capture' || v === 'permission'
 );
 const isFileHow = (v: unknown): v is FileHow => v === 'office' || v === 'address' || v === 'title' || v === 'none';
+const PASTE_RESULTS: readonly PasteResult[] = ['ok', 'hung', 'window', 'hands', 'selection', 'secure', 'busy'];
+const SET_FIELD_RESULTS: readonly SetFieldResult[] = ['ok', 'gone', 'refused', 'secure', 'window', 'hung'];
+const isPasteResult = (v: unknown): v is PasteResult => PASTE_RESULTS.includes(v as PasteResult);
+const isSetFieldResult = (v: unknown): v is SetFieldResult => SET_FIELD_RESULTS.includes(v as SetFieldResult);
 
 /** Between spot texts in the read reply. */
 const RECORD_SEPARATOR = '\u001e';
@@ -296,6 +361,10 @@ export function parseContextLine(line: string): ContextReply | null {
       if (typeof o.app !== 'string' || typeof o.title !== 'string') return null;
       if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window)) return null;
       return { type: 'foreground', id, app: o.app, title: o.title, window: o.window };
+    case 'pasted':
+      return isPasteResult(o.result) ? { type: 'pasted', id, result: o.result } : null;
+    case 'set':
+      return isSetFieldResult(o.result) ? { type: 'set', id, result: o.result } : null;
     case 'pong':
       return { type: 'pong', id };
     case 'error':

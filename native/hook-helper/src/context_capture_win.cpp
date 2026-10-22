@@ -201,8 +201,9 @@ bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<Raw
 bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail);
 bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail);
 bool elementBoxes(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail);
-// The form fields probe, in context_write_win.cpp.
+// The form fields probe and the paste and setField calls, in context_write_win.cpp.
 bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, Failure& fail);
+void addWriting(ContextPlatform& p);
 
 ContextPlatform nativePlatform() {
   ContextPlatform p;
@@ -215,6 +216,7 @@ ContextPlatform nativePlatform() {
   p.fileOf = fileBehindWindow;
   p.boxes = elementBoxes;
   p.formFields = formFieldsAt;
+  addWriting(p);
   return p;
 }
 

@@ -822,7 +822,468 @@ static void test_browser_address() {
   CHECK(!read("file:///"));
 }
 
+namespace {
+
+// What a paste or setField did, in order, shared with the check thread (which may outlive a slow test).
+struct PasteState {
+  std::mutex lock;
+  std::vector<std::string> events;
+  std::string fg = "263544", under = "263544";
+  bool answers = true;
+  bool selectionReadable = true, focusReadable = true;
+  std::string selection;
+  FieldFacts focus{"text", "Message", false}, atClick{"text", "Message", false};
+  int slowChecksMs = 0;
+  std::vector<std::vector<uint16_t>> keys;  // one per poll; the last repeats; none means every key is up
+  size_t polls = 0;
+  int failedOpens = 0;  // opens that fail before one succeeds; -1: every open fails
+  std::vector<ClipFormat> clip;
+  std::vector<std::vector<ClipFormat>> writes;
+  // setField
+  FieldFacts field{"text", "Name", false};
+  std::string setResult = "ok";
+  int slowSetMs = 0;
+  std::vector<std::string> written;
+
+  void note(const std::string& e) {
+    std::lock_guard<std::mutex> guard(lock);
+    events.push_back(e);
+  }
+  std::vector<std::string> seen() {
+    std::lock_guard<std::mutex> guard(lock);
+    return events;
+  }
+  bool saw(const std::string& prefix) {
+    const std::vector<std::string> all = seen();
+    return std::any_of(all.begin(), all.end(), [&](const std::string& e) { return e.rfind(prefix, 0) == 0; });
+  }
+};
+
+ClipFormat format(unsigned id, const std::string& name, const std::string& bytes) {
+  return ClipFormat{id, name, std::vector<uint8_t>(bytes.begin(), bytes.end())};
+}
+
+ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
+  ContextPlatform p;
+  p.foreground = [s](std::string& app, std::string& title, std::string& windowId, Failure&) {
+    app = "notepad";
+    title = "notes.txt - Notepad";
+    windowId = s->fg;
+    return true;
+  };
+  p.responsive = [s](const std::string& window) {
+    s->note("responsive " + window);
+    return s->answers;
+  };
+  p.windowAt = [s](Point at) {
+    s->note("windowAt " + std::to_string(at.x) + "," + std::to_string(at.y));
+    return s->under;
+  };
+  p.focusedSelection = [s](std::string& out) {
+    s->note("uia selection");
+    out = s->selection;
+    return s->selectionReadable;
+  };
+  p.fieldFacts = [s](std::optional<Point> at, FieldFacts& out) {
+    s->note(at ? "uia field at click" : "uia focus");
+    if (s->slowChecksMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(s->slowChecksMs));
+    out = at ? s->atClick : s->focus;
+    return s->focusReadable;
+  };
+  p.keyStates = [s] {
+    s->note("keys");
+    if (s->keys.empty()) return std::vector<uint16_t>(10, 0);
+    const std::vector<uint16_t> now = s->keys[std::min(s->polls, s->keys.size() - 1)];
+    ++s->polls;
+    return now;
+  };
+  p.openClipboard = [s] {
+    s->note("open");
+    if (s->failedOpens < 0) return false;
+    if (s->failedOpens > 0) {
+      --s->failedOpens;
+      return false;
+    }
+    return true;
+  };
+  p.closeClipboard = [s] { s->note("close"); };
+  p.clipboardFormats = [s] {
+    std::vector<ClipFormat> listed;
+    for (const ClipFormat& f : s->clip) listed.push_back(ClipFormat{f.id, f.name, {}});
+    return listed;
+  };
+  p.readClipboard = [s](ClipFormat& f) {
+    for (const ClipFormat& have : s->clip) {
+      if (have.id == f.id) {
+        f.bytes = have.bytes;
+        return true;
+      }
+    }
+    return false;
+  };
+  p.writeClipboard = [s](const std::vector<ClipFormat>& all) {
+    s->note("write");
+    s->writes.push_back(all);
+    s->clip = all;
+    return true;
+  };
+  p.click = [s](Point at) {
+    s->note("click " + std::to_string(at.x) + "," + std::to_string(at.y));
+    return true;
+  };
+  p.pressPaste = [s] {
+    s->note("ctrl+v");
+    return true;
+  };
+  p.wait = [s](int ms) { s->note("wait " + std::to_string(ms)); };
+  p.setField = [s](const SetFieldRequest& r, const std::function<std::string(const FieldFacts&)>& check) {
+    s->note("uia setField " + r.field);
+    if (s->slowSetMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(s->slowSetMs));
+    if (s->setResult == "gone") return std::string("gone");
+    const std::string refused = check(s->field);
+    if (!refused.empty()) return refused;
+    std::lock_guard<std::mutex> guard(s->lock);
+    s->written.push_back(r.value);
+    return s->setResult;
+  };
+  return p;
+}
+
+// A paste command into window 263544; `extra` adds raw JSON fields, each with its comma.
+std::string pasteLine(const std::string& extra = "") {
+  return R"({"type":"paste","id":"p1","window":"263544","text":"hello",)" + extra + R"("mode":"insert"})";
+}
+
+std::string pasteResult(const ContextPlatform& p, const std::string& line, int budgetMs = kProbeBudgetMs) {
+  const auto m = fields(handleCommand(parseCommand(line), p, budgetMs).line);
+  return m.count("type") && m.at("type") == "pasted" && m.at("id") == "p1" ? m.at("result") : "?";
+}
+
+// The flat parser in the tests reads no \u escapes, so the lines carry UTF-8 as is.
+std::string pasteOf(const std::string& text, const std::string& extra = "", const std::string& mode = "insert") {
+  return R"({"type":"paste","id":"p1","window":"263544","text":")" + lp::jsonEscape(text) + "\"," + extra +
+         R"("mode":")" + mode + "\"}";
+}
+
+bool isExclusion(const ClipFormat& f) {
+  return f.name == "ExcludeClipboardContentFromMonitorProcessing" || f.name == "CanIncludeInClipboardHistory" ||
+         f.name == "CanUploadToCloudClipboard";
+}
+
+// A write's three exclusion formats, each a DWORD 0.
+bool marksExcluded(const std::vector<ClipFormat>& write) {
+  int found = 0;
+  for (const ClipFormat& f : write) {
+    if (!isExclusion(f)) continue;
+    if (f.bytes != std::vector<uint8_t>{0, 0, 0, 0}) return false;
+    ++found;
+  }
+  return found == 3;
+}
+
+}  // namespace
+
+static void test_parse_paste_command() {
+  const Command c = parseCommand(pasteOf("line one\nline two", R"("click":"-1820,200",)"));
+  CHECK(c.kind == Command::Kind::Paste && c.id == "p1");
+  CHECK(c.paste.window == "263544" && c.paste.text == "line one\nline two");
+  CHECK(c.paste.click && c.paste.click->x == -1820 && c.paste.click->y == 200);
+  CHECK(!c.paste.replace && c.paste.asked.empty());
+  const Command r = parseCommand(pasteOf("new", R"("click":"","asked":"old",)", "replace"));
+  CHECK(r.kind == Command::Kind::Paste && r.paste.replace && r.paste.asked == "old" && !r.paste.click);
+  std::string chinese;
+  for (int i = 0; i < 20000; ++i) chinese += "\xe4\xb8\xad";  // characters, not bytes, are counted
+  CHECK(parseCommand(pasteOf(chinese)).kind == Command::Kind::Paste);
+  const auto bad = [](const std::string& line) { return parseCommand(line).kind == Command::Kind::Bad; };
+  CHECK(bad(pasteOf(chinese + "a")));
+  CHECK(bad(pasteOf("")));
+  CHECK(bad(pasteOf("x", R"("click":"10",)")));
+  CHECK(bad(pasteOf("x", R"("click":"1,2",)", "replace")));  // a click would drop the selection to replace
+  CHECK(bad(pasteOf("x", "", "append")));
+  CHECK(bad(pasteOf("x", "", "")));
+  CHECK(bad(pasteOf("x", "\"asked\":\"" + std::string(4001, 'a') + "\",", "replace")));
+  CHECK(bad(R"({"type":"paste","id":"p1","text":"x","mode":"insert"})"));  // no window
+  CHECK(bad(R"({"type":"paste","id":"p1","window":"","text":"x","mode":"insert"})"));
+  CHECK(bad(R"({"type":"paste","id":"p1","window":"12a","text":"x","mode":"insert"})"));
+  CHECK(bad(R"({"type":"paste","id":"p1","window":"263544","mode":"insert"})"));  // no text
+}
+
+static void test_parse_set_field_command() {
+  const Command c = parseCommand(R"({"type":"setField","id":"s1","window":"263544","field":"42.-7.1","value":"Ada"})");
+  CHECK(c.kind == Command::Kind::SetField && c.id == "s1");
+  CHECK(c.setField.window == "263544" && c.setField.field == "42.-7.1" && c.setField.value == "Ada");
+  CHECK(parseCommand(R"({"type":"setField","id":"s1","window":"1","field":"7","value":""})").kind ==
+        Command::Kind::SetField);  // clearing a field is a value too
+  const auto bad = [](const std::string& rest) {
+    return parseCommand(R"({"type":"setField","id":"s1",)" + rest + "}").kind == Command::Kind::Bad;
+  };
+  CHECK(bad(R"("window":"1","field":"a.b","value":"x")"));
+  CHECK(bad(R"("window":"1","field":"","value":"x")"));
+  CHECK(bad(R"("window":"1","field":"1..2","value":"x")"));
+  CHECK(bad(R"("window":"1","field":")" + std::string(121, '1') + R"(","value":"x")"));
+  CHECK(bad(R"("window":"1","field":"1.2","value":")" + std::string(2001, 'v') + "\""));
+  CHECK(bad(R"("field":"1.2","value":"x")"));
+  CHECK(bad(R"("window":"1","field":"1.2")"));
+}
+
+static void test_restore_keeps_every_saved_format() {
+  const std::vector<ClipFormat> listed = {
+      ClipFormat{13, "", {}},  ClipFormat{0xC09E, "HTML Format", {}}, ClipFormat{0xC0A1, "Rich Text Format", {}},
+      ClipFormat{0xC0B0, "DataObject", {}}, ClipFormat{0xC0B1, "Ole Private Data", {}}, ClipFormat{14, "", {}},
+      ClipFormat{8, "", {}}, ClipFormat{0xC0C0, "Chromium Web Custom MIME Data Format", {}},
+      ClipFormat{0xC0D0, "CanIncludeInClipboardHistory", {}}, ClipFormat{1, "", {}}, ClipFormat{7, "", {}},
+      ClipFormat{16, "", {}}, ClipFormat{2, "", {}}, ClipFormat{17, "", {}}, ClipFormat{9, "", {}},
+      ClipFormat{3, "", {}}, ClipFormat{0x0300, "", {}}, ClipFormat{0x0200, "", {}}};
+  std::vector<unsigned> kept;
+  for (const ClipFormat& f : formatsToRestore(listed)) kept.push_back(f.id);
+  // Text, HTML, RTF, the enhanced metafile, the bitmap and a custom format, in their order; Windows makes the
+  // synthesized ones up again, the OLE ones point into the old owner, and the exclusions are written fresh.
+  CHECK(kept == std::vector<unsigned>({13, 0xC09E, 0xC0A1, 14, 8, 0xC0C0}));
+
+  const auto s = std::make_shared<PasteState>();
+  const std::string html = "Version:0.9\r\nStartHTML:1\r\n<b>bold</b>";
+  s->clip = {format(13, "", std::string("h\0i\0\0\0", 6)), format(1, "", "hi"), format(0xC09E, "HTML Format", html),
+             format(0xC0A1, "Rich Text Format", "{\\rtf1 hi}"), format(14, "", "EMF bits"),
+             format(0xC0B0, "DataObject", "ole"), format(0xC0C0, "Chromium Web Custom MIME Data Format", "\x01\x02")};
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok");
+  const std::vector<ClipFormat> after = s->clip;
+  std::vector<ClipFormat> restored;
+  for (const ClipFormat& f : after) {
+    if (!isExclusion(f)) restored.push_back(f);
+  }
+  CHECK(restored.size() == 5);
+  if (restored.size() == 5) {
+    CHECK(restored[0].bytes == format(13, "", std::string("h\0i\0\0\0", 6)).bytes);
+    CHECK(restored[1].id == 0xC09E && restored[1].name == "HTML Format" && restored[1].bytes == format(0, "", html).bytes);
+    CHECK(restored[2].id == 0xC0A1 && restored[2].bytes == format(0, "", "{\\rtf1 hi}").bytes);
+    CHECK(restored[3].id == 14 && restored[3].bytes == format(0, "", "EMF bits").bytes);
+    CHECK(restored[4].id == 0xC0C0 && restored[4].bytes == format(0, "", "\x01\x02").bytes);
+  }
+}
+
+static void test_paste_marks_both_writes_as_excluded() {
+  const auto s = std::make_shared<PasteState>();
+  s->clip = {format(0xC09E, "HTML Format", "<i>mine</i>")};
+  CHECK(pasteResult(pastePlatform(s), pasteOf("h\xc3\xa9 \xe4\xb8\xad\n\xf0\x9f\x98\x80")) == "ok");
+  CHECK(s->writes.size() == 2);
+  if (s->writes.size() != 2) return;
+  CHECK(marksExcluded(s->writes[0]) && marksExcluded(s->writes[1]));
+  // The pasted text is the only other format: UTF-16 with its terminating zero, a surrogate pair for the emoji.
+  const std::vector<uint8_t> utf16 = {'h', 0, 0xE9, 0, ' ', 0, 0x2D, 0x4E, '\n', 0, 0x3D, 0xD8, 0x00, 0xDE, 0, 0};
+  CHECK(s->writes[0].size() == 4);
+  CHECK(s->writes[0].front().id == 13 && s->writes[0].front().bytes == utf16);
+  CHECK(s->writes[1].size() == 4 && s->writes[1].front().name == "HTML Format");
+}
+
+static void test_paste_refuses_a_window_that_does_not_answer() {
+  const auto s = std::make_shared<PasteState>();
+  s->answers = false;
+  CHECK(pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200",)")) == "hung");
+  CHECK(s->saw("responsive 263544"));
+  // No UI Automation call on a frozen app (each blocks about 10 s), no clipboard, no click and no Ctrl+V.
+  CHECK(!s->saw("uia") && !s->saw("open") && !s->saw("click") && !s->saw("ctrl+v") && !s->saw("windowAt"));
+  CHECK(s->writes.empty());
+}
+
+static void test_paste_refuses_another_window() {
+  const auto s = std::make_shared<PasteState>();
+  s->fg = "999";
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "window");
+  CHECK(s->seen().empty());  // checked before anything else is asked of the target
+  // A click that would land in another window.
+  const auto c = std::make_shared<PasteState>();
+  c->under = "777";
+  CHECK(pasteResult(pastePlatform(c), pasteLine(R"("click":"-1820,200",)")) == "window");
+  CHECK(!c->saw("uia") && !c->saw("open") && !c->saw("click"));
+}
+
+static void test_paste_replaces_only_while_the_selection_holds_the_asked_text() {
+  const auto replace = [](const std::string& selection, bool readable, const std::string& asked) {
+    const auto s = std::make_shared<PasteState>();
+    s->selection = selection;
+    s->selectionReadable = readable;
+    const std::string result =
+        pasteResult(pastePlatform(s), pasteOf("better", "\"asked\":\"" + lp::jsonEscape(asked) + "\",", "replace"));
+    return std::make_pair(result, s);
+  };
+  CHECK(replace("old text", true, "old text").first == "ok");
+  CHECK(replace(" old text\r\n", true, "old text").first == "ok");  // the same words, as pastePlan trims them
+  const auto moved = replace("something else", true, "old text");
+  CHECK(moved.first == "selection");
+  CHECK(!moved.second->saw("open") && !moved.second->saw("ctrl+v"));
+  CHECK(replace("old text", false, "old text").first == "selection");  // unreadable: fail closed
+  CHECK(replace("", true, "").first == "selection");                    // nothing was asked about
+  // An insert never reads the selection.
+  const auto s = std::make_shared<PasteState>();
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok" && !s->saw("uia selection"));
+}
+
+static void test_paste_refuses_a_secure_field() {
+  const auto run = [](const std::function<void(PasteState&)>& set, const std::string& extra = "") {
+    const auto s = std::make_shared<PasteState>();
+    set(*s);
+    const std::string result = pasteResult(pastePlatform(s), pasteLine(extra));
+    CHECK(!s->saw("open") && !s->saw("ctrl+v") && !s->saw("click"));
+    return result;
+  };
+  CHECK(run([](PasteState& s) { s.focus.secure = true; }) == "secure");
+  CHECK(run([](PasteState& s) { s.focus.label = "Card number"; }) == "secure");
+  CHECK(run([](PasteState& s) { s.focus.label = "\xe5\xaf\x86\xe7\xa0\x81"; }) == "secure");  // the ZH password
+  CHECK(run([](PasteState& s) { s.focusReadable = false; }) == "secure");                     // fail closed
+  CHECK(run([](PasteState& s) { s.atClick.secure = true; }, R"("click":"-1820,200",)") == "secure");
+  // The checks come after the frozen-app check.
+  const auto s = std::make_shared<PasteState>();
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok");
+  const std::vector<std::string> seen = s->seen();
+  CHECK(seen.size() > 1 && seen[0] == "responsive 263544" && seen[1] == "uia focus");
+}
+
+static void test_paste_fails_closed_when_its_checks_run_over() {
+  const auto s = std::make_shared<PasteState>();
+  s->slowChecksMs = 300;
+  const Reply r = handleCommand(parseCommand(pasteLine()), pastePlatform(s), 50);
+  const auto m = fields(r.line);
+  CHECK(m.at("type") == "pasted" && m.at("result") == "secure");
+  CHECK(r.exitAfter);  // the check is still inside UI Automation: the helper ends after this reply
+  CHECK(!s->saw("open") && !s->saw("ctrl+v"));
+}
+
+static void test_hands_off_ignores_released_keys() {
+  CHECK(handsOff({}));
+  CHECK(handsOff({0, 0, 0}));
+  CHECK(handsOff({0x0001, 0}));          // pressed since the last call, up now
+  CHECK(!handsOff({0, 0x8000}));         // held
+  CHECK(!handsOff({0x8001, 0}));
+  // Ctrl held for three polls, then let go: the paste goes on 150 ms later.
+  const auto s = std::make_shared<PasteState>();
+  std::vector<uint16_t> ctrl(10, 0);
+  ctrl[5] = 0x8000;
+  s->keys = {ctrl, ctrl, ctrl, std::vector<uint16_t>(10, 1)};
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok");
+  const std::vector<std::string> seen = s->seen();
+  const auto open = std::find(seen.begin(), seen.end(), "open");
+  CHECK(std::count(seen.begin(), open, "wait 50") == 3);
+  // Held all along: no paste after 3 s.
+  const auto held = std::make_shared<PasteState>();
+  held->keys = {ctrl};
+  CHECK(pasteResult(pastePlatform(held), pasteLine()) == "hands");
+  const std::vector<std::string> waited = held->seen();
+  CHECK(std::count(waited.begin(), waited.end(), "wait 50") == 60);
+  CHECK(!held->saw("open") && !held->saw("ctrl+v"));
+  // Taken again between the wait and Ctrl+V: no Ctrl+Shift+V or the like, and the clipboard goes back.
+  const auto late = std::make_shared<PasteState>();
+  late->clip = {format(0xC09E, "HTML Format", "<i>mine</i>")};
+  late->keys = {std::vector<uint16_t>(10, 0), ctrl};
+  CHECK(pasteResult(pastePlatform(late), pasteLine()) == "hands");
+  CHECK(!late->saw("ctrl+v") && late->writes.size() == 2);
+  CHECK(late->clip.size() == 4 && late->clip.front().name == "HTML Format");
+}
+
+static void test_paste_gives_up_on_a_busy_clipboard() {
+  const auto s = std::make_shared<PasteState>();
+  s->failedOpens = -1;
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "busy");
+  const std::vector<std::string> seen = s->seen();
+  CHECK(std::count(seen.begin(), seen.end(), "open") == 20);
+  CHECK(std::count(seen.begin(), seen.end(), "wait 25") == 19);
+  CHECK(!s->saw("ctrl+v") && s->writes.empty());
+  // A few busy tries are fine.
+  const auto later = std::make_shared<PasteState>();
+  later->failedOpens = 3;
+  CHECK(pasteResult(pastePlatform(later), pasteLine()) == "ok");
+}
+
+static void test_paste_clicks_presses_ctrl_v_and_restores_a_second_later() {
+  const auto s = std::make_shared<PasteState>();
+  CHECK(pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200",)")) == "ok");
+  std::vector<std::string> seen = s->seen();
+  seen.erase(seen.begin(), std::find(seen.begin(), seen.end(), "open"));
+  CHECK(seen == std::vector<std::string>({"open", "write", "close", "click -1820,200", "wait 150", "keys", "ctrl+v",
+                                          "wait 1000", "open", "write", "close"}));
+  // A click that moved the foreground: the text is taken back and nothing is pressed.
+  const auto moved = std::make_shared<PasteState>();
+  ContextPlatform p = pastePlatform(moved);
+  p.click = [moved](Point) {
+    moved->note("click");
+    moved->fg = "555";
+    return true;
+  };
+  CHECK(pasteResult(p, pasteLine(R"("click":"-1820,200",)")) == "window");
+  CHECK(!moved->saw("ctrl+v") && moved->writes.size() == 2);
+}
+
+static void test_paste_and_set_field_need_a_platform_that_has_them() {
+  Fake fake;
+  const auto m = fields(handleCommand(parseCommand(pasteLine()), fake.platform()).line);
+  CHECK(m.at("type") == "error" && m.at("code") == "bad");
+  const auto f = fields(handleCommand(parseCommand(
+      R"({"type":"setField","id":"s1","window":"263544","field":"1.2","value":"x"})"), fake.platform()).line);
+  CHECK(f.at("type") == "error" && f.at("code") == "bad");
+}
+
+namespace {
+
+std::string setResult(const ContextPlatform& p, const std::string& value = "Ada", int budgetMs = kProbeBudgetMs) {
+  const std::string line =
+      R"({"type":"setField","id":"s1","window":"263544","field":"42.7.1","value":")" + value + "\"}";
+  const auto m = fields(handleCommand(parseCommand(line), p, budgetMs).line);
+  return m.count("type") && m.at("type") == "set" && m.at("id") == "s1" ? m.at("result") : "?";
+}
+
+}  // namespace
+
+static void test_setfield_refuses_a_password_field() {
+  const auto s = std::make_shared<PasteState>();
+  s->field = FieldFacts{"text", "Password", true};
+  CHECK(setResult(pastePlatform(s), "hunter2") == "secure");
+  CHECK(s->written.empty());
+  const auto card = std::make_shared<PasteState>();
+  card->field = FieldFacts{"text", "\xe8\xba\xab\xe4\xbb\xbd\xe8\xaf\x81\xe5\x8f\xb7", false};  // the ZH ID number
+  CHECK(setResult(pastePlatform(card)) == "secure" && card->written.empty());
+  const auto name = std::make_shared<PasteState>();
+  CHECK(setResult(pastePlatform(name)) == "ok");
+  CHECK(name->written == std::vector<std::string>({"Ada"}));
+  CHECK(name->seen().front() == "responsive 263544");  // the frozen-app check comes first
+}
+
+static void test_setfield_checks_the_window_and_finds_the_field() {
+  const auto other = std::make_shared<PasteState>();
+  other->fg = "1";
+  CHECK(setResult(pastePlatform(other)) == "window" && other->seen().empty());
+  const auto frozen = std::make_shared<PasteState>();
+  frozen->answers = false;
+  CHECK(setResult(pastePlatform(frozen)) == "hung" && !frozen->saw("uia"));
+  const auto gone = std::make_shared<PasteState>();
+  gone->setResult = "gone";
+  CHECK(setResult(pastePlatform(gone)) == "gone");
+  const auto refused = std::make_shared<PasteState>();
+  refused->setResult = "refused";
+  CHECK(setResult(pastePlatform(refused)) == "refused");
+  // A write still running at its budget: the app is not answering, and the helper ends after the reply.
+  const auto slow = std::make_shared<PasteState>();
+  slow->slowSetMs = 300;
+  const Reply r = handleCommand(
+      parseCommand(R"({"type":"setField","id":"s1","window":"263544","field":"42.7.1","value":"Ada"})"),
+      pastePlatform(slow), 50);
+  CHECK(fields(r.line).at("result") == "hung" && r.exitAfter);
+}
+
 int main() {
+  test_parse_paste_command();
+  test_parse_set_field_command();
+  test_restore_keeps_every_saved_format();
+  test_paste_marks_both_writes_as_excluded();
+  test_paste_refuses_a_window_that_does_not_answer();
+  test_paste_refuses_another_window();
+  test_paste_replaces_only_while_the_selection_holds_the_asked_text();
+  test_paste_refuses_a_secure_field();
+  test_paste_fails_closed_when_its_checks_run_over();
+  test_hands_off_ignores_released_keys();
+  test_paste_gives_up_on_a_busy_clipboard();
+  test_paste_clicks_presses_ctrl_v_and_restores_a_second_later();
+  test_paste_and_set_field_need_a_platform_that_has_them();
+  test_setfield_refuses_a_password_field();
+  test_setfield_checks_the_window_and_finds_the_field();
   test_parse_capture_command();
   test_parse_other_commands();
   test_parse_rejects_bad_input();

@@ -152,4 +152,40 @@ describe('ContextClient', () => {
     clients.push(c);
     await expect(c.foreground(signal())).rejects.toMatchObject({ code: 'exited' });
   });
+
+  it('pastes and sets a field, passing on the helper\'s result', async () => {
+    const { c } = client(['ok']);
+    const paste = { window: '263544', text: 'hello', click: { x: 10, y: 20 }, mode: 'insert' as const, asked: '' };
+    await expect(c.paste(paste, signal())).resolves.toBe('ok');
+    await expect(c.setField({ window: '263544', field: '42.7.1', value: 'Ada' }, signal())).resolves.toBe('refused');
+  });
+
+  it('waits up to 6 s for a paste', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { c, starts } = client(['silent', 'ok']);
+    const req = { window: '263544', text: 'hello', click: null, mode: 'insert' as const, asked: '' };
+    const outcome = c.paste(req, signal()).then(() => 'resolved', (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5999);
+    expect(starts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toMatchObject({ code: 'timeout' });
+    expect(starts()).toBe(2);
+  });
+
+  it('gives a request behind a paste the paste\'s time too, so it never restarts the helper mid-paste', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { c, starts } = client(['silent', 'ok']);
+    const req = { window: '263544', text: 'hello', click: null, mode: 'insert' as const, asked: '' };
+    const paste = c.paste(req, signal()).then(() => 'resolved', (e: unknown) => e);
+    let settled = false;
+    const fg = c.foreground(signal()).then(() => 'resolved', (e: unknown) => e).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(settled).toBe(false);
+    expect(starts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await paste).toMatchObject({ code: 'timeout' });
+    expect(await fg).toMatchObject({ code: 'timeout' });
+  });
 });

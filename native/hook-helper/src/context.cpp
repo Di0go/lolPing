@@ -1,6 +1,7 @@
 #include "context.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -178,6 +179,82 @@ Command parseRead(const Fields& m, const std::string& id) {
     return bad(id, "marks, text, file, boxes and fields must be true or false");
   }
   if (const std::string why = dirField(m, r.dir); !why.empty()) return bad(id, why);
+  return c;
+}
+
+// The foreground reply's window id: the HWND in decimal on Windows.
+bool validWindow(const std::string& w) {
+  return !w.empty() && w.size() <= 20 && std::all_of(w.begin(), w.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
+// A UI Automation runtime id: 32-bit integers joined with dots, as formFieldsFileText writes them.
+bool validFieldId(const std::string& id) {
+  if (id.empty() || id.size() > kFieldIdMax) return false;
+  for (const std::string& part : split(id, '.')) {
+    const size_t digits = part.size() - (part.rfind('-', 0) == 0 ? 1 : 0);
+    if (digits == 0 || digits > 10) return false;
+    if (!std::all_of(part.end() - static_cast<std::ptrdiff_t>(digits), part.end(), [](char c) {
+          return c >= '0' && c <= '9';
+        })) {
+      return false;
+    }
+    const long long v = std::stoll(part);
+    if (v < INT32_MIN || v > INT32_MAX) return false;
+  }
+  return true;
+}
+
+// Characters, not bytes: a byte that is not a UTF-8 continuation byte starts one.
+size_t charCount(const std::string& s) {
+  return static_cast<size_t>(
+      std::count_if(s.begin(), s.end(), [](char c) { return (static_cast<unsigned char>(c) & 0xC0) != 0x80; }));
+}
+
+// A required string field; false when it is missing.
+bool stringField(const Fields& m, const char* key, std::string& out) {
+  const auto it = m.find(key);
+  if (it == m.end()) return false;
+  out = it->second;
+  return true;
+}
+
+Command parsePaste(const Fields& m, const std::string& id) {
+  Command c;
+  c.kind = Command::Kind::Paste;
+  c.id = id;
+  PasteRequest& r = c.paste;
+  if (!stringField(m, "window", r.window) || !validWindow(r.window)) return bad(id, "window must be a window id");
+  if (!stringField(m, "text", r.text) || r.text.empty() || charCount(r.text) > kPasteTextMax) {
+    return bad(id, "text must be 1 to 20000 characters");
+  }
+  std::string mode;
+  if (!stringField(m, "mode", mode) || (mode != "insert" && mode != "replace")) {
+    return bad(id, "mode must be insert or replace");
+  }
+  r.replace = mode == "replace";
+  const auto click = m.find("click");
+  if (click != m.end() && !click->second.empty()) {
+    std::vector<int> v;
+    if (!parseInts(click->second, 2, v)) return bad(id, "click must be \"x,y\"");
+    r.click = Point{v[0], v[1]};
+  }
+  // A click would drop the very selection a replace pastes over.
+  if (r.replace && r.click) return bad(id, "a replace has no click");
+  stringField(m, "asked", r.asked);
+  if (charCount(r.asked) > kSelectionMax) return bad(id, "asked is too long");
+  return c;
+}
+
+Command parseSetField(const Fields& m, const std::string& id) {
+  Command c;
+  c.kind = Command::Kind::SetField;
+  c.id = id;
+  SetFieldRequest& r = c.setField;
+  if (!stringField(m, "window", r.window) || !validWindow(r.window)) return bad(id, "window must be a window id");
+  if (!stringField(m, "field", r.field) || !validFieldId(r.field)) return bad(id, "field must be a runtime id");
+  if (!stringField(m, "value", r.value) || charCount(r.value) > kFieldValueMax) {
+    return bad(id, "value must be at most 2000 characters");
+  }
   return c;
 }
 
@@ -517,6 +594,10 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
   return Reply{line + "}", !allDone};
 }
 
+// Below, with the text helpers they use.
+Reply handlePaste(const Command& cmd, const ContextPlatform& platform, int budgetMs);
+Reply handleSetField(const Command& cmd, const ContextPlatform& platform, int budgetMs);
+
 }  // namespace
 
 Command parseCommand(const std::string& line) {
@@ -534,6 +615,8 @@ Command parseCommand(const std::string& line) {
   if (!validId(id)) return bad("", "id must be 1 to 64 letters, digits, '-' or '_'");
   if (type->second == "capture") return parseCapture(m, id);
   if (type->second == "read") return parseRead(m, id);
+  if (type->second == "paste") return parsePaste(m, id);
+  if (type->second == "setField") return parseSetField(m, id);
   Command c;
   c.id = id;
   if (type->second == "foreground") c.kind = Command::Kind::Foreground;
@@ -624,6 +707,8 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int bud
                      "\",\"title\":\"" + jsonEscape(title) + "\",\"window\":\"" + jsonEscape(windowId) + "\"}"};
       }
       case Command::Kind::Read: return handleRead(cmd, platform, budgetMs);
+      case Command::Kind::Paste: return handlePaste(cmd, platform, budgetMs);
+      case Command::Kind::SetField: return handleSetField(cmd, platform, budgetMs);
       case Command::Kind::Shutdown: break;
     }
   } catch (const std::exception& e) {  // a huge display can run out of memory; the helper stays up
@@ -889,6 +974,241 @@ bool browserAddress(const std::string& value, std::string& path, std::string& ad
   address = "https://" + v;
   return true;
 }
+
+namespace {
+
+constexpr const char* kExclusionNames[] = {"ExcludeClipboardContentFromMonitorProcessing",
+                                           "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"};
+
+bool isExclusionName(const std::string& name) {
+  return std::any_of(std::begin(kExclusionNames), std::end(kExclusionNames),
+                     [&name](const char* known) { return name == known; });
+}
+
+// Windows makes these up from another format on the clipboard: CF_TEXT, CF_BITMAP, CF_METAFILEPICT, CF_OEMTEXT,
+// CF_PALETTE, CF_LOCALE and CF_DIBV5.
+bool isSynthesized(unsigned id) { return id == 1 || id == 2 || id == 3 || id == 7 || id == 9 || id == 16 || id == 17; }
+
+// No memory to copy: the owner-display formats, and the private and GDI object ranges.
+bool isHandleFormat(unsigned id) {
+  return id == 0x80 || id == 0x82 || id == 0x83 || id == 0x8E || (id >= 0x200 && id <= 0x3FF);
+}
+
+// UTF-16LE with its terminating zero, as CF_UNICODETEXT holds text; a malformed byte becomes U+FFFD.
+std::vector<uint8_t> utf16Text(const std::string& s) {
+  std::vector<uint8_t> out;
+  const auto unit = [&out](uint32_t u) {
+    out.push_back(static_cast<uint8_t>(u & 0xFF));
+    out.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+  };
+  size_t i = 0;
+  while (i < s.size()) {
+    const auto b = static_cast<unsigned char>(s[i]);
+    const int more = b < 0x80 ? 0 : (b & 0xE0) == 0xC0 ? 1 : (b & 0xF0) == 0xE0 ? 2 : (b & 0xF8) == 0xF0 ? 3 : -1;
+    uint32_t cp = more == 0 ? b : more == 1 ? (b & 0x1Fu) : more == 2 ? (b & 0x0Fu) : (b & 0x07u);
+    bool ok = more >= 0 && i + static_cast<size_t>(more) < s.size();
+    for (int k = 1; ok && k <= more; ++k) {
+      const auto c = static_cast<unsigned char>(s[i + static_cast<size_t>(k)]);
+      ok = (c & 0xC0) == 0x80;
+      cp = (cp << 6) | (c & 0x3Fu);
+    }
+    const uint32_t least = more == 1 ? 0x80 : more == 2 ? 0x800 : more == 3 ? 0x10000 : 0;
+    if (!ok || cp < least || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      unit(0xFFFD);
+      ++i;
+      continue;
+    }
+    if (cp >= 0x10000) {
+      unit(0xD800 + ((cp - 0x10000) >> 10));
+      unit(0xDC00 + ((cp - 0x10000) & 0x3FF));
+    } else {
+      unit(cp);
+    }
+    i += static_cast<size_t>(more) + 1;
+  }
+  unit(0);
+  return out;
+}
+
+std::string resultLine(const char* type, const std::string& id, const std::string& result) {
+  return "{\"type\":\"" + std::string(type) + "\",\"id\":\"" + jsonEscape(id) + "\",\"result\":\"" + result + "\"}";
+}
+
+// The window in front now, by the foreground reply's id; empty when it can't be read.
+std::string frontWindow(const ContextPlatform& p) {
+  std::string app, title, window;
+  Failure fail;
+  return p.foreground(app, title, window, fail) ? window : std::string();
+}
+
+bool hasPasteRoute(const ContextPlatform& p) {
+  return p.foreground && p.responsive && p.windowAt && p.focusedSelection && p.fieldFacts && p.keyStates &&
+         p.openClipboard && p.closeClipboard && p.clipboardFormats && p.readClipboard && p.writeClipboard && p.click &&
+         p.pressPaste && p.wait;
+}
+
+// Another app may hold the clipboard for a moment.
+bool openClipboardSoon(const ContextPlatform& p) {
+  for (int i = 0; i < kClipboardTries; ++i) {
+    if (i > 0) p.wait(kClipboardRetryMs);
+    if (p.openClipboard()) return true;
+  }
+  return false;
+}
+
+// `formats` with the exclusion formats, so neither the pasted text nor the restored clipboard lands in Win+V history
+// or the cloud clipboard as a new item.
+bool putOnClipboard(const ContextPlatform& p, std::vector<ClipFormat> formats) {
+  for (ClipFormat& f : exclusionFormats()) formats.push_back(std::move(f));
+  const bool ok = p.writeClipboard(formats);
+  p.closeClipboard();
+  return ok;
+}
+
+bool restoreClipboard(const ContextPlatform& p, const std::vector<ClipFormat>& saved) {
+  return openClipboardSoon(p) && putOnClipboard(p, saved);
+}
+
+// A field the helper never writes: a password field, or a label that names a password, card, ID or the like.
+bool secureField(const FieldFacts& f) { return f.secure || neverFillLabel(f.label); }
+
+// What the checks that call into the target found; the flags are atomic as a slow check outlives its command.
+struct PasteChecks {
+  std::atomic<bool> selectionChecked{false};
+  bool selectionHolds = false;
+  bool secure = true;
+};
+
+}  // namespace
+
+std::vector<ClipFormat> formatsToRestore(const std::vector<ClipFormat>& listed) {
+  std::vector<ClipFormat> out;
+  for (const ClipFormat& f : listed) {
+    if (isSynthesized(f.id) || isHandleFormat(f.id) || isExclusionName(f.name)) continue;
+    if (f.name == "DataObject" || f.name == "Ole Private Data") continue;
+    out.push_back(f);
+  }
+  return out;
+}
+
+std::vector<ClipFormat> exclusionFormats() {
+  std::vector<ClipFormat> out;
+  // A DWORD 0: "no" for history and the cloud clipboard; monitors skip the item whatever it holds.
+  for (const char* name : kExclusionNames) out.push_back(ClipFormat{0, name, {0, 0, 0, 0}});
+  return out;
+}
+
+bool handsOff(const std::vector<uint16_t>& states) {
+  // The low bit says the key went down since the last call, even if it is up again: not a held key.
+  return std::none_of(states.begin(), states.end(), [](uint16_t s) { return (s & 0x8000) != 0; });
+}
+
+namespace {
+
+// The order is the spec's (§10.3 with §16): the window, the frozen-app check (before anything else calls into the
+// target), the replace's selection, a secure field, hands off, then the clipboard route. A refusal after the text is on
+// the clipboard puts the saved clipboard back first.
+Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
+  const PasteRequest& r = cmd.paste;
+  const auto reply = [&cmd](const char* result, bool exitAfter = false) {
+    return Reply{resultLine("pasted", cmd.id, result), exitAfter};
+  };
+  if (!hasPasteRoute(p)) return Reply{formatError(cmd.id, "bad", "paste is not available here")};
+  if (frontWindow(p) != r.window) return reply("window");
+  if (!p.responsive(r.window)) return reply("hung");
+  if (r.click && p.windowAt(*r.click) != r.window) return reply("window");
+
+  const auto checks = std::make_shared<PasteChecks>();
+  const auto selection = p.focusedSelection;
+  const auto facts = p.fieldFacts;
+  const bool replace = r.replace;
+  const std::string asked = trim(r.asked);
+  const std::optional<Point> click = r.click;
+  // Any of these can block on an app that stopped answering after the check above: they get a deadline of their own,
+  // and one that can't answer in time, or at all, refuses the paste.
+  const bool done = runWithBudget(
+      [checks, selection, facts, replace, asked, click] {
+        if (replace) {
+          std::string now;
+          checks->selectionHolds = selection(now) && !asked.empty() && trim(now) == asked;
+          checks->selectionChecked = true;
+          if (!checks->selectionHolds) return;
+        }
+        FieldFacts focus;
+        bool secure = !facts(std::nullopt, focus) || secureField(focus);
+        if (!secure && click) {
+          FieldFacts under;
+          secure = !facts(click, under) || secureField(under);
+        }
+        checks->secure = secure;
+      },
+      budgetMs * 4 / 5);
+  if (!done) return reply(replace && !checks->selectionChecked ? "selection" : "secure", true);
+  if (replace && !checks->selectionHolds) return reply("selection");
+  if (checks->secure) return reply("secure");
+
+  for (int waited = 0; !handsOff(p.keyStates()); waited += kHandsPollMs) {
+    if (waited >= kHandsOffWaitMs) return reply("hands");
+    p.wait(kHandsPollMs);
+  }
+
+  if (!openClipboardSoon(p)) return reply("busy");
+  std::vector<ClipFormat> saved;
+  for (ClipFormat f : formatsToRestore(p.clipboardFormats())) {
+    if (p.readClipboard(f)) saved.push_back(std::move(f));
+  }
+  if (!putOnClipboard(p, {ClipFormat{kClipUnicodeText, "", utf16Text(r.text)}})) {
+    restoreClipboard(p, saved);
+    return reply("busy");
+  }
+  if (r.click) {
+    if (!p.click(*r.click)) {
+      restoreClipboard(p, saved);
+      return reply("busy");
+    }
+    p.wait(kClickSettleMs);
+  }
+  // The click may have brought another window up, and the user may have taken a key since the wait: a Ctrl+V now
+  // would go elsewhere or come out as another shortcut.
+  if (frontWindow(p) != r.window) {
+    restoreClipboard(p, saved);
+    return reply("window");
+  }
+  if (!handsOff(p.keyStates())) {
+    restoreClipboard(p, saved);
+    return reply("hands");
+  }
+  const bool pressed = p.pressPaste();
+  p.wait(kRestoreAfterMs);
+  restoreClipboard(p, saved);
+  return reply(pressed ? "ok" : "busy");
+}
+
+Reply handleSetField(const Command& cmd, const ContextPlatform& p, int budgetMs) {
+  const SetFieldRequest& r = cmd.setField;
+  const auto reply = [&cmd](const std::string& result, bool exitAfter = false) {
+    return Reply{resultLine("set", cmd.id, result), exitAfter};
+  };
+  if (!p.foreground || !p.responsive || !p.setField) {
+    return Reply{formatError(cmd.id, "bad", "setField is not available here")};
+  }
+  if (frontWindow(p) != r.window) return reply("window");
+  if (!p.responsive(r.window)) return reply("hung");
+  const auto result = std::make_shared<std::string>("refused");
+  const auto setField = p.setField;
+  const SetFieldRequest request = r;
+  const bool done = runWithBudget(
+      [result, setField, request] {
+        *result = setField(request, [](const FieldFacts& f) { return secureField(f) ? "secure" : std::string(); });
+      },
+      budgetMs * 3 / 2);
+  // Still inside UI Automation: the app is not answering, and whether the value went in is unknown.
+  if (!done) return reply("hung", true);
+  const std::string& got = *result;
+  return reply(got == "ok" || got == "gone" || got == "secure" ? got : "refused");
+}
+
+}  // namespace
 
 bool runWithBudget(const std::function<void()>& probe, int budgetMs) {
   return runAllWithBudget({probe}, budgetMs);

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <istream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -42,12 +43,70 @@ struct ReadRequest {
   std::string dir;            // where the marks and fields files go
 };
 
+/** A paste into the ask's window by the clipboard route, the one place lolPing sends input for the user (spec §10.3). */
+struct PasteRequest {
+  std::string window;           // the foreground reply's window id
+  std::string text;             // UTF-8, 1 to kPasteTextMax characters
+  std::optional<Point> click;   // clicked first to put the caret in the field; insert only
+  bool replace = false;         // replace pastes only while the selection still holds `asked`
+  std::string asked;
+};
+
+/** A form field's new value, written by UI Automation. Checkboxes and radios take "on" or "off". */
+struct SetFieldRequest {
+  std::string window;
+  std::string field;  // its runtime id, joined with dots (RawField::id)
+  std::string value;
+};
+
 struct Command {
-  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown, Read } kind = Kind::Bad;
+  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown, Read, Paste, SetField } kind = Kind::Bad;
   std::string id;
   std::string error;  // Bad: why
   CaptureRequest capture;
   ReadRequest read;
+  PasteRequest paste;
+  SetFieldRequest setField;
+};
+
+constexpr size_t kPasteTextMax = 20000;  // characters
+
+/** One clipboard format: its id, its registered name (empty for the standard ones) and its bytes. */
+struct ClipFormat {
+  unsigned id = 0;  // 0 when only the name is known: the platform registers it
+  std::string name;
+  std::vector<uint8_t> bytes;
+};
+
+constexpr unsigned kClipUnicodeText = 13;  // CF_UNICODETEXT
+constexpr unsigned kClipEnhMetafile = 14;  // CF_ENHMETAFILE: a handle, saved as its bits
+
+/**
+ * The listed formats a restore puts back, in their order: not the ones Windows makes up from another (restoring the
+ * source brings them back), not the OLE ones (they point into the old owner), not GDI or private handles, and not the
+ * exclusion formats, which every write adds fresh.
+ */
+std::vector<ClipFormat> formatsToRestore(const std::vector<ClipFormat>& listed);
+
+/** The three formats that keep a write out of clipboard history, the cloud clipboard and clipboard monitors. */
+std::vector<ClipFormat> exclusionFormats();
+
+/** Whether no watched key or button is held: each state as GetAsyncKeyState returns it, held when the top bit is set. */
+bool handsOff(const std::vector<uint16_t>& states);
+
+/** The paste route's waits, in milliseconds. */
+constexpr int kHandsOffWaitMs = 3000;
+constexpr int kHandsPollMs = 50;
+constexpr int kClipboardTries = 20;
+constexpr int kClipboardRetryMs = 25;
+constexpr int kClickSettleMs = 150;
+constexpr int kRestoreAfterMs = 1000;
+
+/** What a write needs to know about a field first: its kind (RawField's), label and password flag. */
+struct FieldFacts {
+  std::string kind;
+  std::string label;
+  bool secure = false;
 };
 
 constexpr int kMaxSpots = 4;
@@ -124,6 +183,40 @@ struct ContextPlatform {
   std::function<bool(const std::vector<Point>& spots, std::vector<RawField>& out, Failure& fail)> formFields;
   /** The file or web address behind the foreground window; `how` is office, address, title or none. */
   std::function<bool(std::string& path, std::string& address, std::string& how, Failure& fail)> fileOf;
+
+  // Writing: paste and setField (context_write_win.cpp). Unset where the platform has none: both answer `bad`.
+  // focusedSelection, fieldFacts and setField call into the target app by UI Automation: each runs on a fresh thread,
+  // like the probes above, and only after `responsive` said the app answers.
+  /** Whether the window answers a message within 200 ms: a frozen app would take a Ctrl+V late, after the restore. */
+  std::function<bool(const std::string& window)> responsive;
+  /** The top-level window under a point, by the same id as foreground's. */
+  std::function<std::string(Point at)> windowAt;
+  /** The focused element's selected text, read as the read command reads it; false when it can't be read. */
+  std::function<bool(std::string& out)> focusedSelection;
+  /** The field under `at`, or the focused one without it; false when it can't be read. */
+  std::function<bool(std::optional<Point> at, FieldFacts& out)> fieldFacts;
+  /** The states of the mouse buttons, Ctrl, Shift, Alt and Win (handsOff). */
+  std::function<std::vector<uint16_t>()> keyStates;
+  /** One try; the clipboard's other calls run between a successful open and the close. */
+  std::function<bool()> openClipboard;
+  std::function<void()> closeClipboard;
+  /** The formats on the clipboard, ids and names only, in its order. */
+  std::function<std::vector<ClipFormat>()> clipboardFormats;
+  /** Fills in `format.bytes`; false for a format that has no memory handle. */
+  std::function<bool(ClipFormat& format)> readClipboard;
+  /** Empties the clipboard and puts these formats on it. */
+  std::function<bool(const std::vector<ClipFormat>& formats)> writeClipboard;
+  /** A primary-button click at the point, marked as lolPing's own input; the pointer goes back where it was. */
+  std::function<bool(Point at)> click;
+  /** Ctrl down, V down, V up, Ctrl up, each marked as lolPing's own input. */
+  std::function<bool()> pressPaste;
+  std::function<void(int ms)> wait;
+  /**
+   * Finds the field by runtime id under the window and writes the value; `check` sees the field first and returns a
+   * result code to refuse it, or "" to allow. Returns ok, gone, refused or check's code.
+   */
+  std::function<std::string(const SetFieldRequest& request,
+                            const std::function<std::string(const FieldFacts&)>& check)> setField;
 };
 
 /** This OS's capture, resize, JPEG and foreground calls (context_capture_win.cpp, context_capture_mac.mm). */
@@ -140,7 +233,11 @@ constexpr int kProbeBudgetMs = 1000;
 /** runContextLoop's result after a reply with exitAfter: the caller ends the process without cleanup. */
 constexpr int kExitNow = 2;
 
-/** Runs one command. Not called for Shutdown. Tests pass a short budget. */
+/**
+ * Runs one command. Not called for Shutdown. Tests pass a short budget. A paste is not held to it as a whole (its
+ * hands-off wait and restore take seconds); its UI Automation checks get four fifths of it (800 ms), and a setField
+ * gets one and a half times it (1,500 ms: opening a combo's list takes a while).
+ */
 Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int budgetMs = kProbeBudgetMs);
 
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */

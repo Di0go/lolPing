@@ -11,11 +11,11 @@
 
 #include "app.h"
 #include "commands.h"
+#include "selfMarker.h"
 
 namespace lp {
 namespace {
 
-constexpr ULONG_PTR kSelfMarker = 0x4C50494E;  // "LPIN" in dwExtraInfo marks our own SendInput events
 constexpr UINT kWmCommand = WM_APP + 1;
 constexpr UINT kWmInject = WM_APP + 2;
 

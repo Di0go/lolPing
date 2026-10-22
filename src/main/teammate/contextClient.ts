@@ -3,9 +3,13 @@ import { createInterface } from 'node:readline';
 import type { Point } from '../../shared/ipc';
 import type { Rect, Shot } from '../../shared/teammate/coords';
 import {
-  captureCommand, parseContextLine, readCommand, serializeContextCommand, type ContextCommand, type ContextErrorCode,
-  type ContextReply, type ReadResult,
+  captureCommand, parseContextLine, pasteCommand, readCommand, serializeContextCommand, setFieldCommand,
+  type ContextCommand, type ContextErrorCode, type ContextReply, type PasteRequest, type PasteResult, type ReadResult,
+  type SetFieldRequest, type SetFieldResult,
 } from '../../shared/teammate/contextProtocol';
+
+/** A paste's own reply time: the helper's 3 s hands-off wait, the 1 s before the restore, and a margin. */
+export const PASTE_TIMEOUT_MS = 6000;
 
 /** `timeout`: no reply in time (the helper was restarted); `exited`: it died or never started; `stopped`: stop() ran. */
 export type ContextFailure = ContextErrorCode | 'timeout' | 'aborted' | 'exited' | 'stopped';
@@ -48,6 +52,8 @@ export class ContextClient {
   private readonly pending = new Map<string, Pending>();
   private nextId = 1;
   private readonly timeoutMs: number;
+  /** Ids of the pastes the helper is running, until their reply or the helper's end. */
+  private readonly pastes = new Set<string>();
 
   constructor(private readonly opts: ContextClientOptions) {
     this.timeoutMs = opts.timeoutMs ?? 3000;
@@ -86,6 +92,26 @@ export class ContextClient {
     return { app: r.app, title: r.title, window: r.window };
   }
 
+  /**
+   * Pastes into the ask's window by the clipboard route, run whole in the helper: up to 3 s waiting for hands off, then
+   * 1 s before the clipboard is put back, so it gets PASTE_TIMEOUT_MS.
+   */
+  async paste(req: PasteRequest, signal: AbortSignal): Promise<PasteResult> {
+    const r = await this.request((id) => {
+      this.pastes.add(id);
+      return pasteCommand(id, req);
+    }, 'pasted', signal, PASTE_TIMEOUT_MS);
+    if (r.type !== 'pasted') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return r.result;
+  }
+
+  /** Writes one form field by UI Automation. */
+  async setField(req: SetFieldRequest, signal: AbortSignal): Promise<SetFieldResult> {
+    const r = await this.request((id) => setFieldCommand(id, req), 'set', signal);
+    if (r.type !== 'set') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return r.result;
+  }
+
   /** Always settles: on the child's exit or error, or after a 1 s fallback that kills it. */
   stop(): Promise<void> {
     this.failAll('stopped', 'the context helper was stopped');
@@ -112,11 +138,15 @@ export class ContextClient {
     make: (id: string) => ContextCommand,
     expect: ContextReply['type'],
     signal: AbortSignal,
+    ownMs = this.timeoutMs,
   ): Promise<ContextReply> {
     if (signal.aborted) return Promise.reject(new ContextError('aborted', 'the ask was cancelled'));
     const child = this.child ?? this.start();
     const id = `r${this.nextId}`;
     this.nextId += 1;
+    // The helper answers in order: a request behind a paste waits for it too. Restarting the helper mid-paste would
+    // leave the pasted text on the clipboard instead of the user's own.
+    const timeoutMs = ownMs + (this.pastes.size > 0 ? PASTE_TIMEOUT_MS : 0);
     return new Promise<ContextReply>((resolve, reject) => {
       const settle = () => {
         clearTimeout(timer);
@@ -129,9 +159,9 @@ export class ContextClient {
       };
       const timer = setTimeout(() => {
         settle();
-        reject(new ContextError('timeout', `no reply from the context helper in ${this.timeoutMs} ms`));
+        reject(new ContextError('timeout', `no reply from the context helper in ${timeoutMs} ms`));
         this.restart();
-      }, this.timeoutMs);
+      }, timeoutMs);
       signal.addEventListener('abort', onAbort, { once: true });
       this.pending.set(id, {
         expect,
@@ -180,6 +210,7 @@ export class ContextClient {
     if (child !== this.child) return;
     const reply = parseContextLine(line);
     if (!reply) return;
+    this.pastes.delete(reply.id); // done in the helper, even when its ask was cancelled meanwhile
     const p = this.pending.get(reply.id); // none when aborted or timed out already
     if (p) {
       if (reply.type === 'error') p.reject(new ContextError(reply.code, reply.message));
@@ -194,7 +225,9 @@ export class ContextClient {
     }
   }
 
+  /** Called whenever the helper goes away, so no paste is still running in it either. */
   private failAll(code: ContextFailure, message: string): void {
+    this.pastes.clear();
     for (const p of [...this.pending.values()]) p.reject(new ContextError(code, message));
   }
 

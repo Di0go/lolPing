@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  captureCommand, parseContextLine, parseFieldsFile, readCommand,
+  captureCommand, parseContextLine, parseFieldsFile, pasteCommand, readCommand, setFieldCommand,
 } from '../../../src/shared/teammate/contextProtocol';
 
 /** A read reply with every layer off; `over` adds or replaces fields. */
@@ -233,5 +233,47 @@ describe('contextProtocol', () => {
   it('splits spot texts on the record separator', () => {
     const reply = parseContextLine(readLine({ ...textFields, spotTexts: 'first line\u001esecond, with\ttab\u001e' }));
     expect(reply).toMatchObject({ text: { spotTexts: ['first line', 'second, with\ttab', ''] } });
+  });
+
+  it('flattens a paste command', () => {
+    expect(pasteCommand('r1', {
+      window: '263544', text: 'line one\nline two', click: { x: 10.6, y: -20 }, mode: 'insert', asked: '',
+    })).toEqual({
+      type: 'paste', id: 'r1', window: '263544', text: 'line one\nline two', click: '11,-20', mode: 'insert', asked: '',
+    });
+    expect(pasteCommand('r2', { window: '1', text: 'better', click: null, mode: 'replace', asked: 'old' }))
+      .toMatchObject({ click: '', mode: 'replace', asked: 'old' });
+  });
+
+  it('flattens a setField command', () => {
+    expect(setFieldCommand('r1', { window: '263544', field: '42.7.1', value: 'on' }))
+      .toEqual({ type: 'setField', id: 'r1', window: '263544', field: '42.7.1', value: 'on' });
+  });
+
+  it('leaves out the control characters the helper cannot read, and keeps tabs and line breaks', () => {
+    const cmd = pasteCommand('r1', {
+      window: '1', text: 'a\u0000b\u0008c\u000cd\u001fe\tf\r\ng\ud800h\u{1F600}', click: null, mode: 'replace',
+      asked: 'x\u0007y',
+    });
+    expect(cmd).toMatchObject({ text: 'abcde\tf\r\ngh\u{1F600}', asked: 'xy' });
+    expect(setFieldCommand('r1', { window: '1', field: '1', value: 'A\u0001da' })).toMatchObject({ value: 'Ada' });
+  });
+
+  it('parses each paste result', () => {
+    for (const result of ['ok', 'hung', 'window', 'hands', 'selection', 'secure', 'busy']) {
+      expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1', result })))
+        .toEqual({ type: 'pasted', id: 'r1', result });
+    }
+    expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1', result: 'gone' }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1' }))).toBeNull();
+  });
+
+  it('parses each setField result', () => {
+    for (const result of ['ok', 'gone', 'refused', 'secure', 'window', 'hung']) {
+      expect(parseContextLine(JSON.stringify({ type: 'set', id: 'r1', result })))
+        .toEqual({ type: 'set', id: 'r1', result });
+    }
+    expect(parseContextLine(JSON.stringify({ type: 'set', id: 'r1', result: 'busy' }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ type: 'set', id: 'r1', result: 3 }))).toBeNull();
   });
 });
