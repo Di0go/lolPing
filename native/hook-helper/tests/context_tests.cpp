@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -836,9 +837,17 @@ struct PasteState {
   int slowChecksMs = 0;
   std::vector<std::vector<uint16_t>> keys;  // one per poll; the last repeats; none means every key is up
   size_t polls = 0;
-  int failedOpens = 0;  // opens that fail before one succeeds; -1: every open fails
+  int failedOpens = 0;   // opens that fail before one succeeds; -1: every open fails
+  int opensAllowed = -1;  // opens that succeed before every later one fails; -1: no limit
   std::vector<ClipFormat> clip;
   std::vector<std::vector<ClipFormat>> writes;
+  uint32_t sequence = 1;  // the clipboard's: each write moves it on
+  // The command loop's clock: waits move it on, and so do the calls given a cost here.
+  int64_t clock = 0;
+  int answerMs = 0, pollMs = 0;
+  bool elevatedTarget = false;
+  // What changes once the pasted text is on the clipboard, or while Ctrl+V goes out.
+  bool moveAfterWrite = false, freezeAfterWrite = false, copyDuringPaste = false, throwOnPaste = false;
   // setField
   FieldFacts field{"text", "Name", false};
   std::string setResult = "ok";
@@ -873,7 +882,12 @@ ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
   };
   p.responsive = [s](const std::string& window) {
     s->note("responsive " + window);
+    s->clock += s->answerMs;
     return s->answers;
+  };
+  p.elevated = [s](const std::string&) {
+    s->note("elevated");
+    return s->elevatedTarget;
   };
   p.windowAt = [s](Point at) {
     s->note("windowAt " + std::to_string(at.x) + "," + std::to_string(at.y));
@@ -892,6 +906,7 @@ ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
   };
   p.keyStates = [s] {
     s->note("keys");
+    s->clock += s->pollMs;
     if (s->keys.empty()) return std::vector<uint16_t>(10, 0);
     const std::vector<uint16_t> now = s->keys[std::min(s->polls, s->keys.size() - 1)];
     ++s->polls;
@@ -904,6 +919,8 @@ ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
       --s->failedOpens;
       return false;
     }
+    if (s->opensAllowed == 0) return false;
+    if (s->opensAllowed > 0) --s->opensAllowed;
     return true;
   };
   p.closeClipboard = [s] { s->note("close"); };
@@ -925,17 +942,27 @@ ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
     s->note("write");
     s->writes.push_back(all);
     s->clip = all;
+    ++s->sequence;
+    if (s->moveAfterWrite) s->under = "777";
+    if (s->freezeAfterWrite) s->answers = false;
     return true;
   };
+  p.clipboardSequence = [s] { return s->sequence; };
   p.click = [s](Point at) {
     s->note("click " + std::to_string(at.x) + "," + std::to_string(at.y));
     return true;
   };
   p.pressPaste = [s] {
     s->note("ctrl+v");
+    if (s->throwOnPaste) throw std::runtime_error("out of memory");
+    if (s->copyDuringPaste) ++s->sequence;  // the user copied something new
     return true;
   };
-  p.wait = [s](int ms) { s->note("wait " + std::to_string(ms)); };
+  p.wait = [s](int ms) {
+    s->note("wait " + std::to_string(ms));
+    s->clock += ms;
+  };
+  p.now = [s] { return s->clock; };
   p.setField = [s](const SetFieldRequest& r, const std::function<std::string(const FieldFacts&)>& check) {
     s->note("uia setField " + r.field);
     if (s->slowSetMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(s->slowSetMs));
@@ -957,6 +984,15 @@ std::string pasteLine(const std::string& extra = "") {
 std::string pasteResult(const ContextPlatform& p, const std::string& line, int budgetMs = kProbeBudgetMs) {
   const auto m = fields(handleCommand(parseCommand(line), p, budgetMs).line);
   return m.count("type") && m.at("type") == "pasted" && m.at("id") == "p1" ? m.at("result") : "?";
+}
+
+// Each key or button held for `polls` polls of the hands-off wait, then let go.
+std::vector<std::vector<uint16_t>> heldFor(size_t polls) {
+  std::vector<uint16_t> ctrl(10, 0);
+  ctrl[5] = 0x8000;
+  std::vector<std::vector<uint16_t>> out(polls, ctrl);
+  out.push_back(std::vector<uint16_t>(10, 0));
+  return out;
 }
 
 // The flat parser in the tests reads no \u escapes, so the lines carry UTF-8 as is.
@@ -1054,7 +1090,8 @@ static void test_restore_keeps_every_saved_format() {
   CHECK(restored.size() == 5);
   if (restored.size() == 5) {
     CHECK(restored[0].bytes == format(13, "", std::string("h\0i\0\0\0", 6)).bytes);
-    CHECK(restored[1].id == 0xC09E && restored[1].name == "HTML Format" && restored[1].bytes == format(0, "", html).bytes);
+    CHECK(restored[1].id == 0xC09E && restored[1].name == "HTML Format");
+    CHECK(restored[1].bytes == format(0, "", html).bytes);
     CHECK(restored[2].id == 0xC0A1 && restored[2].bytes == format(0, "", "{\\rtf1 hi}").bytes);
     CHECK(restored[3].id == 14 && restored[3].bytes == format(0, "", "EMF bits").bytes);
     CHECK(restored[4].id == 0xC0C0 && restored[4].bytes == format(0, "", "\x01\x02").bytes);
@@ -1113,6 +1150,15 @@ static void test_paste_replaces_only_while_the_selection_holds_the_asked_text() 
   CHECK(!moved.second->saw("open") && !moved.second->saw("ctrl+v"));
   CHECK(replace("old text", false, "old text").first == "selection");  // unreadable: fail closed
   CHECK(replace("", true, "").first == "selection");                    // nothing was asked about
+  // Word's line break (U+000B) is in the selection read now, and the client left it out of `asked`.
+  CHECK(replace("old\x0btext", true, "oldtext").first == "ok");
+  CHECK(replace("old text\x0b\x0b", true, "old text").first == "ok");
+  // A secure field wins over a selection that moved, and its selection is never read.
+  const auto both = std::make_shared<PasteState>();
+  both->focus.secure = true;
+  both->selection = "something else";
+  CHECK(pasteResult(pastePlatform(both), pasteOf("better", R"("asked":"old text",)", "replace")) == "secure");
+  CHECK(!both->saw("uia selection"));
   // An insert never reads the selection.
   const auto s = std::make_shared<PasteState>();
   CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok" && !s->saw("uia selection"));
@@ -1131,11 +1177,12 @@ static void test_paste_refuses_a_secure_field() {
   CHECK(run([](PasteState& s) { s.focus.label = "\xe5\xaf\x86\xe7\xa0\x81"; }) == "secure");  // the ZH password
   CHECK(run([](PasteState& s) { s.focusReadable = false; }) == "secure");                     // fail closed
   CHECK(run([](PasteState& s) { s.atClick.secure = true; }, R"("click":"-1820,200",)") == "secure");
-  // The checks come after the frozen-app check.
+  // The checks come after the hands-off wait, when the user has let go, and after the frozen-app check.
   const auto s = std::make_shared<PasteState>();
   CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok");
-  const std::vector<std::string> seen = s->seen();
-  CHECK(seen.size() > 1 && seen[0] == "responsive 263544" && seen[1] == "uia focus");
+  std::vector<std::string> seen = s->seen();
+  seen.resize(std::min<size_t>(seen.size(), 4));
+  CHECK(seen == std::vector<std::string>({"keys", "responsive 263544", "elevated", "uia focus"}));
 }
 
 static void test_paste_fails_closed_when_its_checks_run_over() {
@@ -1198,8 +1245,10 @@ static void test_paste_clicks_presses_ctrl_v_and_restores_a_second_later() {
   CHECK(pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200",)")) == "ok");
   std::vector<std::string> seen = s->seen();
   seen.erase(seen.begin(), std::find(seen.begin(), seen.end(), "open"));
-  CHECK(seen == std::vector<std::string>({"open", "write", "close", "click -1820,200", "wait 150", "keys", "ctrl+v",
-                                          "wait 1000", "open", "write", "close"}));
+  // The cheap checks again right before the click: window in front (not an event here), hands, click target, answer.
+  CHECK(seen == std::vector<std::string>({"open", "write", "close", "keys", "windowAt -1820,200", "responsive 263544",
+                                          "click -1820,200", "wait 150", "ctrl+v", "wait 1000", "open", "write",
+                                          "close"}));
   // A click that moved the foreground: the text is taken back and nothing is pressed.
   const auto moved = std::make_shared<PasteState>();
   ContextPlatform p = pastePlatform(moved);
@@ -1210,6 +1259,83 @@ static void test_paste_clicks_presses_ctrl_v_and_restores_a_second_later() {
   };
   CHECK(pasteResult(p, pasteLine(R"("click":"-1820,200",)")) == "window");
   CHECK(!moved->saw("ctrl+v") && moved->writes.size() == 2);
+}
+
+static void test_paste_checks_again_right_before_the_click() {
+  const std::vector<ClipFormat> mine = {format(0xC09E, "HTML Format", "<i>mine</i>")};
+  // The click point now lands in another window (the field scrolled away, a window opened over it).
+  const auto under = std::make_shared<PasteState>();
+  under->clip = mine;
+  under->moveAfterWrite = true;
+  CHECK(pasteResult(pastePlatform(under), pasteLine(R"("click":"-1820,200",)")) == "window");
+  CHECK(!under->saw("click") && !under->saw("ctrl+v"));
+  CHECK(under->writes.size() == 2 && under->clip.size() == 4 && under->clip.front().name == "HTML Format");
+  // The app stopped answering while the clipboard was set.
+  const auto frozen = std::make_shared<PasteState>();
+  frozen->clip = mine;
+  frozen->freezeAfterWrite = true;
+  CHECK(pasteResult(pastePlatform(frozen), pasteLine()) == "hung");
+  CHECK(!frozen->saw("ctrl+v") && frozen->writes.size() == 2 && frozen->clip.front().name == "HTML Format");
+}
+
+static void test_paste_finishes_inside_its_deadline() {
+  // Hands on for 2.95 s, then an app slow to answer: too little time is left for Ctrl+V, the second's wait and the
+  // restore, so the text never goes on the clipboard.
+  const auto late = std::make_shared<PasteState>();
+  late->keys = heldFor(59);
+  late->answerMs = 900;
+  CHECK(pasteResult(pastePlatform(late), pasteLine()) == "busy");
+  CHECK(late->writes.empty() && !late->saw("ctrl+v"));
+  // The same wait with a quick app pastes, clicks included, and the reply leaves inside the deadline.
+  const auto quick = std::make_shared<PasteState>();
+  quick->keys = heldFor(59);
+  quick->answerMs = 100;
+  CHECK(pasteResult(pastePlatform(quick), pasteLine(R"("click":"-1820,200",)")) == "ok");
+  CHECK(quick->clock <= kPasteDeadlineMs && quick->writes.size() == 2);
+  // The hands-off wait is wall time, however long a poll takes.
+  const auto slow = std::make_shared<PasteState>();
+  slow->keys = heldFor(1000);
+  slow->pollMs = 100;
+  CHECK(pasteResult(pastePlatform(slow), pasteLine()) == "hands");
+  const std::vector<std::string> seen = slow->seen();
+  CHECK(std::count(seen.begin(), seen.end(), "wait 50") == 20 && slow->clock < kHandsOffWaitMs + 200);
+}
+
+static void test_paste_puts_the_clipboard_back_or_says_it_could_not() {
+  const std::vector<ClipFormat> mine = {format(0xC09E, "HTML Format", "<i>mine</i>")};
+  // Another app holds the clipboard from the moment Ctrl+V went out: the restore keeps trying for 1.5 s, then says so.
+  const auto held = std::make_shared<PasteState>();
+  held->clip = mine;
+  held->opensAllowed = 1;
+  const auto m = fields(handleCommand(parseCommand(pasteLine()), pastePlatform(held)).line);
+  CHECK(m.at("result") == "ok" && m.count("restored") == 1 && m.at("restored") == "false");
+  std::vector<std::string> seen = held->seen();
+  seen.erase(seen.begin(), std::find(seen.begin(), seen.end(), "ctrl+v"));
+  CHECK(std::count(seen.begin(), seen.end(), "wait 25") == kRestoreTryMs / kClipboardRetryMs);
+  CHECK(held->clock <= kPasteDeadlineMs);
+  // A restore that works says nothing.
+  const auto fine = std::make_shared<PasteState>();
+  fine->clip = mine;
+  CHECK(fields(handleCommand(parseCommand(pasteLine()), pastePlatform(fine)).line).count("restored") == 0);
+  // The user copied something newer meanwhile: theirs stays, the old clipboard is not put over it.
+  const auto newer = std::make_shared<PasteState>();
+  newer->clip = mine;
+  newer->copyDuringPaste = true;
+  const auto n = fields(handleCommand(parseCommand(pasteLine()), pastePlatform(newer)).line);
+  CHECK(n.at("result") == "ok" && n.count("restored") == 0 && newer->writes.size() == 1);
+  // Whatever goes wrong after the text went on, the clipboard comes back.
+  const auto thrown = std::make_shared<PasteState>();
+  thrown->clip = mine;
+  thrown->throwOnPaste = true;
+  CHECK(fields(handleCommand(parseCommand(pasteLine()), pastePlatform(thrown)).line).at("type") == "error");
+  CHECK(thrown->writes.size() == 2 && thrown->clip.front().name == "HTML Format");
+}
+
+static void test_paste_refuses_an_app_run_as_administrator() {
+  const auto s = std::make_shared<PasteState>();
+  s->elevatedTarget = true;
+  CHECK(pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200",)")) == "elevated");
+  CHECK(!s->saw("uia") && !s->saw("open") && !s->saw("click") && !s->saw("ctrl+v"));
 }
 
 static void test_paste_and_set_field_need_a_platform_that_has_them() {
@@ -1281,6 +1407,10 @@ int main() {
   test_hands_off_ignores_released_keys();
   test_paste_gives_up_on_a_busy_clipboard();
   test_paste_clicks_presses_ctrl_v_and_restores_a_second_later();
+  test_paste_checks_again_right_before_the_click();
+  test_paste_finishes_inside_its_deadline();
+  test_paste_puts_the_clipboard_back_or_says_it_could_not();
+  test_paste_refuses_an_app_run_as_administrator();
   test_paste_and_set_field_need_a_platform_that_has_them();
   test_setfield_refuses_a_password_field();
   test_setfield_checks_the_window_and_finds_the_field();

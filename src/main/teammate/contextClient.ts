@@ -94,15 +94,16 @@ export class ContextClient {
 
   /**
    * Pastes into the ask's window by the clipboard route, run whole in the helper: up to 3 s waiting for hands off, then
-   * 1 s before the clipboard is put back, so it gets PASTE_TIMEOUT_MS.
+   * 1 s before the clipboard is put back, so it gets PASTE_TIMEOUT_MS. `restored` is false when the user's clipboard
+   * could not be put back.
    */
-  async paste(req: PasteRequest, signal: AbortSignal): Promise<PasteResult> {
+  async paste(req: PasteRequest, signal: AbortSignal): Promise<{ result: PasteResult; restored: boolean }> {
     const r = await this.request((id) => {
       this.pastes.add(id);
       return pasteCommand(id, req);
     }, 'pasted', signal, PASTE_TIMEOUT_MS);
     if (r.type !== 'pasted') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return r.result;
+    return { result: r.result, restored: r.restored };
   }
 
   /** Writes one form field by UI Automation. */

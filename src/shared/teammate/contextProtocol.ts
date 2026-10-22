@@ -29,9 +29,10 @@ export type ContextCommand =
  * What a paste did: `ok` pasted; the rest pasted nothing and left the clipboard as it was. `window`: another window is
  * in front (or the click would land in one); `hung`: the app doesn't answer; `selection`: a replace's selection no
  * longer holds the asked text; `secure`: a password or never-fill field; `hands`: a key or button stayed held for 3 s;
- * `busy`: the clipboard or the input could not be used.
+ * `busy`: the clipboard or the input could not be used, or too little time was left; `elevated`: the app runs as
+ * administrator, where Windows drops lolPing's input without a word.
  */
-export type PasteResult = 'ok' | 'hung' | 'window' | 'hands' | 'selection' | 'secure' | 'busy';
+export type PasteResult = 'ok' | 'hung' | 'window' | 'hands' | 'selection' | 'secure' | 'busy' | 'elevated';
 
 /** What a setField did: `gone`: no such field in the window; `refused`: the field didn't take the value. */
 export type SetFieldResult = 'ok' | 'gone' | 'refused' | 'secure' | 'window' | 'hung';
@@ -89,7 +90,8 @@ export type ContextReply =
   | ({ type: 'read'; id: string } & ReadResult)
   /** `window` is the window's id (the HWND in decimal on Windows), or '' where the helper has none. */
   | { type: 'foreground'; id: string; app: string; title: string; window: string }
-  | { type: 'pasted'; id: string; result: PasteResult }
+  /** `restored`: false when the user's clipboard could not be put back after the paste (true when left out). */
+  | { type: 'pasted'; id: string; result: PasteResult; restored: boolean }
   | { type: 'set'; id: string; result: SetFieldResult }
   | { type: 'pong'; id: string }
   | { type: 'error'; id: string; code: ContextErrorCode; message: string };
@@ -173,7 +175,9 @@ const isLayerStatus = (v: unknown): v is LayerStatus => (
   v === 'off' || v === 'ok' || v === 'slow' || v === 'capture' || v === 'permission'
 );
 const isFileHow = (v: unknown): v is FileHow => v === 'office' || v === 'address' || v === 'title' || v === 'none';
-const PASTE_RESULTS: readonly PasteResult[] = ['ok', 'hung', 'window', 'hands', 'selection', 'secure', 'busy'];
+const PASTE_RESULTS: readonly PasteResult[] = [
+  'ok', 'hung', 'window', 'hands', 'selection', 'secure', 'busy', 'elevated',
+];
 const SET_FIELD_RESULTS: readonly SetFieldResult[] = ['ok', 'gone', 'refused', 'secure', 'window', 'hung'];
 const isPasteResult = (v: unknown): v is PasteResult => PASTE_RESULTS.includes(v as PasteResult);
 const isSetFieldResult = (v: unknown): v is SetFieldResult => SET_FIELD_RESULTS.includes(v as SetFieldResult);
@@ -362,7 +366,8 @@ export function parseContextLine(line: string): ContextReply | null {
       if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window)) return null;
       return { type: 'foreground', id, app: o.app, title: o.title, window: o.window };
     case 'pasted':
-      return isPasteResult(o.result) ? { type: 'pasted', id, result: o.result } : null;
+      if (!isPasteResult(o.result) || (o.restored !== undefined && typeof o.restored !== 'boolean')) return null;
+      return { type: 'pasted', id, result: o.result, restored: o.restored ?? true };
     case 'set':
       return isSetFieldResult(o.result) ? { type: 'set', id, result: o.result } : null;
     case 'pong':

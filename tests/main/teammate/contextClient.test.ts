@@ -156,7 +156,9 @@ describe('ContextClient', () => {
   it('pastes and sets a field, passing on the helper\'s result', async () => {
     const { c } = client(['ok']);
     const paste = { window: '263544', text: 'hello', click: { x: 10, y: 20 }, mode: 'insert' as const, asked: '' };
-    await expect(c.paste(paste, signal())).resolves.toBe('ok');
+    await expect(c.paste(paste, signal())).resolves.toEqual({ result: 'ok', restored: true });
+    await expect(c.paste({ ...paste, text: 'clipboard held' }, signal()))
+      .resolves.toEqual({ result: 'ok', restored: false });
     await expect(c.setField({ window: '263544', field: '42.7.1', value: 'Ada' }, signal())).resolves.toBe('refused');
   });
 

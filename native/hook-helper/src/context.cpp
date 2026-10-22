@@ -1042,9 +1042,9 @@ std::string frontWindow(const ContextPlatform& p) {
 }
 
 bool hasPasteRoute(const ContextPlatform& p) {
-  return p.foreground && p.responsive && p.windowAt && p.focusedSelection && p.fieldFacts && p.keyStates &&
-         p.openClipboard && p.closeClipboard && p.clipboardFormats && p.readClipboard && p.writeClipboard && p.click &&
-         p.pressPaste && p.wait;
+  return p.foreground && p.responsive && p.elevated && p.windowAt && p.focusedSelection && p.fieldFacts &&
+         p.keyStates && p.openClipboard && p.closeClipboard && p.clipboardFormats && p.readClipboard &&
+         p.writeClipboard && p.clipboardSequence && p.click && p.pressPaste && p.wait && p.now;
 }
 
 // Another app may hold the clipboard for a moment.
@@ -1065,19 +1065,64 @@ bool putOnClipboard(const ContextPlatform& p, std::vector<ClipFormat> formats) {
   return ok;
 }
 
-bool restoreClipboard(const ContextPlatform& p, const std::vector<ClipFormat>& saved) {
-  return openClipboardSoon(p) && putOnClipboard(p, saved);
-}
+// Puts the saved clipboard back once, on whichever way a paste ends after its text went on the clipboard, an exception
+// included.
+class ClipboardRestore {
+ public:
+  ClipboardRestore(const ContextPlatform& p, std::vector<ClipFormat> saved, uint32_t written, int64_t deadline)
+      : p_(p), saved_(std::move(saved)), written_(written), deadline_(deadline) {}
+  ClipboardRestore(const ClipboardRestore&) = delete;
+  ClipboardRestore& operator=(const ClipboardRestore&) = delete;
+  ~ClipboardRestore() {
+    try {
+      restore();
+    } catch (...) {  // the reply is already on its way, or an error reply is
+    }
+  }
+
+  /** False only when a restore was needed and failed. */
+  bool restore() {
+    if (done_) return ok_;
+    done_ = true;
+    // Something newer was copied since the pasted text went on: it wins over the old clipboard.
+    if (p_.clipboardSequence() != written_) return ok_ = true;
+    const int64_t until = std::min(p_.now() + kRestoreTryMs, deadline_);
+    while (!p_.openClipboard()) {
+      if (p_.now() >= until) return ok_ = false;
+      p_.wait(kClipboardRetryMs);
+    }
+    return ok_ = putOnClipboard(p_, saved_);
+  }
+
+ private:
+  const ContextPlatform& p_;
+  std::vector<ClipFormat> saved_;
+  uint32_t written_;
+  int64_t deadline_;
+  bool done_ = false, ok_ = true;
+};
 
 // A field the helper never writes: a password field, or a label that names a password, card, ID or the like.
 bool secureField(const FieldFacts& f) { return f.secure || neverFillLabel(f.label); }
 
-// What the checks that call into the target found; the flags are atomic as a slow check outlives its command.
+// What the checks that call into the target found; the flag is atomic as a slow check outlives its command.
 struct PasteChecks {
-  std::atomic<bool> selectionChecked{false};
-  bool selectionHolds = false;
+  std::atomic<bool> secureChecked{false};
   bool secure = true;
+  bool selectionHolds = false;
 };
+
+// Text as the paste command carries it: without the control characters the client leaves out (helperText in
+// contextProtocol.ts), which Word puts in a selection (U+000B for a line break), and without the spaces around it.
+std::string comparable(const std::string& text) {
+  std::string out;
+  for (const char c : text) {
+    const auto b = static_cast<unsigned char>(c);
+    if (b < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
+    out += c;
+  }
+  return trim(out);
+}
 
 }  // namespace
 
@@ -1105,35 +1150,41 @@ bool handsOff(const std::vector<uint16_t>& states) {
 
 namespace {
 
-// The order is the spec's (§10.3 with §16): the window, the frozen-app check (before anything else calls into the
-// target), the replace's selection, a secure field, hands off, then the clipboard route. A refusal after the text is on
-// the clipboard puts the saved clipboard back first.
+// Every check runs after the hands-off wait, when the user has let go: the window, the frozen-app check (before
+// anything calls into the target), an app run as administrator, a secure field, a replace's selection. Then the text
+// goes on the clipboard and the cheap checks run again right before any input. The whole paste fits kPasteDeadlineMs;
+// a refusal after the text went on the clipboard puts the saved clipboard back first.
 Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
   const PasteRequest& r = cmd.paste;
-  const auto reply = [&cmd](const char* result, bool exitAfter = false) {
-    return Reply{resultLine("pasted", cmd.id, result), exitAfter};
+  const auto reply = [&cmd](const char* result, bool exitAfter = false, bool restored = true) {
+    std::string line = resultLine("pasted", cmd.id, result);
+    if (!restored) line.insert(line.size() - 1, ",\"restored\":false");
+    return Reply{line, exitAfter};
   };
   if (!hasPasteRoute(p)) return Reply{formatError(cmd.id, "bad", "paste is not available here")};
+  const int64_t start = p.now();
+  const int64_t deadline = start + kPasteDeadlineMs;
+  if (frontWindow(p) != r.window) return reply("window");
+  // The user is letting go of the ask's key, and may move focus or the selection meanwhile: wait first.
+  while (!handsOff(p.keyStates())) {
+    if (p.now() - start >= kHandsOffWaitMs) return reply("hands");
+    p.wait(kHandsPollMs);
+  }
   if (frontWindow(p) != r.window) return reply("window");
   if (!p.responsive(r.window)) return reply("hung");
+  if (p.elevated(r.window)) return reply("elevated");
   if (r.click && p.windowAt(*r.click) != r.window) return reply("window");
 
   const auto checks = std::make_shared<PasteChecks>();
   const auto selection = p.focusedSelection;
   const auto facts = p.fieldFacts;
   const bool replace = r.replace;
-  const std::string asked = trim(r.asked);
+  const std::string asked = comparable(r.asked);
   const std::optional<Point> click = r.click;
   // Any of these can block on an app that stopped answering after the check above: they get a deadline of their own,
   // and one that can't answer in time, or at all, refuses the paste.
   const bool done = runWithBudget(
       [checks, selection, facts, replace, asked, click] {
-        if (replace) {
-          std::string now;
-          checks->selectionHolds = selection(now) && !asked.empty() && trim(now) == asked;
-          checks->selectionChecked = true;
-          if (!checks->selectionHolds) return;
-        }
         FieldFacts focus;
         bool secure = !facts(std::nullopt, focus) || secureField(focus);
         if (!secure && click) {
@@ -1141,47 +1192,45 @@ Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
           secure = !facts(click, under) || secureField(under);
         }
         checks->secure = secure;
+        checks->secureChecked = true;
+        if (secure || !replace) return;
+        std::string now;
+        checks->selectionHolds = selection(now) && !asked.empty() && comparable(now) == asked;
       },
       budgetMs * 4 / 5);
-  if (!done) return reply(replace && !checks->selectionChecked ? "selection" : "secure", true);
-  if (replace && !checks->selectionHolds) return reply("selection");
+  if (!done) return reply(checks->secureChecked ? "selection" : "secure", true);
   if (checks->secure) return reply("secure");
-
-  for (int waited = 0; !handsOff(p.keyStates()); waited += kHandsPollMs) {
-    if (waited >= kHandsOffWaitMs) return reply("hands");
-    p.wait(kHandsPollMs);
-  }
+  if (replace && !checks->selectionHolds) return reply("selection");
 
   if (!openClipboardSoon(p)) return reply("busy");
   std::vector<ClipFormat> saved;
   for (ClipFormat f : formatsToRestore(p.clipboardFormats())) {
     if (p.readClipboard(f)) saved.push_back(std::move(f));
   }
-  if (!putOnClipboard(p, {ClipFormat{kClipUnicodeText, "", utf16Text(r.text)}})) {
-    restoreClipboard(p, saved);
+  // Too late to click, wait a second and put the clipboard back before the client gives up on the reply.
+  const int64_t tail = (r.click ? kClickSettleMs : 0) + kAnswerWaitMs + kRestoreAfterMs + kRestoreReserveMs;
+  if (deadline - p.now() < tail) {
+    p.closeClipboard();
     return reply("busy");
   }
+  const bool set = putOnClipboard(p, {ClipFormat{kClipUnicodeText, "", utf16Text(r.text)}});
+  ClipboardRestore restore(p, std::move(saved), p.clipboardSequence(), deadline);
+  const auto refuse = [&](const char* result) { return reply(result, false, restore.restore()); };
+  if (!set) return refuse("busy");
+  // Right before any input: the user may have moved on while the clipboard was set.
+  if (frontWindow(p) != r.window) return refuse("window");
+  if (!handsOff(p.keyStates())) return refuse("hands");
+  if (r.click && p.windowAt(*r.click) != r.window) return refuse("window");
+  if (!p.responsive(r.window)) return refuse("hung");
   if (r.click) {
-    if (!p.click(*r.click)) {
-      restoreClipboard(p, saved);
-      return reply("busy");
-    }
+    if (!p.click(*r.click)) return refuse("busy");
     p.wait(kClickSettleMs);
-  }
-  // The click may have brought another window up, and the user may have taken a key since the wait: a Ctrl+V now
-  // would go elsewhere or come out as another shortcut.
-  if (frontWindow(p) != r.window) {
-    restoreClipboard(p, saved);
-    return reply("window");
-  }
-  if (!handsOff(p.keyStates())) {
-    restoreClipboard(p, saved);
-    return reply("hands");
+    // The click may have brought another window up.
+    if (frontWindow(p) != r.window) return refuse("window");
   }
   const bool pressed = p.pressPaste();
   p.wait(kRestoreAfterMs);
-  restoreClipboard(p, saved);
-  return reply(pressed ? "ok" : "busy");
+  return reply(pressed ? "ok" : "busy", false, restore.restore());
 }
 
 Reply handleSetField(const Command& cmd, const ContextPlatform& p, int budgetMs) {

@@ -359,9 +359,6 @@ bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, F
 
 namespace {
 
-// How long a window may take to answer before it counts as not responding: a suspended app failed it in 213 ms (spec
-// §16), while IsHungAppWindow needs 5 s.
-constexpr UINT kAnswerMs = 200;
 // How long a combo's list, or a checkbox's new state, may take to show after the call that changes it.
 constexpr int kSettlePolls = 10;
 constexpr DWORD kSettlePollMs = 30;
@@ -380,7 +377,38 @@ std::string idOf(HWND w) { return w ? std::to_string(reinterpret_cast<uintptr_t>
 bool responsive(const std::string& window) {
   const HWND w = windowOf(window);
   DWORD_PTR answer = 0;
-  return w && IsWindow(w) && SendMessageTimeoutW(w, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, kAnswerMs, &answer) != 0;
+  return w && IsWindow(w) && SendMessageTimeoutW(w, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, kAnswerWaitMs, &answer) != 0;
+}
+
+// The integrity level in a process's token (medium 0x2000, high 0x3000), or -1 when it can't be read.
+long integrityOf(HANDLE process) {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return -1;
+  DWORD size = 0;
+  GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+  std::vector<uint8_t> buf(size);
+  long level = -1;
+  if (size > 0 && GetTokenInformation(token, TokenIntegrityLevel, buf.data(), size, &size)) {
+    const PSID sid = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(buf.data())->Label.Sid;
+    const UCHAR count = *GetSidSubAuthorityCount(sid);
+    if (count > 0) level = static_cast<long>(*GetSidSubAuthority(sid, count - 1u));
+  }
+  CloseHandle(token);
+  return level;
+}
+
+// Windows drops input sent to an app at a higher integrity level (UIPI) and SendInput still says it went in.
+bool elevatedWindow(const std::string& window) {
+  const HWND w = windowOf(window);
+  DWORD pid = 0;
+  if (!w || !GetWindowThreadProcessId(w, &pid) || pid == 0) return true;
+  const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return true;
+  const long theirs = integrityOf(process);
+  CloseHandle(process);
+  static const long mine = integrityOf(GetCurrentProcess());
+  // A token the helper may not read is most likely an elevated or protected app's.
+  return theirs < 0 || mine < 0 || theirs > mine;
 }
 
 std::string rootWindowAt(Point at) {
@@ -560,6 +588,21 @@ INPUT button(DWORD flag) {
   return in;
 }
 
+// Sends the events. When Windows takes only the first few, the keys and buttons among them that went down are let up
+// again, last first, so nothing stays held. `upOf[i]` is the index of event i's release, or -1.
+bool sendInput(std::vector<INPUT> in, const std::vector<int>& upOf) {
+  const UINT n = static_cast<UINT>(in.size());
+  const UINT sent = SendInput(n, in.data(), sizeof(INPUT));
+  if (sent == n) return true;
+  std::vector<INPUT> release;
+  for (UINT i = sent; i-- > 0;) {
+    const int up = upOf[i];
+    if (up >= 0 && static_cast<UINT>(up) >= sent) release.push_back(in[static_cast<size_t>(up)]);
+  }
+  if (!release.empty()) SendInput(static_cast<UINT>(release.size()), release.data(), sizeof(INPUT));
+  return false;
+}
+
 bool clickAt(Point at) {
   // Injected buttons are physical: with the buttons swapped, the primary click is the right one.
   const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
@@ -568,8 +611,9 @@ bool clickAt(Point at) {
   // The click only puts the caret in the field: the pointer goes back where the user left it.
   POINT was{};
   if (GetCursorPos(&was)) in.push_back(pointerTo(was.x, was.y));
-  const UINT n = static_cast<UINT>(in.size());
-  return SendInput(n, in.data(), sizeof(INPUT)) == n;
+  std::vector<int> upOf(in.size(), -1);
+  upOf[1] = 2;
+  return sendInput(std::move(in), upOf);
 }
 
 INPUT key(WORD vk, bool up) {
@@ -583,8 +627,7 @@ INPUT key(WORD vk, bool up) {
 }
 
 bool pressCtrlV() {
-  INPUT in[] = {key(VK_CONTROL, false), key('V', false), key('V', true), key(VK_CONTROL, true)};
-  return SendInput(4, in, sizeof(INPUT)) == 4;
+  return sendInput({key(VK_CONTROL, false), key('V', false), key('V', true), key(VK_CONTROL, true)}, {3, 2, -1, -1});
 }
 
 // The element with this runtime id under the window, or null.
@@ -741,6 +784,7 @@ std::string setFieldIn(const SetFieldRequest& r, const std::function<std::string
 
 void addWriting(ContextPlatform& p) {
   p.responsive = responsive;
+  p.elevated = elevatedWindow;
   p.windowAt = rootWindowAt;
   p.focusedSelection = focusedSelection;
   p.fieldFacts = fieldFactsAt;
@@ -750,9 +794,14 @@ void addWriting(ContextPlatform& p) {
   p.clipboardFormats = clipboardFormats;
   p.readClipboard = readClipboard;
   p.writeClipboard = writeClipboard;
+  p.clipboardSequence = [] { return static_cast<uint32_t>(GetClipboardSequenceNumber()); };
   p.click = clickAt;
   p.pressPaste = pressCtrlV;
   p.wait = [](int ms) { Sleep(static_cast<DWORD>(ms)); };
+  p.now = [] {
+    return static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+  };
   p.setField = setFieldIn;
 }
 

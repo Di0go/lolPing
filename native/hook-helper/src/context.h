@@ -91,7 +91,7 @@ std::vector<ClipFormat> formatsToRestore(const std::vector<ClipFormat>& listed);
 /** The three formats that keep a write out of clipboard history, the cloud clipboard and clipboard monitors. */
 std::vector<ClipFormat> exclusionFormats();
 
-/** Whether no watched key or button is held: each state as GetAsyncKeyState returns it, held when the top bit is set. */
+/** Whether no watched key or button is held: each state as GetAsyncKeyState returns it, held with the top bit set. */
 bool handsOff(const std::vector<uint16_t>& states);
 
 /** The paste route's waits, in milliseconds. */
@@ -101,6 +101,17 @@ constexpr int kClipboardTries = 20;
 constexpr int kClipboardRetryMs = 25;
 constexpr int kClickSettleMs = 150;
 constexpr int kRestoreAfterMs = 1000;
+/** How long a window may take to answer WM_NULL: a suspended app failed it in 213 ms (spec §16). */
+constexpr int kAnswerWaitMs = 200;
+/** How long a restore keeps trying to open a busy clipboard. */
+constexpr int kRestoreTryMs = 1500;
+/** Time a restore is sure to get, kept back when deciding whether a paste can still start. */
+constexpr int kRestoreReserveMs = 500;
+/**
+ * A paste's whole time, from the command to its reply, inside the client's 6,000 ms (PASTE_TIMEOUT_MS): a paste
+ * that could not finish in it is refused before its text goes on the clipboard.
+ */
+constexpr int kPasteDeadlineMs = 5500;
 
 /** What a write needs to know about a field first: its kind (RawField's), label and password flag. */
 struct FieldFacts {
@@ -189,6 +200,11 @@ struct ContextPlatform {
   // like the probes above, and only after `responsive` said the app answers.
   /** Whether the window answers a message within 200 ms: a frozen app would take a Ctrl+V late, after the restore. */
   std::function<bool(const std::string& window)> responsive;
+  /**
+   * Whether the window's app runs at a higher integrity level than the helper (an app run as administrator): Windows
+   * drops input sent to it without a word. True when it can't be told.
+   */
+  std::function<bool(const std::string& window)> elevated;
   /** The top-level window under a point, by the same id as foreground's. */
   std::function<std::string(Point at)> windowAt;
   /** The focused element's selected text, read as the read command reads it; false when it can't be read. */
@@ -206,11 +222,21 @@ struct ContextPlatform {
   std::function<bool(ClipFormat& format)> readClipboard;
   /** Empties the clipboard and puts these formats on it. */
   std::function<bool(const std::vector<ClipFormat>& formats)> writeClipboard;
-  /** A primary-button click at the point, marked as lolPing's own input; the pointer goes back where it was. */
+  /** A number that changes whenever anything changes the clipboard (GetClipboardSequenceNumber). */
+  std::function<uint32_t()> clipboardSequence;
+  /**
+   * A primary-button click at the point, marked as lolPing's own input; the pointer goes back where it was. A button
+   * Windows took down is let up again even when it took only some of the events.
+   */
   std::function<bool(Point at)> click;
-  /** Ctrl down, V down, V up, Ctrl up, each marked as lolPing's own input. */
+  /**
+   * Ctrl down, V down, V up, Ctrl up, each marked as lolPing's own input. When Windows takes only some of them, the
+   * keys it took down are let up again.
+   */
   std::function<bool()> pressPaste;
   std::function<void(int ms)> wait;
+  /** Milliseconds on a steady clock. */
+  std::function<int64_t()> now;
   /**
    * Finds the field by runtime id under the window and writes the value; `check` sees the field first and returns a
    * result code to refuse it, or "" to allow. Returns ok, gone, refused or check's code.
@@ -234,9 +260,9 @@ constexpr int kProbeBudgetMs = 1000;
 constexpr int kExitNow = 2;
 
 /**
- * Runs one command. Not called for Shutdown. Tests pass a short budget. A paste is not held to it as a whole (its
- * hands-off wait and restore take seconds); its UI Automation checks get four fifths of it (800 ms), and a setField
- * gets one and a half times it (1,500 ms: opening a combo's list takes a while).
+ * Runs one command. Not called for Shutdown. Tests pass a short budget. A paste is held to kPasteDeadlineMs instead
+ * (its hands-off wait and restore take seconds); its UI Automation checks get four fifths of the budget (800 ms), and a
+ * setField gets one and a half times it (1,500 ms: opening a combo's list takes a while).
  */
 Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int budgetMs = kProbeBudgetMs);
 

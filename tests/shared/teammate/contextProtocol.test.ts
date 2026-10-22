@@ -260,12 +260,18 @@ describe('contextProtocol', () => {
   });
 
   it('parses each paste result', () => {
-    for (const result of ['ok', 'hung', 'window', 'hands', 'selection', 'secure', 'busy']) {
+    for (const result of ['ok', 'hung', 'window', 'hands', 'selection', 'secure', 'busy', 'elevated']) {
       expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1', result })))
-        .toEqual({ type: 'pasted', id: 'r1', result });
+        .toEqual({ type: 'pasted', id: 'r1', result, restored: true });
     }
     expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1', result: 'gone' }))).toBeNull();
     expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1' }))).toBeNull();
+  });
+
+  it('reads whether a paste could put the clipboard back', () => {
+    expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1', result: 'ok', restored: false })))
+      .toEqual({ type: 'pasted', id: 'r1', result: 'ok', restored: false });
+    expect(parseContextLine(JSON.stringify({ type: 'pasted', id: 'r1', result: 'ok', restored: 'no' }))).toBeNull();
   });
 
   it('parses each setField result', () => {
