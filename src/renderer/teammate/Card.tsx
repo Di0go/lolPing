@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type CardState, type MateAction, type MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
-import { copyText, footerText } from './cardText';
+import { copyText, footerText, putLabel } from './cardText';
 import { renderMarkdown } from './markdown';
 import { stagger, useMotion } from './motion';
 import { NameTag } from './NameTag';
@@ -152,6 +152,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
     setCopied(true);
   };
   const leave = leaving === 'stale' ? m.stale : leaving === 'fast' ? m.shrink : undefined;
+  const put = putLabel(s.put, t);
   return (
     <div className={sf.frame}>
       <FluentCard className={mergeClasses(sf.surface, st.card, m.grow, leave)}>
@@ -205,6 +206,11 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
           })}
         </div>
         <div className={st.buttons}>
+          {put && (
+            <Button key={put} className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'put' })}>
+              {put}
+            </Button>
+          )}
           <Button
             size="small"
             icon={copied ? <Checkmark16Regular className={m.pop} /> : <Copy16Regular />}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { strings } from '../../src/shared/i18n';
 import { parseMateAction } from '../../src/shared/teammateIpc';
-import { copyText, footerText } from '../../src/renderer/teammate/cardText';
+import { copyText, footerText, putLabel } from '../../src/renderer/teammate/cardText';
 
 const footer = { profile: 'Default', model: 'gpt-x', tokens: 1234, used: ['screen', 'file'] };
 
@@ -27,5 +27,15 @@ describe('cardText', () => {
     expect(footerText(footer, strings('en').teammate.ui)).toBe('Default · gpt-x · 1,234 tokens · Used: screen, file');
     expect(footerText(footer, strings('zh-CN').teammate.ui)).toBe('Default · gpt-x · 1,234 个词元 · 用到：screen、file');
     expect(footerText({ profile: '', model: 'm', tokens: null, used: [] }, strings('en').teammate.ui)).toBe('m');
+  });
+
+  it('names the put button after the action it carries out, and shows none without one', () => {
+    const en = strings('en').teammate.ui;
+    expect(putLabel('paste', en)).toBe('Paste');
+    expect(putLabel('replace', en)).toBe('Replace');
+    expect(putLabel('fill', en)).toBe('Fill');
+    expect(putLabel('ready', en)).toBe('Paste when ready');
+    expect(putLabel(null, en)).toBeNull();
+    expect(putLabel('ready', strings('zh-CN').teammate.ui)).toBe('准备好后粘贴');
   });
 });

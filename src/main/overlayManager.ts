@@ -9,7 +9,9 @@ import { isPingId, type PingId } from '../shared/pings';
 import type { HelperEvent, WheelKind } from '../shared/protocol';
 import type { OverlaySettings, RoomTextStyle } from '../shared/settings';
 import type { Rect } from '../shared/teammate/coords';
-import { displayAtPhysical, physicalToDip, physicalToLocal, type DisplayMap, type LocalPoint } from './coords';
+import {
+  displayAtPhysical, physicalBoxToLocal, physicalToDip, physicalToLocal, type DisplayMap, type LocalPoint,
+} from './coords';
 import { numberDisplays, type NumberedDisplay } from './displayNumbers';
 import { IS_LINUX, IS_MAC, loadPage, preloadPath } from './paths';
 
@@ -59,10 +61,14 @@ export const overlayBounds = (d: Display): Rectangle =>
 const mapScale = (d: Display): number => (IS_MAC || IS_LINUX ? 1 : d.scaleFactor);
 
 /** Messages that put something new on an overlay. */
-const RAISING_CHANNELS: ReadonlySet<OverlayChannel> = new Set<OverlayChannel>(['wheel:open', 'ping:spawn', 'emote:spawn', 'toast:show', 'text:spawn']);
+const RAISING_CHANNELS: ReadonlySet<OverlayChannel> = new Set<OverlayChannel>([
+  'wheel:open', 'ping:spawn', 'emote:spawn', 'toast:show', 'text:spawn', 'mate:glow',
+]);
 
 /** The owner of the teammate's pings and emotes on every overlay. */
 const MATE = 'mate';
+/** Spec §10: the fields of one fill light up in order, this far apart. */
+const GLOW_STEP_MS = 120;
 
 /**
  * One transparent, click-through, always-on-top window per display.
@@ -235,6 +241,19 @@ export class OverlayManager extends EventEmitter {
   /** The teammate said its first line: the thinking dots on its tags stop. */
   mateSaid(): void {
     for (const id of this.windows.keys()) this.send(id, 'mate:said', null);
+  }
+
+  /** Outlines the fields the teammate just wrote (boxes in physical px) in its tag's colour, one after another. */
+  glow(boxes: readonly Rect[], tag: PingTag): void {
+    const ticket = this.mateTicket === null ? {} : { ticket: this.mateTicket };
+    boxes.forEach((box, i) => {
+      const at = physicalBoxToLocal(box, this.maps);
+      if (!at) return;
+      this.send(at.displayId, 'mate:glow', {
+        box: { x: at.x, y: at.y, w: at.w, h: at.h }, color: tag.color, rgb: tag.rgb ?? null, delay: i * GLOW_STEP_MS,
+        ...ticket,
+      });
+    });
   }
 
   /** The display under a physical point, with its rect in physical px. */

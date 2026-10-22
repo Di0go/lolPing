@@ -323,6 +323,26 @@ describe('OverlayManager ask wheel', () => {
     expect(sent(1)).toEqual([['mate:said', null]]);
   });
 
+  it('outlines each field the teammate wrote on its own display, in order and 120 ms apart', () => {
+    h.displays[1].scaleFactor = 2;
+    mgr.handle({ type: 'wheelOpen', x: 10, y: 10, wheel: 'ping' }); // the next gesture picks up the new scale
+    mgr.setMateTicket('t1');
+    mgr.glow([
+      { x: 100, y: 200, w: 300, h: 30 },
+      { x: 1920 + 100, y: 200, w: 300, h: 30 },
+      { x: 100, y: 260, w: 300, h: 30 },
+    ], { name: 'AI', color: 3, rgb: [10, 20, 30] });
+    const glows = (i: number): unknown[] => sent(i).filter((m) => m[0] === 'mate:glow').map((m) => m[1]);
+    expect(glows(0)).toEqual([
+      { box: { x: 100, y: 200, w: 300, h: 30 }, color: 3, rgb: [10, 20, 30], delay: 0, ticket: 't1' },
+      { box: { x: 100, y: 260, w: 300, h: 30 }, color: 3, rgb: [10, 20, 30], delay: 240, ticket: 't1' },
+    ]);
+    // Display 2 is at 200 %: its overlay's CSS px are half the physical px.
+    expect(glows(1)).toEqual([
+      { box: { x: 50, y: 100, w: 150, h: 15 }, color: 3, rgb: [10, 20, 30], delay: 120, ticket: 't1' },
+    ]);
+  });
+
   it('maps a physical point to a screen point in DIPs for the teammate’s windows', () => {
     h.displays[1].scaleFactor = 2;
     mgr.handle({ type: 'wheelOpen', x: 10, y: 10, wheel: 'ping' }); // the next gesture picks up the new scale

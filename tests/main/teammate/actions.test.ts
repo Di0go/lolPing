@@ -137,8 +137,8 @@ function harness(opts: Options = {}) {
       toast: (_title, body) => log.push(['toast', body]),
       spawnMate: (p) => log.push(['ping', p]),
       toLocal: (p) => ({ displayId: 1, x: p.x / 2, y: p.y / 2 }),
+      glow: (boxes, tag) => log.push(['glow', { boxes, tag }]),
     },
-    glow: (box) => log.push(['glow', box]),
     zoneOffset: () => 0,
     now: () => clock,
     timer: (ms, fn) => {
@@ -218,7 +218,7 @@ describe('ActionRunner', () => {
     // The card is gone before the paste, so nothing of lolPing's is over the app.
     expect(h.kinds().indexOf('consentHidden')).toBeLessThan(h.kinds().indexOf('paste'));
     expect(h.of('toast')).toEqual([t.pasted]);
-    expect(h.of('glow')).toEqual([REPLY_BOX]);
+    expect(h.of('glow')).toEqual([{ boxes: [REPLY_BOX], tag: TAG }]);
     expect(h.of('permissions')).toEqual([]);
     expect(h.runner.putState).toBeNull();
     expect(h.puts).toEqual(['paste', null]);
@@ -352,6 +352,40 @@ describe('ActionRunner', () => {
     expect(h.of('paste')).toHaveLength(2);
     expect(h.of('toast')).toEqual([t.pasted]);
     expect(h.runner.putState).toBeNull();
+  });
+
+  it('offers the button again after a paste that did not land, so the bubble can come back for it', async () => {
+    // A click paste hides the bubble; whatever the helper answers, the button needs it back.
+    const hung = harness({ permissions: ['fast:paste'], pastes: [{ result: 'hung' }] });
+    hung.runner.take(info({ focus: null, fields: [field('9', 'Reply', { box: REPLY_BOX })] }), paste());
+    await flush();
+    expect(hung.of('bubbleHidden')).toHaveLength(1);
+    expect(hung.puts).toEqual(['paste', 'paste']);
+
+    const hands = harness({ permissions: ['fast:paste'], pastes: [{ result: 'hands' }] });
+    hands.runner.take(info(), paste());
+    await flush();
+    await hands.runner.put(info(), 'bubble'); // still on the keys
+    expect(hands.puts).toEqual(['paste', 'ready', 'ready']);
+
+    // A password field takes the button away for good; a paste that landed needs none.
+    const secure = harness({ permissions: ['fast:paste'], pastes: [{ result: 'secure' }] });
+    secure.runner.take(info(), paste());
+    await flush();
+    expect(secure.puts).toEqual(['paste', null]);
+  });
+
+  it('glows each filled field in the order it was filled', async () => {
+    const h = harness();
+    h.runner.take(info({ fields: FIELDS }), {
+      tool: 'fill', fields: [{ id: '2', value: 'ada@example.com' }, { id: '1', value: 'Ada' }],
+    });
+    await flush();
+    h.runner.onAction('form', { t: 'fill', ids: ['1', '2'], serial: h.preview() });
+    await flush();
+    const order = (h.of('setField') as { field: string }[]).map((r) => r.field);
+    const byId = new Map(FIELDS.map((f) => [f.id, f.box]));
+    expect(h.of('glow')).toEqual([{ boxes: order.map((id) => byId.get(id)), tag: TAG }]);
   });
 
   it('says so when the clipboard could not be put back', async () => {
@@ -574,7 +608,7 @@ describe('ActionRunner', () => {
       { displayId: 1, x: 100, y: 205, id: 'missing', label: 'Size', tag: TAG, silent: true },
       { displayId: 1, x: 100, y: 155, id: 'missing', label: 'Password', tag: TAG, silent: true },
     ]);
-    expect(h.of('glow')).toEqual([FIELDS[0].box]);
+    expect(h.of('glow')).toEqual([{ boxes: [FIELDS[0].box], tag: TAG }]);
     expect(h.of('toast')).toEqual([t.filled(1)]);
     expect(h.runner.described()).toEqual([t.didFill(1, 2)]);
     expect(h.runner.putState).toBeNull();

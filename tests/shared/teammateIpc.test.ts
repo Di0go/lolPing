@@ -21,10 +21,11 @@ const SAMPLES: Record<string, unknown> = {
   always: { t: 'always', serial: 1 },
   decline: { t: 'decline', serial: 1 },
   fill: { t: 'fill', ids: ['f1', 'f2'], serial: 1 },
+  put: { t: 'put' },
 };
 const ALLOWED: Record<MateView, string[]> = {
-  bubble: ['more', 'dismiss'],
-  card: ['close', 'copy', 'reply', 'deep', 'history', 'link'],
+  bubble: ['more', 'dismiss', 'put'],
+  card: ['close', 'copy', 'reply', 'deep', 'history', 'link', 'put'],
   words: ['ask', 'cancel'],
   history: ['open', 'continue', 'delete', 'search'],
   consent: ['allow', 'always', 'decline'],
@@ -65,6 +66,16 @@ describe('parseMateAction', () => {
     }
     // The words box's Cancel decides nothing that could be replaced: it needs none.
     expect(parseMateAction({ t: 'cancel' }, 'words')).toEqual({ t: 'cancel' });
+  });
+
+  it('accepts put from the bubble and the card', () => {
+    // The click is the user's consent to paste or fill, so only the two windows that show the button may send it.
+    expect(parseMateAction({ t: 'put' }, 'bubble')).toEqual({ t: 'put' });
+    expect(parseMateAction({ t: 'put', mode: 'replace', text: 'x' }, 'card')).toEqual({ t: 'put' });
+    for (const view of ['words', 'history', 'consent', 'form'] as const) {
+      expect(parseMateAction({ t: 'put' }, view), view).toBeNull();
+    }
+    expect(parseMateAction({ t: 'Put' }, 'bubble')).toBeNull();
   });
 
   it('accepts fill with known ids only', () => {

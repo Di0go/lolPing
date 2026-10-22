@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { besideSpot, physicalToDip, physicalToLocal, placeInside, type DisplayMap } from '../../src/main/coords';
+import {
+  besideSpot, physicalBoxToLocal, physicalToDip, physicalToLocal, placeInside, type DisplayMap,
+} from '../../src/main/coords';
 
 // Ultrawide primary at 100% + a 1080p monitor at 150% to its right + a 1440p monitor at 125% to its left.
 const A: DisplayMap = { id: 1, scale: 1, dip: { x: 0, y: 0, width: 3440, height: 1440 }, phys: { x: 0, y: 0, width: 3440, height: 1440 } };
@@ -33,6 +35,14 @@ describe('coords', () => {
   it('returns null with no displays or an unknown target', () => {
     expect(physicalToLocal(0, 0, [])).toBeNull();
     expect(physicalToLocal(0, 0, maps, 99)).toBeNull();
+  });
+
+  it('maps a field box into the overlay of the display its corner is on, scaled to that display', () => {
+    expect(physicalBoxToLocal({ x: 3440 + 300, y: 150, w: 600, h: 90 }, maps))
+      .toEqual({ displayId: 2, x: 200, y: 100, w: 400, h: 60 });
+    expect(physicalBoxToLocal({ x: -1280, y: 720, w: 250, h: 50 }, maps))
+      .toEqual({ displayId: 3, x: 1024, y: 576, w: 200, h: 40 });
+    expect(physicalBoxToLocal({ x: 0, y: 0, w: 10, h: 10 }, [])).toBeNull();
   });
 });
 

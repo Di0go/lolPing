@@ -4,10 +4,11 @@ import type { PingId } from './pings';
 import type { Platform } from './platform';
 import type { HelperStatus, WheelKind } from './protocol';
 import type { JoinResult, RoomState, RoomStateCore } from './room';
-import type { TagRgb } from './roomColors';
+import { isTagColor, isTagRgb, type TagRgb } from './roomColors';
 import type { HistoryLine } from './roomHistory';
 import { PEER_RE } from './roomProtocol';
 import type { OverlaySettings, RoomTextStyle, Settings } from './settings';
+import type { Rect } from './teammate/coords';
 import type { UpdateState } from './update';
 import type { VoteView } from './voteTally';
 
@@ -52,6 +53,20 @@ export interface OverlayEvents {
   'mate:ticket': { id: string };
   /** The teammate said its first line: the dots on its tags stop. */
   'mate:said': null;
+  /** A field the teammate just pasted into or filled: an outline over it in the teammate's colour. */
+  'mate:glow': MateGlow;
+}
+
+/**
+ * The outline over a field the teammate wrote. `box` is in CSS px inside the overlay; `color` and `rgb` are the
+ * teammate's tag colour; `delay` (ms) lets the fields of one fill light up in order. `ticket` as in MateMark.
+ */
+export interface MateGlow {
+  box: Rect;
+  color: number;
+  rgb: TagRgb | null;
+  delay: number;
+  ticket?: string;
 }
 
 /** What a teammate ping carries on top of a ping. `ticket` is the ask it answers, set by the overlay manager. */
@@ -72,8 +87,34 @@ export type OverlayChannel = keyof OverlayEvents;
 
 export const OVERLAY_CHANNELS: readonly OverlayChannel[] = [
   'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
-  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket', 'mate:said',
+  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket', 'mate:said', 'mate:glow',
 ];
+
+/** Larger than any screen in CSS px: a box or a point past these is not one the overlay should draw. */
+const GLOW_SIZE_MAX = 32_768;
+const GLOW_AT_MAX = 100_000;
+/** 60 fields 120 ms apart, with room to spare. */
+const GLOW_DELAY_MAX = 10_000;
+const TICKET_MAX = 100;
+
+/** The overlay draws a glow only from a message that checks out field by field, whoever sent it. */
+export function parseMateGlow(raw: unknown): MateGlow | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const g = raw as Record<string, unknown>;
+  const num = (v: unknown, min: number, max: number): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+  const box = g.box as Record<string, unknown> | null | undefined;
+  if (typeof box !== 'object' || box === null) return null;
+  const { x, y, w, h } = box;
+  if (!num(x, -GLOW_AT_MAX, GLOW_AT_MAX) || !num(y, -GLOW_AT_MAX, GLOW_AT_MAX)) return null;
+  if (!num(w, 0, GLOW_SIZE_MAX) || !num(h, 0, GLOW_SIZE_MAX) || w === 0 || h === 0) return null;
+  if (!isTagColor(g.color) || !num(g.delay, 0, GLOW_DELAY_MAX)) return null;
+  const rgb = g.rgb ?? null;
+  if (rgb !== null && !isTagRgb(rgb)) return null;
+  const { ticket } = g;
+  if (ticket !== undefined && (typeof ticket !== 'string' || ticket.length > TICKET_MAX)) return null;
+  return { box: { x, y, w, h }, color: g.color, rgb, delay: g.delay, ...(ticket === undefined ? {} : { ticket }) };
+}
 
 export const TEXT_CH = { submit: 'text:submit', cancel: 'text:cancel', strings: 'text:strings' } as const;
 

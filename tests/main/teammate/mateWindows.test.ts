@@ -108,10 +108,12 @@ vi.mock('../../../src/main/paths', () => ({
 }));
 
 const tag = { name: 'Mate', color: 3 };
-const bubble: BubbleState = { view: 'bubble', lang: 'en', tag, line: 'It is a typo.', thread: null, thinking: false, more: true };
+const bubble: BubbleState = {
+  view: 'bubble', lang: 'en', tag, line: 'It is a typo.', thread: null, thinking: false, more: true, put: null,
+};
 const card: CardState = {
   view: 'card', lang: 'en', tag, title: 'Typo', entries: [{ kind: 'answer', label: 'Mate', markdown: '**typo**' }],
-  streaming: false, footer: { profile: 'Default', model: 'm', tokens: null, used: [] },
+  streaming: false, footer: { profile: 'Default', model: 'm', tokens: null, used: [] }, put: null,
 };
 const words: WordsState = { view: 'words', lang: 'en', tag, thread: null, continueByDefault: false };
 const consent: ConsentState = {

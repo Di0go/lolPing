@@ -56,6 +56,12 @@ const enMateUi = {
   allowOnce: 'Allow once',
   alwaysAllow: 'Always allow',
   decline: 'Decline',
+  /** The bubble's and card's button for a paste or fill that wasn't done: the click is the consent. */
+  putPaste: 'Paste',
+  putReplace: 'Replace',
+  putFill: 'Fill',
+  /** After the keys were still held when a paste was due. */
+  putReady: 'Paste when ready',
   /** The form preview: the question, the buttons, the fields left for the user and why, and the note under the buttons. */
   formTitle: (app: string) => `Fill this form in ${app}?`,
   formFill: (n: number) => (n === 1 ? 'Fill 1 field' : `Fill ${n} fields`),
@@ -955,6 +961,10 @@ const zh: Strings = {
       allowOnce: '允许一次',
       alwaysAllow: '总是允许',
       decline: '拒绝',
+      putPaste: '粘贴',
+      putReplace: '替换',
+      putFill: '填写',
+      putReady: '准备好后粘贴',
       formTitle: (app: string) => `填写 ${app} 里的这份表单？`,
       formFill: (n: number) => `填写 ${n} 个字段`,
       formCancel: '取消',

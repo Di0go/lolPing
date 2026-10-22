@@ -22,6 +22,9 @@ export interface WordsState {
   continueByDefault: boolean;
 }
 
+/** The put button the bubble and card show: Paste, Replace, Fill, Paste when ready, or none. */
+export type PutState = 'paste' | 'replace' | 'fill' | 'ready' | null;
+
 export interface BubbleState {
   view: 'bubble';
   lang: Lang;
@@ -32,6 +35,7 @@ export interface BubbleState {
   thinking: boolean;
   /** There is more than the line: the More button is shown. */
   more: boolean;
+  put: PutState;
 }
 
 export interface CardState {
@@ -43,6 +47,7 @@ export interface CardState {
   entries: { kind: 'ask' | 'answer'; label: string; markdown: string; line?: string }[];
   streaming: boolean;
   footer: { profile: string; model: string; tokens: number | null; used: string[] };
+  put: PutState;
 }
 
 /** One thread in the History window's list. */
@@ -126,6 +131,8 @@ export type MateAction =
   | { t: 'continue'; id: string }
   | { t: 'delete'; id: string }
   | { t: 'search'; query: string }
+  /** The bubble's or card's put button: the click is the user's consent to that paste or fill. */
+  | { t: 'put' }
   | ConsentAction
   | FormAction;
 
@@ -151,10 +158,13 @@ const FIELD_ID_MAX = 200;
 /** The same rule as HistoryStore uses before an id reaches a file name. */
 const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
-/** What each window may ask for: the words box asks, the card replies, the bubble opens or closes, the rest decide. */
+/**
+ * What each window may ask for: the words box asks, the card replies, the bubble opens or closes, the rest decide. The
+ * bubble and card also carry the put button.
+ */
 const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
-  bubble: new Set(['more', 'dismiss']),
-  card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link']),
+  bubble: new Set(['more', 'dismiss', 'put']),
+  card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put']),
   words: new Set(['ask', 'cancel']),
   history: new Set(['open', 'continue', 'delete', 'search']),
   consent: new Set(['allow', 'always', 'decline']),
@@ -190,6 +200,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'close':
     case 'deep':
     case 'history':
+    case 'put':
       return { t: a.t };
     case 'cancel':
       return isSerial(a.serial) ? { t: 'cancel', serial: a.serial } : { t: 'cancel' };

@@ -2,6 +2,7 @@ import { Button, Caption1, makeStyles, mergeClasses, Text, tokens } from '@fluen
 import { Dismiss16Regular } from '@fluentui/react-icons';
 import type { Strings } from '../../shared/i18n';
 import type { BubbleState, MateAction, MateLeave } from '../../shared/teammateIpc';
+import { putLabel } from './cardText';
 import { useMotion } from './motion';
 import { NameTag } from './NameTag';
 
@@ -46,6 +47,7 @@ export function Bubble({ s, t, act, leaving }: {
   const sf = useSurfaceStyles();
   const m = useMotion();
   const leave = leaving === 'stale' ? m.stale : leaving === 'fast' ? m.fadeOut : undefined;
+  const put = putLabel(s.put, t);
   return (
     <div className={sf.frame}>
       <div className={mergeClasses(sf.surface, st.bubble, m.appear, leave)}>
@@ -60,10 +62,16 @@ export function Bubble({ s, t, act, leaving }: {
             onClick={() => act({ t: 'dismiss' })}
           />
         </div>
-        {(s.line || s.more) && (
+        {(s.line || s.more || put) && (
           <div className={st.body}>
             {/* Keyed by the line, so a new line settles in instead of swapping in place. */}
             <Text key={s.line} className={mergeClasses(st.line, m.rise)}>{s.line}</Text>
+            {/* Keyed by the label, so Paste turning into Paste when ready pops in again. */}
+            {put && (
+              <Button key={put} className={m.pop} size="small" onClick={() => act({ t: 'put' })}>
+                {put}
+              </Button>
+            )}
             {s.more && (
               <Button className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'more' })}>
                 {t.more}

@@ -768,7 +768,6 @@ function start(): void {
         hideBubble: () => controller.onTeammateAction('bubble', { t: 'dismiss' }),
       },
       overlay: overlays,
-      glow: () => undefined, // the overlay draws no field glow yet
       zoneOffset: (d) => -d.getTimezoneOffset(),
       now: Date.now,
       timer: (ms, fn) => {

@@ -72,3 +72,16 @@ export function physicalToLocal(x: number, y: number, maps: readonly DisplayMap[
   if (!target) return null;
   return { displayId: target.id, x: p.x - target.dip.x, y: p.y - target.dip.y };
 }
+
+/**
+ * A physical box → CSS pixels inside the overlay of the display its top-left corner is on, sized by that display's
+ * scale. A box that spans two displays is drawn on the first, as a ping at its corner would be.
+ */
+export function physicalBoxToLocal(
+  box: { x: number; y: number; w: number; h: number }, maps: readonly DisplayMap[],
+): (LocalPoint & { w: number; h: number }) | null {
+  const at = physicalToLocal(box.x, box.y, maps);
+  const display = at ? maps.find((m) => m.id === at.displayId) : undefined;
+  if (!at || !display) return null;
+  return { ...at, w: box.w / display.scale, h: box.h / display.scale };
+}

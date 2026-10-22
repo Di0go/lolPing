@@ -7,12 +7,13 @@ import {
 import {
   DEFAULT_CLICK_PING, TICK_SOUND, allSoundNames, allTextureNames, pingById, pingsFor, soundUrl, textureUrl, type PingDef,
 } from '../../shared/pings';
-import type { MateMark, PingTag } from '../../shared/ipc';
+import { parseMateGlow, type MateMark, type PingTag } from '../../shared/ipc';
 import type { WheelKind } from '../../shared/protocol';
 import { tagColorCss } from '../../shared/roomColors';
 import { DEFAULT_SETTINGS, overlaySettings, soundLevel, type OverlaySettings } from '../../shared/settings';
 import '../shared/emoteFx.css';
 import { EmoteStage } from './emoteStage';
+import { spawnGlow } from './glowFx';
 import { spawnPing } from './pingFx';
 import { SoundBank } from './soundBank';
 import { showToast } from './toast';
@@ -177,6 +178,14 @@ window.overlay.on('mate:ticket', (t) => {
 });
 window.overlay.on('mate:said', () => {
   for (const el of document.querySelectorAll('[data-owner="mate"] .tag.dots')) el.classList.remove('dots');
+});
+window.overlay.on('mate:glow', (raw) => {
+  const g = parseMateGlow(raw);
+  if (!g) return;
+  // A fill's later fields wait their turn; one whose ask was replaced meanwhile is dropped.
+  setTimeout(() => {
+    if (!staleMate(g)) spawnGlow(pingLayer, g);
+  }, g.delay);
 });
 
 /** Resolves with `label` when the image at `url` doesn't load. */

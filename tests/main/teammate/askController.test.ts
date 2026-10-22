@@ -100,11 +100,13 @@ function harness(opts: HarnessOptions = {}) {
   const taken: ActionCall[] = [];
   const takenRuns: RunInfo[] = [];
   let runnerCancels = 0;
+  const putClicks: Array<[string, 'bubble' | 'card']> = [];
   const runner = Object.assign(new EventEmitter(), {
     take: (r: RunInfo, c: ActionCall) => {
       takenRuns.push(r);
       taken.push(c);
     },
+    put: async (r: RunInfo, from: 'bubble' | 'card') => void putClicks.push([r.id, from]),
     cancel: () => {
       runnerCancels += 1;
     },
@@ -268,7 +270,7 @@ function harness(opts: HarnessOptions = {}) {
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
     ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen, taken,
-    takenRuns, runner, dones, amends, runnerCancels: () => runnerCancels,
+    takenRuns, runner, dones, amends, putClicks, runnerCancels: () => runnerCancels,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -1136,6 +1138,56 @@ describe('AskController', () => {
       expect(h.runnerCancels()).toBe(before + 1);
       h.ctl.cancel('pause');
       expect(h.runnerCancels()).toBe(before + 2);
+    });
+
+    it('shows Paste when ready after hands stayed on the keys', async () => {
+      const h = harness({
+        recordActions: true,
+        steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      expect(h.bubbles().at(-1)?.put).toBeNull();
+      // The runner took the paste: the bubble offers it.
+      h.runner.emit('put', 'paste');
+      expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Ok.', put: 'paste' }));
+      // A click paste hides the bubble first; the helper then answers `hands`.
+      h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+      const shown = h.of('bubble').length;
+      h.runner.emit('put', 'ready');
+      // The bubble comes back, so Paste when ready has somewhere to be.
+      expect(h.of('bubble')).toHaveLength(shown + 1);
+      expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Ok.', put: 'ready' }));
+      expect(h.popupsAt).toHaveLength(2);
+      // Its click is the consent, for this ask.
+      h.ctl.onTeammateAction('bubble', { t: 'put' });
+      expect(h.putClicks).toEqual([[h.tickets[0], 'bubble']]);
+      // The paste landed: the button goes, the bubble stays.
+      h.runner.emit('put', null);
+      expect(h.bubbles().at(-1)?.put).toBeNull();
+      expect(h.of('bubbleHidden')).toHaveLength(1);
+
+      // With the card up, the card carries the button and the bubble stays away.
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      const bubbles = h.of('bubble').length;
+      h.runner.emit('put', 'replace');
+      expect(h.cards().at(-1)?.put).toBe('replace');
+      expect(h.of('bubble')).toHaveLength(bubbles);
+      h.ctl.onTeammateAction('card', { t: 'put' });
+      expect(h.putClicks.at(-1)).toEqual([h.tickets[0], 'card']);
+    });
+
+    it('sends no put click for an answer that has no action', async () => {
+      const h = harness({ recordActions: true, steps: [answers([call('say', { text: 'Ok.' })])] });
+      h.ctl.ask(spot('enemyvision'));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'put' });
+      expect(h.putClicks).toEqual([]);
+      // Nothing to offer: a cleared button brings no bubble back.
+      h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+      const shown = h.of('bubble').length;
+      h.runner.emit('put', null);
+      expect(h.of('bubble')).toHaveLength(shown);
     });
 
     it('keeps a description of what was done in history, not the text', async () => {

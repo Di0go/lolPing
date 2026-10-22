@@ -20,7 +20,7 @@ import { threadAction } from '../../shared/teammate/threads';
 import {
   applyLimits, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall,
 } from '../../shared/teammate/tools';
-import type { BubbleState, CardState, MateAction, MateView } from '../../shared/teammateIpc';
+import type { BubbleState, CardState, MateAction, MateView, PutState } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
 import type { ActionRunner, RunInfo } from './actions';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
@@ -58,7 +58,7 @@ export interface AskDeps {
   now: () => number;
   usage: (u: { input: number; output: number }) => void;
   /** Carries out the copy, event, paste, fill and open calls; without it they are dropped. */
-  actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described'> & Pick<EventEmitter, 'on'>;
+  actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described' | 'put'> & Pick<EventEmitter, 'on'>;
   /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
   cursor?: () => Point;
   /** Makes, reads and deletes an ask's capture folder; the file system by default. */
@@ -211,6 +211,8 @@ export class AskController extends EventEmitter {
   private viewed: ThreadRecord | null = null;
   /** The last answer's history entry: an action done after it was written (after consent) is added to it. */
   private entry: { ask: string; at: number; thread: Promise<string | null> } | null = null;
+  /** The runner's put button for the answer on screen: the bubble and the card show it. */
+  private put: PutState = null;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -222,6 +224,7 @@ export class AskController extends EventEmitter {
       removeDir: (p) => rm(p, { recursive: true, force: true }),
     };
     deps.actions?.on('described', (ask: string, done: string[]) => this.amendDone(ask, done));
+    deps.actions?.on('put', (state: PutState) => this.showPut(state));
   }
 
   get running(): boolean {
@@ -298,7 +301,7 @@ export class AskController extends EventEmitter {
     this.deps.windows.showCard(at, {
       view: 'card', lang, tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, title: record.title,
       entries: this.threadEntries(record, lang, t.tagName), streaming: false,
-      footer: { profile: record.profile, model: '', tokens: null, used: [] },
+      footer: { profile: record.profile, model: '', tokens: null, used: [] }, put: null,
     });
     this.cardShown = true;
     this.viewed = record;
@@ -324,6 +327,10 @@ export class AskController extends EventEmitter {
         break;
       case 'deep':
         if (run) this.ask({ ...run.spot, intent: 'allin' });
+        break;
+      case 'put':
+        // The click is the consent; the runner checks it belongs to the action it has for this ask.
+        if (run?.info && (view === 'bubble' || view === 'card')) void this.deps.actions?.put(run.info, view);
         break;
       default:
         break;
@@ -771,6 +778,19 @@ export class AskController extends EventEmitter {
     if (saved && this.thread === local && (run.thread === null || saved.id === run.thread.id)) this.thread = saved;
   }
 
+  /**
+   * The put button changed, or a paste didn't land and the button stays. The card or the bubble shows it; when neither
+   * is up (the bubble hid for the paste's click, or its time ran out), the bubble comes back with it.
+   */
+  private showPut(state: PutState): void {
+    this.put = state;
+    const run = this.shown;
+    if (!run) return;
+    if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, this.alive(run)));
+    else if (this.bubbleShown) this.deps.windows.updateBubble(this.bubbleState(run, run.line));
+    else if (state !== null) this.showLine(run, run.line);
+  }
+
   /** An action of the last answer was done after its entry went into history: the entry says so too. */
   private amendDone(ask: string, done: string[]): void {
     const entry = this.entry;
@@ -831,6 +851,7 @@ export class AskController extends EventEmitter {
       view: 'bubble', lang: run.lang, tag: run.tag, line, thread: run.thread?.title ?? null, thinking: false,
       // An answer's line always offers More, if only for the card's reply box; a failure's line doesn't.
       more: run.rest !== '' || run.markdown.length > 0 || (line !== '' && run.machine.failure === null),
+      put: this.put,
     };
   }
 
@@ -857,6 +878,7 @@ export class AskController extends EventEmitter {
           ...(run.skipped ? [t.ask.contextSkipped] : []),
         ],
       },
+      put: this.put,
     };
   }
 

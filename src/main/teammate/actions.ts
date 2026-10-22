@@ -11,7 +11,7 @@ import {
 } from '../../shared/teammate/doRules';
 import { eventIcs, tableHtml, tableTsv } from '../../shared/teammate/grab';
 import type { ActionCall } from '../../shared/teammate/tools';
-import type { ConsentAction, FormAction } from '../../shared/teammateIpc';
+import type { ConsentAction, FormAction, PutState } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
 import type { ContextClient } from './contextClient';
 import type { MateWindows } from './mateWindows';
@@ -33,9 +33,6 @@ const FRONT_POLL_MS = 50;
 const DETAIL_MAX = 200;
 /** A field's label on its ping, as long as the model's own ping labels. */
 const PING_LABEL_MAX = 20;
-
-/** The put button the bubble and card show: Paste, Replace, Fill, Paste when ready, or none. */
-export type PutState = 'paste' | 'replace' | 'fill' | 'ready' | null;
 
 /** What the runner needs from the ask an action came from, all read when the ask was made. */
 export interface RunInfo {
@@ -73,9 +70,7 @@ export interface ActionDeps {
   tempDir: () => string;
   windows: Pick<MateWindows,
     'showConsent' | 'hideConsent' | 'showForm' | 'hideForm' | 'cardHadFocus' | 'hideCard' | 'hideBubble'>;
-  overlay: Pick<OverlayManager, 'toast' | 'spawnMate' | 'toLocal'>;
-  /** Outlines a field the teammate just wrote (box in physical px) in its tag's colour. */
-  glow: (box: Rect, color: PingTag) => void;
+  overlay: Pick<OverlayManager, 'toast' | 'spawnMate' | 'toLocal' | 'glow'>;
   /** The local time minus UTC in minutes on a date, for event files. */
   zoneOffset: (d: Date) => number;
   now: () => number;
@@ -136,7 +131,8 @@ function detailOf(call: Paste | EventCall | Open): string {
  * Carries out the teammate's copy, event, paste, fill and open calls (spec §10). A copy runs at once. A paste, event or
  * open waits for its consent card (or Always allow); a fill always waits for its form preview. One card or preview is
  * up at a time, and the next waits until the action before it is done. Emits 'put' (PutState) when the bubble's and
- * card's put button changes, and 'described' (ask id, descriptions) each time an action of that ask is done.
+ * card's put button changes, and again after a paste that did not land, so a bubble hidden for its click can come back
+ * with the button. Emits 'described' (ask id, descriptions) each time an action of that ask is done.
  */
 export class ActionRunner extends EventEmitter {
   private queue: Waiting[] = [];
@@ -332,8 +328,9 @@ export class ActionRunner extends EventEmitter {
     if (!list.includes(key)) this.deps.savePermissions([...list, key]);
   }
 
-  private setPut(state: PutState): void {
-    if (state === this.state) return;
+  /** `again`: tell the bubble and card even when the button stays the same. */
+  private setPut(state: PutState, again = false): void {
+    if (state === this.state && !again) return;
     this.state = state;
     this.emit('put', state);
   }
@@ -406,20 +403,21 @@ export class ActionRunner extends EventEmitter {
     }
     if (signal.aborted) return;
     // Hands still on the keys after 3 s: nothing was sent, and the button pastes once they are off.
-    if (reply.result === 'hands') return this.setPut('ready');
+    if (reply.result === 'hands') return this.setPut('ready', true);
     const lost = reply.restored ? '' : t.clipboardNotRestored;
     if (reply.result !== 'ok') return this.copyInstead(run, call.text, reply.result, lost);
     this.toast(run, t.pasted, lost);
     const box = field?.box ?? run.box;
-    if (box) this.deps.glow(box, run.tag);
+    if (box) this.deps.overlay.glow([box], run.tag);
     this.describe(run, t.didPaste(lineCount(call.text), run.app || t.thisApp));
     this.setPut(null);
   }
 
   private async copyInstead(run: RunInfo, text: string, why: CopyWhy, extra = ''): Promise<void> {
     const t = strings(run.lang).teammate.ui;
-    // A password field stays one: a later click on Paste would only copy again.
+    // A password field stays one: a later click on Paste would only copy again. Any other refusal keeps the button.
     if (why === 'secure') this.setPut(null);
+    else if (this.state !== null) this.setPut(this.state, true);
     if (!(await this.write(run, { text }, extra))) return;
     this.toast(run, whyCopied(t, why, run.app || t.thisApp), extra);
     this.describe(run, t.didCopyText(lineCount(text)));
@@ -494,7 +492,9 @@ export class ActionRunner extends EventEmitter {
       return field ? [field] : [];
     });
     this.pingFields(run, filled, [...failed, ...leftByPreview]);
-    for (const f of filled) if (f.box) this.deps.glow(f.box, run.tag);
+    // In the order they were filled.
+    const boxes = filled.flatMap((f) => (f.box ? [f.box] : []));
+    if (boxes.length > 0) this.deps.overlay.glow(boxes, run.tag);
     this.toast(run, filled.length > 0 ? t.filled(filled.length) : t.filledNone, lost ? t.clipboardNotRestored : '');
     this.describe(run, t.didFill(filled.length, failed.length + preview.left.length));
     this.setPut(null);

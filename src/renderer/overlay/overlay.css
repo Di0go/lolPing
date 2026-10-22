@@ -80,6 +80,14 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .ping.kept .label { animation-name: labelIn, none; }
 /* The receipt for a Do it ask is the teammate's tag alone, centred where the ping would be. */
 .ping.tag-only .tag { top: -10px; }
+/* A field the teammate just wrote: a 2 px outline over it in the teammate's colour, fading out. */
+.mate-glow {
+  position: absolute; box-sizing: border-box; border: 2px solid var(--glow); border-radius: 4px;
+  box-shadow: 0 0 8px var(--glow); animation: glowOut .9s ease-in forwards;
+}
+@keyframes glowOut { from { opacity: 1 } to { opacity: 0 } }
+/* Reduced motion: the outline holds still for its 900 ms, then goes. */
+@media (prefers-reduced-motion: reduce) { .mate-glow { animation: none; } }
 @keyframes tagIn { from { transform: translate(-50%, 4px) } }
 @keyframes pop { 0% { transform: scale(.4); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
 @keyframes bob { 0%, 100% { translate: 0 0 } 50% { translate: 0 -5px } }
