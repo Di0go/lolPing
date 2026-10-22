@@ -1,5 +1,6 @@
 // Unit tests for the context helper's platform-free part (no screen capture).
 // Build and run: npm run test:helper
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -7,6 +8,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -646,6 +648,90 @@ static void test_read_leaves_the_fields_layer_off_unless_asked_and_reports_a_fai
   CHECK(parseCommand(R"({"type":"read","id":"r1","fields":"yes","dir":"C:\\t"})").kind == Command::Kind::Bad);
 }
 
+// The table that doRules.test.ts reads too, one entry per line: {"label":"...","neverFill":true}. The tests run in
+// native/hook-helper (run.mjs), the repo root is two levels up.
+static void test_never_fill_labels_match_the_shared_table() {
+  std::ifstream in("../../tests/fixtures/never-fill-labels.json", std::ios::binary);
+  if (!in) in.open("tests/fixtures/never-fill-labels.json", std::ios::binary);
+  CHECK(static_cast<bool>(in));
+  int rows = 0;
+  for (std::string line; std::getline(in, line);) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const size_t open = line.find('{');
+    if (open == std::string::npos) continue;
+    const size_t close = line.rfind('}');
+    const auto row = fields(line.substr(open, close - open + 1));
+    CHECK(row.count("label") == 1 && row.count("neverFill") == 1);
+    if (row.count("label") == 0 || row.count("neverFill") == 0) continue;
+    ++rows;
+    if (neverFillLabel(row.at("label")) != (row.at("neverFill") == "true")) {
+      ++g_fail;
+      std::printf("FAIL never-fill label: %s\n", row.at("label").c_str());
+    }
+  }
+  CHECK(rows >= 40);
+}
+
+static void test_form_fields_blank_the_value_of_a_never_fill_label() {
+  RawField card = field("1.1", "text", "Card number");
+  card.value = "4111111111111111";  // the page does not mark it as a password
+  RawField id = field("1.2", "text", "\xe8\xba\xab\xe4\xbb\xbd\xe8\xaf\x81\xe5\x8f\xb7");  // the ZH ID number label
+  id.value = "110101199001011234";
+  RawField name = field("1.3", "text", "Pinterest");
+  name.value = "Ada";
+  const std::vector<std::string> rows = lines(formFieldsFileText({card, id, name}));
+  CHECK(rows.size() == 3);
+  CHECK(rows[0].find(R"("value":"","secure":true)") != std::string::npos);
+  CHECK(rows[1].find(R"("value":"","secure":true)") != std::string::npos);
+  CHECK(rows[2].find(R"("value":"Ada","secure":false)") != std::string::npos);
+  const std::string all = formFieldsFileText({card, id, name});
+  CHECK(all.find("4111") == std::string::npos && all.find("110101") == std::string::npos);
+}
+
+static void test_read_runs_the_fields_search_after_the_text_probe_on_one_thread() {
+  Fake fake;
+  ContextPlatform p = readPlatform(fake);
+  struct Seen {
+    std::mutex lock;
+    std::vector<std::string> order;
+    std::vector<std::thread::id> threads;
+  };
+  const auto seen = std::make_shared<Seen>();
+  const auto note = [seen](const char* what) {
+    std::lock_guard<std::mutex> guard(seen->lock);
+    seen->order.push_back(what);
+    seen->threads.push_back(std::this_thread::get_id());
+  };
+  p.boxes = [note](const std::vector<Point>&, std::vector<std::vector<Rect>>&, Failure&) {
+    note("boxes");
+    return true;
+  };
+  p.systemText = [note](const std::vector<Point>&, bool, SystemText&, Failure&) {
+    note("text");
+    return true;
+  };
+  p.formFields = [note](const std::vector<Point>&, std::vector<RawField>&, Failure&) {
+    note("fields");
+    return true;
+  };
+  p.controls = [note](const std::vector<Point>&, int, std::vector<RawMark>&, Failure&) {
+    note("marks");
+    return true;
+  };
+  const auto m = fields(handleCommand(
+      parseCommand(readLine("o1", R"("boxes":true,"text":true,"fields":true,"marks":true,)")), p).line);
+  CHECK(m.at("fields") == "ok" && m.at("text") == "ok" && m.at("marks") == "ok");
+  // One tree search at a time: UI Automation fails a search that runs beside another on a fresh helper.
+  CHECK(seen->order == std::vector<std::string>({"boxes", "text", "fields", "marks"}));
+  CHECK(std::all_of(seen->threads.begin(), seen->threads.end(), [&](const std::thread::id& t) {
+    return t == seen->threads.front();
+  }));
+  // Fields alone still get a thread of their own to run on.
+  seen->order.clear();
+  const auto alone = fields(handleCommand(parseCommand(readLine("o2", R"("fields":true,)")), p).line);
+  CHECK(alone.at("fields") == "ok" && seen->order == std::vector<std::string>({"fields"}));
+}
+
 static void test_budget_gives_up_on_a_slow_probe() {
   const auto start = std::chrono::steady_clock::now();
   const bool done = runWithBudget([] { std::this_thread::sleep_for(std::chrono::milliseconds(200)); }, 20);
@@ -766,6 +852,9 @@ int main() {
   test_form_fields_file_cuts_labels_on_a_character_boundary();
   test_form_fields_file_keeps_one_line_per_field_and_the_caps();
   test_read_leaves_the_fields_layer_off_unless_asked_and_reports_a_failure();
+  test_never_fill_labels_match_the_shared_table();
+  test_form_fields_blank_the_value_of_a_never_fill_label();
+  test_read_runs_the_fields_search_after_the_text_probe_on_one_thread();
   test_budget_gives_up_on_a_slow_probe();
   test_budget_returns_a_fast_probe();
   test_cut_text_keeps_whole_characters();

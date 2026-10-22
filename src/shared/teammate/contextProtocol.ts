@@ -1,6 +1,6 @@
 import type { Point } from '../ipc';
 import type { Rect } from './coords';
-import type { FormField } from './doRules';
+import { neverFill, type FormField } from './doRules';
 
 /** The overview's long side, its JPEG quality and the zoom crop size (spec §6.1). */
 export const OVERVIEW_LONG_SIDE = 1600;
@@ -173,8 +173,9 @@ function parseField(v: unknown): FormField | null {
     kind: kind as FormField['kind'],
     label: capChars(label, FIELD_LABEL_MAX),
     group: capChars(group, FIELD_LABEL_MAX),
-    // The helper already sends no value for a secure field; blanking it here keeps that true whatever arrives.
-    value: secure ? '' : capChars(value, FIELD_VALUE_MAX),
+    // The helper already sends no value for a secure or never-fill field; blanking it here keeps that true whatever
+    // arrives.
+    value: neverFill({ label, secure }) ? '' : capChars(value, FIELD_VALUE_MAX),
     secure,
     required,
     options: (options as string[]).slice(0, FIELD_OPTIONS_MAX).map((opt) => capChars(opt, FIELD_OPTION_MAX)),

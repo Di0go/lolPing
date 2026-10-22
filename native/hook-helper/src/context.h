@@ -156,9 +156,16 @@ constexpr size_t kFieldOptionMax = 120;
 
 /**
  * The fields file: one JSON object per line for each of the first kMaxFormFields fields, texts cut to their caps on
- * character boundaries. A secure field's value is never written, whatever the probe read.
+ * character boundaries. The value of a secure field, or of one whose label is a never-fill label, is never written,
+ * whatever the probe read; such a field is written with secure true.
  */
 std::string formFieldsFileText(const std::vector<RawField>& fields);
+
+/**
+ * Whether a label names a password, PIN, card number, security code, expiry, bank account, SSN, passport or ID number,
+ * in English or Chinese: the same test as neverFill in src/shared/teammate/doRules.ts.
+ */
+bool neverFillLabel(const std::string& label);
 
 /** At most this many boxes per spot: the innermost ones and the window. */
 constexpr size_t kMaxBoxes = 12;

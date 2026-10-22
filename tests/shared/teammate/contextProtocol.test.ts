@@ -205,6 +205,15 @@ describe('contextProtocol', () => {
     expect(JSON.stringify(fields)).not.toContain('hunter2');
   });
 
+  it('blanks the value of a never-fill label even when the helper sent it', () => {
+    const [card, id, name] = parseFieldsFile([
+      fieldLine({ id: '1.1', label: 'Card number', value: '4111111111111111' }),
+      fieldLine({ id: '1.2', label: '身份证号', value: '110101199001011234' }),
+      fieldLine({ id: '1.3', label: 'Full name', value: 'Ada' }),
+    ].join('\n'));
+    expect([card.value, id.value, name.value]).toEqual(['', '', 'Ada']);
+  });
+
   it('cuts the fields file to its caps in code points, whatever the helper sent', () => {
     const han = '\u{20000}'; // one code point, two UTF-16 units
     const long = fieldLine({

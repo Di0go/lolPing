@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <thread>
 
 #include "json.h"
@@ -404,35 +405,30 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
   const bool wantFields = r.fields && !r.spots.empty() && static_cast<bool>(platform.formFields);
   // The layers run at once under one deadline: the slowest, not the sum, sets how long an ask waits. On a fresh
   // helper, UI Automation fails a controls walk that runs beside the system text probe (E_FAIL), so the quick text
-  // probe goes first on the walk's own thread.
+  // probe goes first on the walk's own thread. The form fields are another search of the tree, so they follow the
+  // text probe on that thread too: no two searches run at once.
   std::vector<std::function<void()>> probes;
-  size_t screenAt = 0, fileAt = 0, fieldsAt = 0;
-  if (wantMarks || r.text || wantBoxes) {
+  size_t screenAt = 0, fileAt = 0;
+  if (wantMarks || r.text || wantBoxes || wantFields) {
     screenAt = probes.size();
     const auto boxes = platform.boxes;
     const auto controls = platform.controls;
     const auto systemText = platform.systemText;
+    const auto formFields = platform.formFields;
     const std::vector<Point> spots = r.spots;
     const int radius = r.radius;
     const bool text = r.text;
     // In a browser the file probe reads the address bar anyway; reading it twice was most of the text probe's time.
     const bool withAddress = !r.file;
     // The boxes are a few calls per spot and frame the capture, so they go first.
-    probes.push_back([marksJob, textJob, boxesJob, boxes, controls, systemText, spots, radius, text, withAddress,
-                      wantMarks, wantBoxes] {
+    probes.push_back([marksJob, textJob, boxesJob, fieldsJob, boxes, controls, systemText, formFields, spots, radius,
+                      text, withAddress, wantMarks, wantBoxes, wantFields] {
       if (wantBoxes && boxes) boxesJob->ok = boxes(spots, boxesJob->out, boxesJob->fail);
       if (text) textJob->ok = systemText(spots, withAddress, textJob->out, textJob->fail);
+      // Before the walk, which runs to its own deadline and would leave the fields no time.
+      if (wantFields) fieldsJob->ok = formFields(spots, fieldsJob->out, fieldsJob->fail);
       if (wantMarks) marksJob->ok = controls(spots, radius, marksJob->out, marksJob->fail);
     });
-  }
-  if (wantFields) {
-    // Its own thread: reading a page's fields is one search of the document, too long to queue behind the walk.
-    fieldsAt = probes.size();
-    const auto formFields = platform.formFields;
-    const std::vector<Point> spots = r.spots;
-    probes.push_back(bindProbe(fieldsJob, [formFields, spots](std::vector<RawField>& out, Failure& f) {
-      return formFields(spots, out, f);
-    }));
   }
   if (r.file) {
     fileAt = probes.size();
@@ -457,7 +453,7 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
       count = 0;
     }
   }
-  std::string fieldsStatus = layerStatus(wantFields, inTime(wantFields, fieldsAt), *fieldsJob);
+  std::string fieldsStatus = layerStatus(wantFields, inTime(wantFields, screenAt), *fieldsJob);
   std::string fieldsPath;
   size_t fieldCount = 0;
   if (fieldsStatus == "ok") {
@@ -647,15 +643,62 @@ std::string marksFileText(const std::vector<RawMark>& marks) {
   return out;
 }
 
+bool neverFillLabel(const std::string& label) {
+  // The same list, in the same order, as NEVER_FILL_LABELS in src/shared/teammate/doRules.ts; both are tested against
+  // tests/fixtures/never-fill-labels.json. English patterns match whole words, so "PIN" does not catch "Shipping".
+  // Chinese has no word breaks: substrings.
+  static const std::vector<std::regex> patterns = [] {
+    const char* const sources[] = {
+        R"(\bpass(?:word|wd|code|phrase)\b)",
+        R"(\bpin\b)",
+        R"(\b(?:credit|debit)\s+card\b)",
+        R"(\bcard\s*(?:number|num|no|#)(?!\w))",
+        R"(\bcv[vcn]2?\b)",
+        R"(\bsecurity\s+code\b)",
+        R"(\bexpir(?:y|ation|es)\b)",
+        R"(\biban\b)",
+        R"(\b(?:account|routing)\s*(?:number|num|no)\b)",
+        R"(\bssn\b)",
+        R"(\bsocial\s+security\b)",
+        R"(\bpassport\b)",
+        R"(\b(?:id|identity|identification)\s*(?:number|num|no)\b)",
+    };
+    std::vector<std::regex> out;
+    for (const char* source : sources) out.emplace_back(source, std::regex::ECMAScript | std::regex::icase);
+    return out;
+  }();
+  // UTF-8 bytes, as the compiler may not read this file as UTF-8: the TS list's password, card number, bank card,
+  // security code, validity period, ID card, passport and document number words, in that order.
+  static const char* const kChinese[] = {
+      "\xe5\xaf\x86\xe7\xa0\x81",
+      "\xe5\x8d\xa1\xe5\x8f\xb7",
+      "\xe9\x93\xb6\xe8\xa1\x8c\xe5\x8d\xa1",
+      "\xe5\xae\x89\xe5\x85\xa8\xe7\xa0\x81",
+      "\xe6\x9c\x89\xe6\x95\x88\xe6\x9c\x9f",
+      "\xe8\xba\xab\xe4\xbb\xbd\xe8\xaf\x81",
+      "\xe6\x8a\xa4\xe7\x85\xa7",
+      "\xe8\xaf\x81\xe4\xbb\xb6\xe5\x8f\xb7",
+  };
+  for (const std::regex& p : patterns) {
+    if (std::regex_search(label, p)) return true;
+  }
+  for (const char* word : kChinese) {
+    if (label.find(word) != std::string::npos) return true;
+  }
+  return false;
+}
+
 std::string formFieldsFileText(const std::vector<RawField>& fields) {
   const auto quoted = [](const std::string& s, size_t max) { return "\"" + jsonEscape(cutText(s, max)) + "\""; };
   std::string out;
   for (size_t i = 0; i < fields.size() && i < kMaxFormFields; ++i) {
     const RawField& f = fields[i];
+    // A password, card number or ID number is a secret whether or not the page marks it as one.
+    const bool secure = f.secure || neverFillLabel(f.label);
     out += "{\"id\":" + quoted(f.id, kFieldIdMax) + ",\"kind\":" + quoted(f.kind, 16) +
            ",\"label\":" + quoted(f.label, kFieldLabelMax) + ",\"group\":" + quoted(f.group, kFieldLabelMax) +
-           ",\"value\":" + quoted(f.secure ? std::string() : f.value, kFieldValueMax) +
-           ",\"secure\":" + (f.secure ? "true" : "false") + ",\"required\":" + (f.required ? "true" : "false") +
+           ",\"value\":" + quoted(secure ? std::string() : f.value, kFieldValueMax) +
+           ",\"secure\":" + (secure ? "true" : "false") + ",\"required\":" + (f.required ? "true" : "false") +
            ",\"options\":[";
     for (size_t j = 0; j < f.options.size() && j < kMaxFieldOptions; ++j) {
       out += (j == 0 ? "" : ",") + quoted(f.options[j], kFieldOptionMax);

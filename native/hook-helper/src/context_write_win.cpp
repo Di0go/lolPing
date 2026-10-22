@@ -1,6 +1,6 @@
 // Windows form access by UI Automation: the fields of the form under the first spot, for the teammate's Do it asks.
-// Runs on its own fresh thread (context.h), so it joins the MTA itself and never uninitializes: an abandoned thread
-// may still be inside a call when the helper exits.
+// Runs on a fresh thread (context.h), after the text probe and never beside another tree search, so it joins the MTA
+// itself and never uninitializes: an abandoned thread may still be inside a call when the helper exits.
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

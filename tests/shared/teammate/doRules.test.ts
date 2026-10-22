@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   allowed,
@@ -26,7 +28,17 @@ describe('permissions', () => {
   });
 });
 
+/** The table the helper's C++ test reads too (native/hook-helper/tests/context_tests.cpp), so the two lists agree. */
+const LABELS = JSON.parse(readFileSync(
+  fileURLToPath(new URL('../../fixtures/never-fill-labels.json', import.meta.url)), 'utf8',
+)) as { label: string; neverFill: boolean }[];
+
 describe('neverFill', () => {
+  it('agrees with the shared table of labels the helper tests against', () => {
+    expect(LABELS.length).toBeGreaterThanOrEqual(40);
+    for (const { label, neverFill: expected } of LABELS) expect(neverFill({ label, secure: false }), label).toBe(expected);
+  });
+
   it('never fills a card number, CVV, password or ID field in English or Chinese', () => {
     const labels = [
       'Password', 'Confirm password', 'Passcode', 'PIN', 'PIN code', 'Card number', 'Credit card number',
