@@ -172,9 +172,10 @@ struct Fake {
       written.emplace_back(path, img);
       return true;
     };
-    p.foreground = [](std::string& app, std::string& title, Failure&) {
+    p.foreground = [](std::string& app, std::string& title, std::string& windowId, Failure&) {
       app = "notepad";
       title = "a \"note\".txt";
+      windowId = "263544";
       return true;
     };
     return p;
@@ -254,6 +255,7 @@ static void test_foreground_and_pong_replies() {
   const auto f = fields(handleCommand(parseCommand(R"({"type":"foreground","id":"f1"})"), fake.platform()).line);
   CHECK(f.at("type") == "foreground" && f.at("id") == "f1" && f.at("app") == "notepad");
   CHECK(f.at("title") == "a \"note\".txt");
+  CHECK(f.at("window") == "263544");
   const auto p = fields(handleCommand(parseCommand(R"({"type":"ping","id":"p1"})"), fake.platform()).line);
   CHECK(p.at("type") == "pong" && p.at("id") == "p1");
   const auto b = fields(handleCommand(parseCommand(R"({"type":"capture","id":"b1"})"), fake.platform()).line);
@@ -535,6 +537,115 @@ static void test_marks_file_cuts_on_a_character_boundary() {
   CHECK(mixed.substr(prefix.size()) == std::string(119, 'a') + "\xe4\xb8\xad\n");
 }
 
+namespace {
+
+std::vector<std::string> lines(const std::string& text) {
+  std::vector<std::string> out;
+  std::istringstream in(text);
+  for (std::string line; std::getline(in, line);) out.push_back(line);
+  return out;
+}
+
+RawField field(const std::string& id, const std::string& kind, const std::string& label) {
+  RawField f;
+  f.id = id;
+  f.kind = kind;
+  f.label = label;
+  return f;
+}
+
+}  // namespace
+
+static void test_form_fields_send_no_value_for_a_secure_field() {
+  Fake fake;
+  ContextPlatform p = readPlatform(fake);
+  p.formFields = [](const std::vector<Point>&, std::vector<RawField>& out, Failure&) {
+    RawField password = field("42.7.1", "text", "Password");
+    password.value = "hunter2";
+    password.secure = true;
+    RawField name = field("42.7.2", "text", "Name");
+    name.value = "Ada";
+    name.required = true;
+    out = {password, name};
+    return true;
+  };
+  const Reply r = handleCommand(parseCommand(readLine("f1", R"("fields":true,)")), p);
+  const auto m = fields(r.line);
+  CHECK(m.at("fields") == "ok" && m.at("fieldCount") == "2");
+  CHECK(m.at("fieldsPath") == (testDir() / "fields-f1.jsonl").string());
+  const std::string file = readFile(m.at("fieldsPath"));
+  CHECK(file.find("hunter2") == std::string::npos);
+  const std::vector<std::string> rows = lines(file);
+  CHECK(rows.size() == 2);
+  CHECK(rows[0].find(R"("id":"42.7.1","kind":"text","label":"Password","group":"","value":"","secure":true)") !=
+        std::string::npos);
+  const std::string ada = rows[1];
+  CHECK(ada.find(R"("value":"Ada")") != std::string::npos && ada.find(R"("required":true)") != std::string::npos);
+  CHECK(r.line.find("hunter2") == std::string::npos && r.line.find("Ada") == std::string::npos);
+}
+
+static void test_form_fields_file_cuts_labels_on_a_character_boundary() {
+  std::string chinese;
+  for (int i = 0; i < 130; ++i) chinese += "\xe4\xb8\xad";  // U+4E2D, three bytes each
+  RawField f = field("1.2", "combo", chinese);
+  f.group = chinese;
+  f.value = std::string(2001, 'v');
+  f.options = {chinese, "Small"};
+  const std::vector<std::string> rows = lines(formFieldsFileText({f}));
+  CHECK(rows.size() == 1);
+  const std::string cut120 = chinese.substr(0, 120 * 3);
+  CHECK(rows[0].find("\"label\":\"" + cut120 + "\"") != std::string::npos);
+  CHECK(rows[0].find("\"group\":\"" + cut120 + "\"") != std::string::npos);
+  CHECK(rows[0].find("\"options\":[\"" + cut120 + "\",\"Small\"]") != std::string::npos);
+  CHECK(rows[0].find("\"value\":\"" + std::string(2000, 'v') + "\"") != std::string::npos);
+  // A cut that would land inside a character moves back to its start.
+  const std::string mixed = formFieldsFileText({field("1.3", "text", std::string(119, 'a') + chinese)});
+  CHECK(mixed.find("\"label\":\"" + std::string(119, 'a') + "\xe4\xb8\xad\"") != std::string::npos);
+}
+
+static void test_form_fields_file_keeps_one_line_per_field_and_the_caps() {
+  RawField f = field("1.1", "text", "Say \"hi\"\nthen\ttab");
+  f.value = "line one\nline two";
+  const std::string text = formFieldsFileText({f});
+  CHECK(lines(text).size() == 1);  // the newlines are escaped
+  CHECK(text.find(R"("label":"Say \"hi\"\nthen\ttab")") != std::string::npos);
+  CHECK(text.find(R"("value":"line one\nline two")") != std::string::npos);
+  std::vector<RawField> many;
+  for (int i = 0; i < 70; ++i) many.push_back(field("1." + std::to_string(i), "text", "F"));
+  many[0].options.assign(60, "o");
+  const std::vector<std::string> rows = lines(formFieldsFileText(many));
+  CHECK(rows.size() == kMaxFormFields);
+  size_t options = 0;
+  for (size_t at = rows[0].find("\"o\""); at != std::string::npos; at = rows[0].find("\"o\"", at + 1)) ++options;
+  CHECK(options == kMaxFieldOptions);
+}
+
+static void test_read_leaves_the_fields_layer_off_unless_asked_and_reports_a_failure() {
+  Fake fake;
+  ContextPlatform p = readPlatform(fake);
+  bool read = false;
+  p.formFields = [&read](const std::vector<Point>&, std::vector<RawField>& out, Failure&) {
+    read = true;
+    out = {field("1.1", "text", "Name")};
+    return true;
+  };
+  const auto off = fields(handleCommand(parseCommand(readLine("f2", R"("text":true,)")), p).line);
+  CHECK(!read && off.at("fields") == "off" && off.count("fieldsPath") == 0);
+  const auto no = fields(handleCommand(parseCommand(readLine("f3", R"("fields":false,)")), p).line);
+  CHECK(!read && no.at("fields") == "off");
+  p.formFields = [](const std::vector<Point>&, std::vector<RawField>&, Failure& f) {
+    f.code = "permission";
+    return false;
+  };
+  const auto failed = fields(handleCommand(parseCommand(readLine("f4", R"("fields":true,"text":true,)")), p).line);
+  CHECK(failed.at("fields") == "permission" && failed.count("fieldsPath") == 0 && failed.at("text") == "ok");
+  // A platform with no fields probe (macOS for now) answers off, not an error.
+  p.formFields = nullptr;
+  const auto none = fields(handleCommand(parseCommand(readLine("f5", R"("fields":true,)")), p).line);
+  CHECK(none.at("fields") == "off");
+  CHECK(parseCommand(R"({"type":"read","id":"r1","fields":"yes","dir":"C:\\t"})").kind == Command::Kind::Bad);
+}
+
 static void test_budget_gives_up_on_a_slow_probe() {
   const auto start = std::chrono::steady_clock::now();
   const bool done = runWithBudget([] { std::this_thread::sleep_for(std::chrono::milliseconds(200)); }, 20);
@@ -651,6 +762,10 @@ int main() {
   test_read_sends_what_finished_and_exits_after_a_slow_layer();
   test_marks_file_escapes_tabs_and_newlines();
   test_marks_file_cuts_on_a_character_boundary();
+  test_form_fields_send_no_value_for_a_secure_field();
+  test_form_fields_file_cuts_labels_on_a_character_boundary();
+  test_form_fields_file_keeps_one_line_per_field_and_the_caps();
+  test_read_leaves_the_fields_layer_off_unless_asked_and_reports_a_failure();
   test_budget_gives_up_on_a_slow_probe();
   test_budget_returns_a_fast_probe();
   test_cut_text_keeps_whole_characters();

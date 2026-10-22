@@ -64,22 +64,26 @@ export class ContextClient {
 
   /**
    * The context layers that are on, read side by side: the boxes around the element under each spot, the controls
-   * and text near the spots (into a marks file in `dir`), the system text and the file behind the window. A layer
-   * that was too slow comes back `slow`.
+   * and text near the spots (into a marks file in `dir`), the system text, the file behind the window and the form
+   * fields (into a fields file in `dir`). A layer that was too slow comes back `slow`.
    */
   async read(
-    req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; boxes: boolean; dir: string },
+    req: {
+      spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; boxes: boolean; fields: boolean;
+      dir: string;
+    },
     signal: AbortSignal,
   ): Promise<ReadResult> {
     const r = await this.request((id) => readCommand(id, req), 'read', signal);
     if (r.type !== 'read') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { status: r.status, marks: r.marks, text: r.text, file: r.file, boxes: r.boxes };
+    return { status: r.status, marks: r.marks, text: r.text, file: r.file, boxes: r.boxes, fields: r.fields };
   }
 
-  async foreground(signal: AbortSignal): Promise<{ app: string; title: string }> {
+  /** `window` is the window's id (the HWND in decimal on Windows), kept for pasting and filling into it later. */
+  async foreground(signal: AbortSignal): Promise<{ app: string; title: string; window: string }> {
     const r = await this.request((id) => ({ type: 'foreground', id }), 'foreground', signal);
     if (r.type !== 'foreground') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { app: r.app, title: r.title };
+    return { app: r.app, title: r.title, window: r.window };
   }
 
   /** Always settles: on the child's exit or error, or after a 1 s fallback that kills it. */

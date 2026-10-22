@@ -1,5 +1,6 @@
 import type { Point } from '../ipc';
 import type { Rect } from './coords';
+import type { FormField } from './doRules';
 
 /** The overview's long side, its JPEG quality and the zoom crop size (spec §6.1). */
 export const OVERVIEW_LONG_SIDE = 1600;
@@ -14,7 +15,7 @@ export type ContextCommand =
   }
   | {
     type: 'read'; id: string; spots: string; radius: number; marks: boolean; text: boolean; file: boolean;
-    boxes: boolean; dir: string;
+    boxes: boolean; fields: boolean; dir: string;
   }
   | { type: 'foreground'; id: string }
   | { type: 'ping'; id: string }
@@ -38,19 +39,22 @@ export interface SystemTextLayer {
 
 /** What one read found; a layer is null unless its status is `ok`. */
 export interface ReadResult {
-  status: { marks: LayerStatus; text: LayerStatus; file: LayerStatus; boxes: LayerStatus };
+  status: { marks: LayerStatus; text: LayerStatus; file: LayerStatus; boxes: LayerStatus; fields: LayerStatus };
   marks: { path: string; count: number } | null;
   text: SystemTextLayer | null;
   file: { path: string; address: string; how: FileHow } | null;
   /** Per spot, the boxes that hold the element under it, innermost first, ending with its window. */
   boxes: Rect[][] | null;
+  /** The form fields in the window, in a JSON-lines file (see parseFieldsFile). */
+  fields: { path: string; count: number } | null;
 }
 
 /** Lines context-helper writes to stdout, after validation. */
 export type ContextReply =
   | { type: 'captured'; id: string; overview: string; ow: number; oh: number; zooms: { path: string; rect: Rect }[] }
   | ({ type: 'read'; id: string } & ReadResult)
-  | { type: 'foreground'; id: string; app: string; title: string }
+  /** `window` is the window's id (the HWND in decimal on Windows), or '' where the helper has none. */
+  | { type: 'foreground'; id: string; app: string; title: string; window: string }
   | { type: 'pong'; id: string }
   | { type: 'error'; id: string; code: ContextErrorCode; message: string };
 
@@ -83,15 +87,19 @@ export function captureCommand(
 
 /**
  * Reads the layers that are on, side by side: the boxes around the element under each spot, the controls and text
- * near the spots (into a marks file in `dir`), the system text and the file behind the window.
+ * near the spots (into a marks file in `dir`), the system text, the file behind the window and the form fields
+ * (into a fields file in `dir`).
  */
 export function readCommand(
   id: string,
-  req: { spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; boxes: boolean; dir: string },
+  req: {
+    spots: Point[]; radius: number; marks: boolean; text: boolean; file: boolean; boxes: boolean; fields: boolean;
+    dir: string;
+  },
 ): ContextCommand {
   return {
     type: 'read', id, spots: spotsText(req.spots), radius: Math.round(req.radius), marks: req.marks, text: req.text,
-    file: req.file, boxes: req.boxes, dir: req.dir,
+    file: req.file, boxes: req.boxes, fields: req.fields, dir: req.dir,
   };
 }
 
@@ -113,6 +121,15 @@ const SELECTION_MAX = 4000;
 const SPOT_TEXT_MAX = 2000;
 const FOCUS_VALUE_MAX = 2000;
 const ADDRESS_MAX = 2000;
+
+/** The helper's caps on the form fields file (kMaxFormFields and the rest in context.h), applied again here. */
+const FIELDS_MAX = 60;
+const FIELD_ID_MAX = 120;
+const FIELD_LABEL_MAX = 120;
+const FIELD_VALUE_MAX = 2000;
+const FIELD_OPTIONS_MAX = 50;
+const FIELD_OPTION_MAX = 120;
+const FIELD_KINDS: readonly FormField['kind'][] = ['text', 'multiline', 'combo', 'checkbox', 'radio', 'other'];
 
 /** The first `max` code points of `text`. */
 function capChars(text: string, max: number): string {
@@ -142,9 +159,56 @@ function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
   };
 }
 
+function parseField(v: unknown): FormField | null {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const { id, kind, label, group, value, secure, required, options } = o;
+  if (typeof id !== 'string' || id === '' || typeof kind !== 'string') return null;
+  if (!FIELD_KINDS.includes(kind as FormField['kind'])) return null;
+  if (typeof label !== 'string' || typeof group !== 'string' || typeof value !== 'string') return null;
+  if (typeof secure !== 'boolean' || typeof required !== 'boolean' || !Array.isArray(options)) return null;
+  if (!options.every((opt) => typeof opt === 'string')) return null;
+  return {
+    id: capChars(id, FIELD_ID_MAX),
+    kind: kind as FormField['kind'],
+    label: capChars(label, FIELD_LABEL_MAX),
+    group: capChars(group, FIELD_LABEL_MAX),
+    // The helper already sends no value for a secure field; blanking it here keeps that true whatever arrives.
+    value: secure ? '' : capChars(value, FIELD_VALUE_MAX),
+    secure,
+    required,
+    options: (options as string[]).slice(0, FIELD_OPTIONS_MAX).map((opt) => capChars(opt, FIELD_OPTION_MAX)),
+  };
+}
+
+/**
+ * The helper's fields file: one JSON object per line, one form field each. A line that is not a valid field is
+ * skipped, as is a repeated id, and at most 60 fields are kept.
+ */
+export function parseFieldsFile(text: string): FormField[] {
+  const out: FormField[] = [];
+  const seen = new Set<string>();
+  for (const line of text.split('\n')) {
+    if (out.length === FIELDS_MAX) break;
+    if (line.trim() === '') continue;
+    let v: unknown;
+    try {
+      v = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const field = parseField(v);
+    if (!field || seen.has(field.id)) continue;
+    seen.add(field.id);
+    out.push(field);
+  }
+  return out;
+}
+
 function parseRead(o: Record<string, unknown>): ReadResult | null {
-  const { marks, text, file, boxes } = o;
+  const { marks, text, file, boxes, fields } = o;
   if (!isLayerStatus(marks) || !isLayerStatus(text) || !isLayerStatus(file) || !isLayerStatus(boxes)) return null;
+  if (!isLayerStatus(fields)) return null;
   let found: ReadResult['marks'] = null;
   if (marks === 'ok') {
     if (typeof o.marksPath !== 'string' || o.marksPath === '' || !isCount(o.count)) return null;
@@ -162,7 +226,14 @@ function parseRead(o: Record<string, unknown>): ReadResult | null {
     chains = typeof o.boxRects === 'string' ? parseBoxes(o.boxRects) : null;
     if (!chains) return null;
   }
-  return { status: { marks, text, file, boxes }, marks: found, text: layer, file: behind, boxes: chains };
+  let form: ReadResult['fields'] = null;
+  if (fields === 'ok') {
+    if (typeof o.fieldsPath !== 'string' || o.fieldsPath === '' || !isCount(o.fieldCount)) return null;
+    form = { path: o.fieldsPath, count: o.fieldCount };
+  }
+  return {
+    status: { marks, text, file, boxes, fields }, marks: found, text: layer, file: behind, boxes: chains, fields: form,
+  };
 }
 
 function parseRect(s: string): Rect | null {
@@ -222,7 +293,8 @@ export function parseContextLine(line: string): ContextReply | null {
     }
     case 'foreground':
       if (typeof o.app !== 'string' || typeof o.title !== 'string') return null;
-      return { type: 'foreground', id, app: o.app, title: o.title };
+      if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window)) return null;
+      return { type: 'foreground', id, app: o.app, title: o.title, window: o.window };
     case 'pong':
       return { type: 'pong', id };
     case 'error':

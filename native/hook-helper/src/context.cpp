@@ -173,8 +173,8 @@ Command parseRead(const Fields& m, const std::string& id) {
   if (const std::string why = spotsField(m, r.spots); !why.empty()) return bad(id, why);
   if (!intField(m, "radius", 0, 32768, r.radius)) return bad(id, "radius out of range");
   if (!boolField(m, "marks", r.marks) || !boolField(m, "text", r.text) || !boolField(m, "file", r.file) ||
-      !boolField(m, "boxes", r.boxes)) {
-    return bad(id, "marks, text, file and boxes must be true or false");
+      !boolField(m, "boxes", r.boxes) || !boolField(m, "fields", r.fields)) {
+    return bad(id, "marks, text, file, boxes and fields must be true or false");
   }
   if (const std::string why = dirField(m, r.dir); !why.empty()) return bad(id, why);
   return c;
@@ -397,13 +397,16 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
   const auto textJob = std::make_shared<Probe<SystemText>>();
   const auto fileJob = std::make_shared<Probe<FileInfo>>();
   const auto boxesJob = std::make_shared<Probe<std::vector<std::vector<Rect>>>>();
+  const auto fieldsJob = std::make_shared<Probe<std::vector<RawField>>>();
   const bool wantMarks = r.marks && !r.spots.empty();
   const bool wantBoxes = r.boxes && !r.spots.empty();
+  // A platform without a fields probe leaves the layer off, like one that was not asked for.
+  const bool wantFields = r.fields && !r.spots.empty() && static_cast<bool>(platform.formFields);
   // The layers run at once under one deadline: the slowest, not the sum, sets how long an ask waits. On a fresh
   // helper, UI Automation fails a controls walk that runs beside the system text probe (E_FAIL), so the quick text
   // probe goes first on the walk's own thread.
   std::vector<std::function<void()>> probes;
-  size_t screenAt = 0, fileAt = 0;
+  size_t screenAt = 0, fileAt = 0, fieldsAt = 0;
   if (wantMarks || r.text || wantBoxes) {
     screenAt = probes.size();
     const auto boxes = platform.boxes;
@@ -421,6 +424,15 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
       if (text) textJob->ok = systemText(spots, withAddress, textJob->out, textJob->fail);
       if (wantMarks) marksJob->ok = controls(spots, radius, marksJob->out, marksJob->fail);
     });
+  }
+  if (wantFields) {
+    // Its own thread: reading a page's fields is one search of the document, too long to queue behind the walk.
+    fieldsAt = probes.size();
+    const auto formFields = platform.formFields;
+    const std::vector<Point> spots = r.spots;
+    probes.push_back(bindProbe(fieldsJob, [formFields, spots](std::vector<RawField>& out, Failure& f) {
+      return formFields(spots, out, f);
+    }));
   }
   if (r.file) {
     fileAt = probes.size();
@@ -443,6 +455,18 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
       marks = "capture";
       marksPath.clear();
       count = 0;
+    }
+  }
+  std::string fieldsStatus = layerStatus(wantFields, inTime(wantFields, fieldsAt), *fieldsJob);
+  std::string fieldsPath;
+  size_t fieldCount = 0;
+  if (fieldsStatus == "ok") {
+    fieldsPath = joinPath(r.dir, "fields-" + cmd.id + ".jsonl");
+    fieldCount = std::min(fieldsJob->out.size(), kMaxFormFields);
+    if (!writeTextFile(fieldsPath, formFieldsFileText(fieldsJob->out))) {
+      fieldsStatus = "capture";
+      fieldsPath.clear();
+      fieldCount = 0;
     }
   }
   const std::string text = layerStatus(r.text, inTime(r.text, screenAt), *textJob);
@@ -482,6 +506,10 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
       for (size_t j = 0; j < chain.size(); ++j) all += (j == 0 ? "" : "|") + rectText(chain[j]);
     }
     line += ",\"boxRects\":\"" + all + "\"";
+  }
+  line += ",\"fields\":\"" + fieldsStatus + "\"";
+  if (fieldsStatus == "ok") {
+    line += ",\"fieldsPath\":\"" + jsonEscape(fieldsPath) + "\",\"fieldCount\":" + std::to_string(fieldCount);
   }
   line += ",\"file\":\"" + file + "\"";
   if (file == "ok") {
@@ -591,11 +619,13 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int bud
       case Command::Kind::Ping: return Reply{"{\"type\":\"pong\",\"id\":\"" + jsonEscape(cmd.id) + "\"}"};
       case Command::Kind::Capture: return Reply{handleCapture(cmd, platform)};
       case Command::Kind::Foreground: {
-        std::string app, title;
+        std::string app, title, windowId;
         Failure fail;
-        if (!platform.foreground(app, title, fail)) return Reply{formatError(cmd.id, fail.code, fail.message)};
+        if (!platform.foreground(app, title, windowId, fail)) {
+          return Reply{formatError(cmd.id, fail.code, fail.message)};
+        }
         return Reply{"{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
-                     "\",\"title\":\"" + jsonEscape(title) + "\"}"};
+                     "\",\"title\":\"" + jsonEscape(title) + "\",\"window\":\"" + jsonEscape(windowId) + "\"}"};
       }
       case Command::Kind::Read: return handleRead(cmd, platform, budgetMs);
       case Command::Kind::Shutdown: break;
@@ -613,6 +643,24 @@ std::string marksFileText(const std::vector<RawMark>& marks) {
            "\t" + std::to_string(m.box.h) + "\t";
     for (const char c : cutText(m.text, kMarkTextMax)) out += c == '\t' || c == '\r' || c == '\n' ? ' ' : c;
     out += '\n';
+  }
+  return out;
+}
+
+std::string formFieldsFileText(const std::vector<RawField>& fields) {
+  const auto quoted = [](const std::string& s, size_t max) { return "\"" + jsonEscape(cutText(s, max)) + "\""; };
+  std::string out;
+  for (size_t i = 0; i < fields.size() && i < kMaxFormFields; ++i) {
+    const RawField& f = fields[i];
+    out += "{\"id\":" + quoted(f.id, kFieldIdMax) + ",\"kind\":" + quoted(f.kind, 16) +
+           ",\"label\":" + quoted(f.label, kFieldLabelMax) + ",\"group\":" + quoted(f.group, kFieldLabelMax) +
+           ",\"value\":" + quoted(f.secure ? std::string() : f.value, kFieldValueMax) +
+           ",\"secure\":" + (f.secure ? "true" : "false") + ",\"required\":" + (f.required ? "true" : "false") +
+           ",\"options\":[";
+    for (size_t j = 0; j < f.options.size() && j < kMaxFieldOptions; ++j) {
+      out += (j == 0 ? "" : ",") + quoted(f.options[j], kFieldOptionMax);
+    }
+    out += "]}\n";
   }
   return out;
 }

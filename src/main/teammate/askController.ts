@@ -107,6 +107,8 @@ interface Run {
   shot: Shot | null;
   app: string;
   title: string;
+  /** The window the ask was made in (an HWND in decimal on Windows), for pasting and filling into it later. */
+  window: string;
   thumb: string;
   text: string;
   /** The bubble's line; the first `say` in full, which the card and history keep; what the line cut off. */
@@ -246,8 +248,8 @@ export class AskController extends EventEmitter {
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
-      profile: null, shot: null, app: '', title: '', thumb: '', text: '', line: '', said: '', rest: '', markdown: [],
-      tokens: null,
+      profile: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '', rest: '',
+      markdown: [], tokens: null,
       calls: [], actions: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
     };
@@ -372,15 +374,17 @@ export class AskController extends EventEmitter {
     this.deadline(run, TOTAL_MS, () => this.fail(run, 'timeout'));
     const signal = run.abort.signal;
 
-    const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '' }));
+    const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '', window: '' }));
     if (!this.alive(run)) return;
     run.app = fg.app;
     run.title = fg.title;
+    run.window = fg.window;
     // The context comes first: the boxes around the spot decide what the capture shows.
     await this.files.makeDir(run.dir);
     const allin = run.intent.def.id === 'allin';
     const layers = await gather({ context: deps.context, ...deps.readers }, {
       settings: t.context, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
+      act: run.intent.def.kind === 'act',
     }, signal);
     if (!this.alive(run)) return;
     const framing = frameAsk(run.intent.def.id, layers.boxes[0] ?? [], run.display.rect, run.spot.phys);
@@ -401,7 +405,7 @@ export class AskController extends EventEmitter {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
       shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
       instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
-      file: layers.file,
+      file: layers.file, fields: layers.fields,
     };
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);

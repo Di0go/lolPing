@@ -149,6 +149,8 @@ HWND topWindowAt(IUIAutomation* uia, IUIAutomationTreeWalker* walker, IUIAutomat
 
 }  // namespace
 
+bool isLolPingProcess(unsigned long pid) { return isLolPing(static_cast<DWORD>(pid)); }
+
 bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail) {
   const Clock::time_point deadline = Clock::now() + kWalkBudget;
   try {

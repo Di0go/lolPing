@@ -38,8 +38,8 @@ struct CaptureRequest {
 struct ReadRequest {
   std::vector<Point> spots;
   int radius = 600;           // request units around each spot, for marks
-  bool marks = false, text = false, file = false, boxes = false;
-  std::string dir;            // where the marks file goes
+  bool marks = false, text = false, file = false, boxes = false, fields = false;
+  std::string dir;            // where the marks and fields files go
 };
 
 struct Command {
@@ -80,6 +80,16 @@ struct RawMark {
   std::string text;
 };
 
+/** A form control. kind is one of text, multiline, combo, checkbox, radio, other (FormField in doRules.ts). */
+struct RawField {
+  std::string id;     // the control's UI Automation runtime id, joined with dots
+  std::string kind;
+  std::string label, group;
+  std::string value;  // a checkbox or radio: "on" or "off"; empty for a secure field, whatever it holds
+  bool secure = false, required = false;
+  std::vector<std::string> options;  // a combo's list items
+};
+
 struct SystemText {
   std::string selection;
   std::vector<std::string> spotTexts;  // one per spot, in spot order
@@ -87,15 +97,16 @@ struct SystemText {
   bool focusSecure = false;
 };
 
-// controls, systemText and fileOf each run on their own fresh thread, which may outlive the command when it runs
-// over budget: they must not keep references to caller-owned state, and on Windows each must CoInitializeEx on its
-// thread.
+// controls, systemText, formFields and fileOf each run on their own fresh thread, which may outlive the command
+// when it runs over budget: they must not keep references to caller-owned state, and on Windows each must
+// CoInitializeEx on its thread.
 struct ContextPlatform {
   /** Grabs the display. The image may be larger than the rect (macOS Retina): spots are scaled to it. */
   std::function<bool(const Rect& display, Image& out, Failure& fail)> grab;
   std::function<bool(const Image& in, int w, int h, Image& out)> resize;
   std::function<bool(const Image& img, int quality, const std::string& path, Failure& fail)> writeJpeg;
-  std::function<bool(std::string& app, std::string& title, Failure& fail)> foreground;
+  /** `windowId` names the window for later commands (the HWND in decimal on Windows); empty where there is none. */
+  std::function<bool(std::string& app, std::string& title, std::string& windowId, Failure& fail)> foreground;
   /** Named controls and text within `radius` of a spot; spots, radius and boxes are in request (screen) units. */
   std::function<bool(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail)> controls;
   /** `withAddress`: also look up the browser's address; off when the file probe of the same read looks it up. */
@@ -105,6 +116,12 @@ struct ContextPlatform {
    * lolPing's own windows or an element that does not answer. Request (screen) units.
    */
   std::function<bool(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail)> boxes;
+  /**
+   * The text fields, combos, checkboxes, radios and spinners that are on screen and enabled in the window under the
+   * first spot (the page's document in a browser), in document order. Unset where the platform has none: the read
+   * reports the layer off.
+   */
+  std::function<bool(const std::vector<Point>& spots, std::vector<RawField>& out, Failure& fail)> formFields;
   /** The file or web address behind the foreground window; `how` is office, address, title or none. */
   std::function<bool(std::string& path, std::string& address, std::string& how, Failure& fail)> fileOf;
 };
@@ -128,6 +145,20 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int bud
 
 /** The marks file: one `kind\tx\ty\tw\th\ttext` line per mark, text on one line and at most 120 characters. */
 std::string marksFileText(const std::vector<RawMark>& marks);
+
+/** Caps on the form fields file, in characters except the counts; formFieldsFileText applies them. */
+constexpr size_t kMaxFormFields = 60;
+constexpr size_t kFieldIdMax = 120;
+constexpr size_t kFieldLabelMax = 120;
+constexpr size_t kFieldValueMax = 2000;
+constexpr size_t kMaxFieldOptions = 50;
+constexpr size_t kFieldOptionMax = 120;
+
+/**
+ * The fields file: one JSON object per line for each of the first kMaxFormFields fields, texts cut to their caps on
+ * character boundaries. A secure field's value is never written, whatever the probe read.
+ */
+std::string formFieldsFileText(const std::vector<RawField>& fields);
 
 /** At most this many boxes per spot: the innermost ones and the window. */
 constexpr size_t kMaxBoxes = 12;

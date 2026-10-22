@@ -1,7 +1,8 @@
 import type { FileUnit } from '../../shared/i18n';
 import type { Point } from '../../shared/ipc';
-import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
+import { parseFieldsFile, type SystemTextLayer } from '../../shared/teammate/contextProtocol';
 import type { Rect } from '../../shared/teammate/coords';
+import type { FormField } from '../../shared/teammate/doRules';
 import { locate, PAGE_CHARS } from '../../shared/teammate/locate';
 import { parseMarksFile, selectMarks, type Mark } from '../../shared/teammate/marks';
 import type { TeammateSettings } from '../../shared/teammate/settings';
@@ -25,6 +26,8 @@ export interface GatherRequest {
   allin: boolean;
   /** The foreground window's title: a browser tab showing a PDF names it there. */
   title: string;
+  /** A Do it ask: only it reads the form fields, as only it can fill them. */
+  act: boolean;
 }
 
 /** What the answer used, for the card footer; a file's `from` and `to` are section numbers or sheet names. */
@@ -37,6 +40,8 @@ export interface Gathered {
   boxes: Rect[][];
   marks: Mark[];
   system: SystemTextLayer | null;
+  /** The form fields in the window under the first spot; empty unless the ask read them. */
+  fields: FormField[];
   /** The located sections for the prompt; a single section over the budget is cut there. */
   file: { doc: Doc; from: number; to: number } | null;
   /** The whole file, uncut, for read_file. */
@@ -146,7 +151,9 @@ async function fetchWithin(deps: GatherDeps, url: string, signal: AbortSignal): 
  * side, then the marks file and the file behind the window. A layer that fails is left out; a cancelled ask rejects.
  */
 export async function gather(deps: GatherDeps, req: GatherRequest, signal: AbortSignal): Promise<Gathered> {
-  const out: Gathered = { boxes: [], marks: [], system: null, file: null, doc: null, used: [], skipped: false };
+  const out: Gathered = {
+    boxes: [], marks: [], system: null, fields: [], file: null, doc: null, used: [], skipped: false,
+  };
   /** Runs one step; a failure leaves its layer out, and one from a slow or dead helper says context was skipped. */
   const step = async <T>(run: () => Promise<T>): Promise<T | null> => {
     try {
@@ -161,7 +168,11 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
   };
   const { settings } = req;
   // The boxes are only geometry, read for every ask whatever the settings: they frame the capture.
-  const layers = { marks: settings.marks, text: settings.systemText, file: settings.files && req.allin, boxes: true };
+  const layers = {
+    marks: settings.marks, text: settings.systemText, file: settings.files && req.allin, boxes: true,
+    // Field values are system text like the focused field's, so the same switch covers them.
+    fields: req.act && settings.systemText,
+  };
   const ask = { spots: req.spots, radius: MARK_RADIUS, ...layers, dir: req.dir };
   const read = await step(() => deps.context.read(ask, signal));
   out.boxes = read?.boxes ?? [];
@@ -176,6 +187,12 @@ export async function gather(deps: GatherDeps, req: GatherRequest, signal: Abort
     out.marks = marks ?? [];
   }
   out.system = read?.text ?? null;
+
+  const form = read?.fields;
+  if (form) {
+    const fields = await step(async () => parseFieldsFile(await deps.readFile(form.path)));
+    out.fields = fields ?? [];
+  }
 
   const behind = read?.file ?? null;
   if (behind) {

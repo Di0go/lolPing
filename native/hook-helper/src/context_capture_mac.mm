@@ -230,10 +230,11 @@ bool writeJpeg(const Image& img, int quality, const std::string& path, Failure& 
   }
 }
 
-bool foreground(std::string& app, std::string& title, Failure&) {
+bool foreground(std::string& app, std::string& title, std::string& windowId, Failure&) {
   @autoreleasepool {
     app.clear();
     title.clear();
+    windowId.clear();  // the window number comes with the macOS form-filling port
     // NSWorkspace learns about app switches from run loop notifications; this process blocks on stdin otherwise.
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate date]];
     NSRunningApplication* front = NSWorkspace.sharedWorkspace.frontmostApplication;

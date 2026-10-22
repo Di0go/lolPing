@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { captureCommand, parseContextLine, readCommand } from '../../../src/shared/teammate/contextProtocol';
+import {
+  captureCommand, parseContextLine, parseFieldsFile, readCommand,
+} from '../../../src/shared/teammate/contextProtocol';
 
 /** A read reply with every layer off; `over` adds or replaces fields. */
 const readLine = (over: Record<string, unknown> = {}): string => JSON.stringify({
-  type: 'read', id: 'r1', marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', boxes: 'off', ...over,
+  type: 'read', id: 'r1', marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', boxes: 'off', fields: 'off',
+  ...over,
+});
+/** One line of the helper's fields file; `over` adds or replaces fields. */
+const fieldLine = (over: Record<string, unknown> = {}): string => JSON.stringify({
+  id: '42.7.1', kind: 'text', label: 'Name', group: '', value: '', secure: false, required: false, options: [], ...over,
 });
 const textFields = {
   text: 'ok', selection: 'picked', spotTexts: 'one', focusKind: 'field', focusLabel: 'Name', focusValue: 'Ada',
@@ -61,18 +68,23 @@ describe('contextProtocol', () => {
   it('reads errors, foreground and pong', () => {
     expect(parseContextLine(JSON.stringify({ type: 'error', id: '', code: 'bad', message: 'no id' })))
       .toEqual({ type: 'error', id: '', code: 'bad', message: 'no id' });
-    expect(parseContextLine(JSON.stringify({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts' })))
-      .toEqual({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts' });
+    expect(parseContextLine(JSON.stringify({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '263544' })))
+      .toEqual({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '263544' });
+    expect(parseContextLine(JSON.stringify({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '' })))
+      .toMatchObject({ window: '' });
+    const noWindow = { type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts' };
+    expect(parseContextLine(JSON.stringify(noWindow))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...noWindow, window: '12x' }))).toBeNull();
     expect(parseContextLine(JSON.stringify({ type: 'pong', id: 'r3' }))).toEqual({ type: 'pong', id: 'r3' });
   });
 
   it('flattens a read command', () => {
     expect(readCommand('r1', {
       spots: [{ x: 10.4, y: -20 }, { x: 3, y: 4 }], radius: 600, marks: true, text: false, file: true, boxes: true,
-      dir: 'C:\\t',
+      fields: true, dir: 'C:\\t',
     })).toEqual({
       type: 'read', id: 'r1', spots: '10,-20;3,4', radius: 600, marks: true, text: false, file: true, boxes: true,
-      dir: 'C:\\t',
+      fields: true, dir: 'C:\\t',
     });
   });
 
@@ -83,7 +95,7 @@ describe('contextProtocol', () => {
       boxes: 'ok', boxRects: '10,10,40,20|0,0,800,600;',
     }))).toEqual({
       type: 'read', id: 'r1',
-      status: { marks: 'ok', text: 'ok', file: 'ok', boxes: 'ok' },
+      status: { marks: 'ok', text: 'ok', file: 'ok', boxes: 'ok', fields: 'off' },
       marks: { path: 'C:\\t\\marks-r1.tsv', count: 12 },
       text: {
         selection: 'picked', spotTexts: ['one'], focus: { kind: 'field', label: 'Name', value: 'Ada', secure: false },
@@ -92,11 +104,12 @@ describe('contextProtocol', () => {
       file: { path: 'C:\\a.pdf', address: '', how: 'title' },
       // The second spot has no boxes.
       boxes: [[{ x: 10, y: 10, w: 40, h: 20 }, { x: 0, y: 0, w: 800, h: 600 }], []],
+      fields: null,
     });
     // A layer that is off, too slow or refused comes back null with its status.
     expect(parseContextLine(readLine({ text: 'permission', file: 'slow' }))).toEqual({
-      type: 'read', id: 'r1', status: { marks: 'off', text: 'permission', file: 'slow', boxes: 'off' }, marks: null,
-      text: null, file: null, boxes: null,
+      type: 'read', id: 'r1', status: { marks: 'off', text: 'permission', file: 'slow', boxes: 'off', fields: 'off' },
+      marks: null, text: null, file: null, boxes: null, fields: null,
     });
     expect(parseContextLine(readLine({ text: 'ok', selection: '', spotTexts: '', focusKind: '', focusLabel: '',
       focusValue: '', focusSecure: false, address: '' }))).toMatchObject({
@@ -110,6 +123,11 @@ describe('contextProtocol', () => {
     expect(parseContextLine(readLine({ marks: 'ok', marksPath: 'a.tsv', count: -1 }))).toBeNull();
     expect(parseContextLine(readLine({ text: 'ok' }))).toBeNull(); // ok, but no text fields
     expect(parseContextLine(readLine({ boxes: 'ok' }))).toBeNull();
+    expect(parseContextLine(readLine({ fields: 'ok' }))).toBeNull(); // ok, but no file
+    expect(parseContextLine(readLine({ fields: 'ok', fieldsPath: 'a.jsonl', fieldCount: -1 }))).toBeNull();
+    expect(parseContextLine(readLine({ fields: 'maybe' }))).toBeNull();
+    const { fields: _dropped, ...noFields } = JSON.parse(readLine()) as Record<string, unknown>;
+    expect(parseContextLine(JSON.stringify(noFields))).toBeNull();
     expect(parseContextLine(readLine({ boxes: 'ok', boxRects: '1,2,3|4,5,6,7' }))).toBeNull();
     expect(parseContextLine(readLine({ file: 'ok', filePath: 'a', fileAddress: '', how: 'guess' }))).toBeNull();
     expect(parseContextLine(readLine({ file: 'ok', filePath: 3, fileAddress: '', how: 'none' }))).toBeNull();
@@ -140,6 +158,67 @@ describe('contextProtocol', () => {
     expect(text.spotTexts.map((t) => t.length)).toEqual([2_000, 5]);
     expect(text.focus?.value).toHaveLength(2_000);
     expect([...text.address]).toHaveLength(2_000);
+  });
+
+  it('parses the fields layer', () => {
+    const reply = parseContextLine(readLine({ fields: 'ok', fieldsPath: 'C:\\t\\fields-r1.jsonl', fieldCount: 2 }));
+    expect(reply).toMatchObject({
+      status: { fields: 'ok' }, fields: { path: 'C:\\t\\fields-r1.jsonl', count: 2 },
+    });
+    const file = [
+      fieldLine({ id: '42.7.1', label: 'Customer name', value: 'Ada', required: true }),
+      fieldLine({ id: '42.7.2', kind: 'combo', label: 'Size', options: ['Small', 'Large'], value: 'Small' }),
+      fieldLine({ id: '42.7.3', kind: 'radio', label: 'Medium', group: 'Pizza Size', value: 'off' }),
+    ].join('\n');
+    expect(parseFieldsFile(`${file}\n`)).toEqual([
+      {
+        id: '42.7.1', kind: 'text', label: 'Customer name', group: '', value: 'Ada', secure: false, required: true,
+        options: [],
+      },
+      {
+        id: '42.7.2', kind: 'combo', label: 'Size', group: '', value: 'Small', secure: false, required: false,
+        options: ['Small', 'Large'],
+      },
+      {
+        id: '42.7.3', kind: 'radio', label: 'Medium', group: 'Pizza Size', value: 'off', secure: false,
+        required: false, options: [],
+      },
+    ]);
+    // A layer that is slow or refused has no file.
+    expect(parseContextLine(readLine({ fields: 'slow' }))).toMatchObject({ status: { fields: 'slow' }, fields: null });
+  });
+
+  it('skips a fields line that is not a field and keeps the rest', () => {
+    const file = [
+      'not json', '', '[1]', fieldLine({ id: '' }), fieldLine({ kind: 'slider' }), fieldLine({ secure: 'yes' }),
+      fieldLine({ options: [3] }), fieldLine({ id: 'ok.1' }), fieldLine({ id: 'ok.1', label: 'Again' }),
+      fieldLine({ id: 'ok.2' }),
+    ].join('\n');
+    expect(parseFieldsFile(file).map((f) => [f.id, f.label])).toEqual([['ok.1', 'Name'], ['ok.2', 'Name']]);
+  });
+
+  it('blanks a secure field value whatever the helper sends', () => {
+    const file = fieldLine({ id: '9.1', label: 'Password', value: 'hunter2', secure: true });
+    const fields = parseFieldsFile(file);
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({ label: 'Password', value: '', secure: true });
+    expect(JSON.stringify(fields)).not.toContain('hunter2');
+  });
+
+  it('cuts the fields file to its caps in code points, whatever the helper sent', () => {
+    const han = '\u{20000}'; // one code point, two UTF-16 units
+    const long = fieldLine({
+      id: '1.1', label: han.repeat(121), group: han.repeat(121), value: han.repeat(2_001),
+      options: Array.from({ length: 51 }, () => han.repeat(121)),
+    });
+    const [field] = parseFieldsFile(long);
+    expect(field.label).toBe(han.repeat(120));
+    expect(field.group).toBe(han.repeat(120));
+    expect(field.value).toBe(han.repeat(2_000));
+    expect(field.options).toHaveLength(50);
+    expect(field.options.every((o) => o === han.repeat(120))).toBe(true);
+    const many = Array.from({ length: 70 }, (_, i) => fieldLine({ id: `1.${i}` })).join('\n');
+    expect(parseFieldsFile(many)).toHaveLength(60);
   });
 
   it('splits spot texts on the record separator', () => {

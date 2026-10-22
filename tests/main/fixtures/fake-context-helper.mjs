@@ -22,7 +22,7 @@ function capture(cmd) {
 
 function read(cmd) {
   writeFileSync(join(cmd.dir, 'read-command.json'), JSON.stringify(cmd));
-  const out = { type: 'read', id: cmd.id, marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', boxes: 'off' };
+  const out = { type: 'read', id: cmd.id, marks: 'off', marksPath: '', count: 0, text: 'off', file: 'off', boxes: 'off', fields: 'off' };
   if (cmd.boxes) Object.assign(out, { boxes: 'ok', boxRects: '90,190,40,20|0,0,1400,1000' });
   if (cmd.marks) {
     const path = join(cmd.dir, `marks-${cmd.id}.tsv`);
@@ -34,6 +34,14 @@ function read(cmd) {
       text: 'ok', selection: 'chosen', spotTexts: 'under the spot', focusKind: '', focusLabel: '', focusValue: '',
       focusSecure: false, address: '',
     });
+  }
+  if (cmd.fields) {
+    const path = join(cmd.dir, `fields-${cmd.id}.jsonl`);
+    const field = {
+      id: '42.7.1', kind: 'text', label: 'Name', group: '', value: 'Ada', secure: false, required: true, options: [],
+    };
+    writeFileSync(path, `${JSON.stringify(field)}\n`);
+    Object.assign(out, { fields: 'ok', fieldsPath: path, fieldCount: 1 });
   }
   if (cmd.file && mode === 'slow') {
     out.file = 'slow';
@@ -57,7 +65,7 @@ process.stdin.on('data', (chunk) => {
     if (cmd.type === 'shutdown') process.exit(0);
     if (mode === 'silent' || exiting) continue;
     if (cmd.type === 'capture') capture(cmd);
-    else if (cmd.type === 'foreground') reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad' });
+    else if (cmd.type === 'foreground') reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
     else if (cmd.type === 'read') read(cmd);
     else if (cmd.type === 'ping') reply({ type: 'pong', id: cmd.id });
   }

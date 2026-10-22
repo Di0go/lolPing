@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <wincodec.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -166,11 +167,13 @@ bool writeJpeg(const Image& img, int quality, const std::string& path, Failure& 
   return SUCCEEDED(r);
 }
 
-bool foreground(std::string& app, std::string& title, Failure&) {
+bool foreground(std::string& app, std::string& title, std::string& windowId, Failure&) {
   app.clear();
   title.clear();
+  windowId.clear();
   const HWND w = GetForegroundWindow();
-  if (!w) return true;  // nothing in front (the desktop or a secure screen): both stay empty
+  if (!w) return true;  // nothing in front (the desktop or a secure screen): all stay empty
+  windowId = std::to_string(reinterpret_cast<uintptr_t>(w));
   wchar_t text[512];
   const int n = GetWindowTextW(w, text, 512);
   title = utf8(std::wstring(text, n > 0 ? static_cast<size_t>(n) : 0));
@@ -198,6 +201,8 @@ bool nearbyControls(const std::vector<Point>& spots, int radius, std::vector<Raw
 bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText& out, Failure& fail);
 bool fileBehindWindow(std::string& path, std::string& address, std::string& how, Failure& fail);
 bool elementBoxes(const std::vector<Point>& spots, std::vector<std::vector<Rect>>& out, Failure& fail);
+// The form fields probe, in context_write_win.cpp.
+bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, Failure& fail);
 
 ContextPlatform nativePlatform() {
   ContextPlatform p;
@@ -209,6 +214,7 @@ ContextPlatform nativePlatform() {
   p.systemText = systemTextAt;
   p.fileOf = fileBehindWindow;
   p.boxes = elementBoxes;
+  p.formFields = formFieldsAt;
   return p;
 }
 

@@ -19,9 +19,16 @@ const pages = (): Doc['sections'] => [1, 2, 3, 4, 5, 6].map((n) => ({
 }));
 const pdf = (name: string, sections: Doc['sections'] = pages()): Doc => ({ name, kind: 'pdf', outline: [], sections });
 
-type Layer = 'marks' | 'text' | 'file';
+type Layer = 'marks' | 'text' | 'file' | 'fields';
+
+const FIELDS_FILE = [
+  { id: '42.7.1', kind: 'text', label: 'Customer name', group: '', value: 'Ada', secure: false, required: true, options: [] },
+  { id: '42.7.2', kind: 'text', label: 'Password', group: '', value: 'hunter2', secure: true, required: false, options: [] },
+].map((f) => JSON.stringify(f)).join('\n');
 
 interface FakeOptions {
+  /** The helper's fields file. */
+  fieldsFile?: string;
   /** What the helper says about a layer it was asked for, instead of `ok`. */
   status?: Partial<Record<Layer, Exclude<LayerStatus, 'off' | 'ok'>>>;
   /** The read itself fails: the helper timed out, died, or the ask was cancelled. */
@@ -38,12 +45,16 @@ function fakes(opts: FakeOptions = {}) {
   const deps: GatherDeps = {
     context: {
       read: async (req) => {
-        const asked = (['marks', 'text', 'file', 'boxes'] as const).filter((l) => req[l]);
+        const asked = (['marks', 'text', 'file', 'boxes', 'fields'] as const).filter((l) => req[l]);
         calls.push(`read:${asked.join('+')}`);
         if (opts.readError) throw opts.readError;
         const status = (l: Layer): LayerStatus => (!req[l] ? 'off' : opts.status?.[l] ?? 'ok');
         return {
-          status: { marks: status('marks'), text: status('text'), file: status('file'), boxes: req.boxes ? 'ok' : 'off' },
+          status: {
+            marks: status('marks'), text: status('text'), file: status('file'), boxes: req.boxes ? 'ok' : 'off',
+            fields: status('fields'),
+          },
+          fields: status('fields') === 'ok' ? { path: `${req.dir}/fields.jsonl`, count: 2 } : null,
           marks: status('marks') === 'ok' ? { path: `${req.dir}/marks.tsv`, count: 1 } : null,
           text: status('text') === 'ok' ? opts.system ?? layer({ spotTexts: [VISIBLE] }) : null,
           file: status('file') === 'ok' ? opts.file ?? { path: 'C:/docs/report.pdf', address: '', how: 'title' } : null,
@@ -53,6 +64,7 @@ function fakes(opts: FakeOptions = {}) {
     },
     readFile: async (path) => {
       calls.push(`readFile:${path}`);
+      if (path.endsWith('fields.jsonl')) return opts.fieldsFile ?? FIELDS_FILE;
       return opts.marksFile ?? 'button\t900\t700\t200\t60\tSave\n';
     },
     readDocument: async (path) => {
@@ -70,7 +82,7 @@ function fakes(opts: FakeOptions = {}) {
 }
 
 const request = (over: Partial<GatherRequest> = {}): GatherRequest => ({
-  settings: ALL_ON, spots: [SPOT], dir: 'tmp/run', allin: true, title: 'report.pdf - Acrobat',
+  settings: ALL_ON, spots: [SPOT], dir: 'tmp/run', allin: true, title: 'report.pdf - Acrobat', act: false,
   ...over,
 });
 const signal = (): AbortSignal => new AbortController().signal;
@@ -110,6 +122,40 @@ describe('gather', () => {
     const framed = await gather(none.deps, request({ settings: nothing }), signal());
     expect(none.calls).toEqual(['read:boxes']); // the boxes frame the capture whatever is read
     expect(framed.boxes).toHaveLength(1);
+  });
+
+  it('reads form fields only for Do it', async () => {
+    const other = fakes();
+    const idle = await gather(other.deps, request({ allin: false }), signal());
+    expect(other.calls).toEqual(['read:marks+text+boxes', 'readFile:tmp/run/marks.tsv']);
+    expect(idle.fields).toEqual([]);
+
+    const act = fakes();
+    const got = await gather(act.deps, request({ allin: false, act: true }), signal());
+    expect(act.calls).toEqual(['read:marks+text+boxes+fields', 'readFile:tmp/run/marks.tsv', 'readFile:tmp/run/fields.jsonl']);
+    // The password field is listed, but without its value.
+    expect(got.fields.map((f) => [f.id, f.label, f.value, f.secure])).toEqual([
+      ['42.7.1', 'Customer name', 'Ada', false],
+      ['42.7.2', 'Password', '', true],
+    ]);
+
+    // The fields are system text: with that switch off, Do it does not read them either.
+    const noText = fakes();
+    const off = { ...ALL_ON, systemText: false };
+    const none = await gather(noText.deps, request({ allin: false, act: true, settings: off }), signal());
+    expect(noText.calls).toEqual(['read:marks+boxes', 'readFile:tmp/run/marks.tsv']);
+    expect(none.fields).toEqual([]);
+  });
+
+  it('answers without fields when the helper was too slow or the file is bad', async () => {
+    const slow = fakes({ status: { fields: 'slow' } });
+    const got = await gather(slow.deps, request({ act: true }), signal());
+    expect(got.fields).toEqual([]);
+    expect(got.skipped).toBe(true);
+    const refused = fakes({ status: { fields: 'permission' } });
+    expect((await gather(refused.deps, request({ act: true }), signal())).fields).toEqual([]);
+    const bad = fakes({ fieldsFile: 'not json\n' });
+    expect((await gather(bad.deps, request({ act: true }), signal())).fields).toEqual([]);
   });
 
   it('keeps the 40 marks nearest the spot', async () => {

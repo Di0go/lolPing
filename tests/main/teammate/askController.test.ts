@@ -76,6 +76,8 @@ interface Screen {
   system: SystemTextLayer | 'slow' | 'hangs';
   /** The helper's marks file. */
   marksFile: string;
+  /** The helper's form fields file: one JSON field per line. */
+  fields: string;
   /** The file behind the window; null: none. */
   doc: Doc | null;
   /** The boxes around the element under the spot, innermost first, ending with its window. */
@@ -101,7 +103,7 @@ function harness(opts: HarnessOptions = {}) {
   /** The fake disk: folders and files under the temp folder. */
   const disk = new Set<string>();
   const dirs: string[] = [];
-  const screen: Screen = { system: NO_TEXT, marksFile: '', doc: null, boxes: [], ...opts.screen };
+  const screen: Screen = { system: NO_TEXT, marksFile: '', fields: '', doc: null, boxes: [], ...opts.screen };
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -117,7 +119,7 @@ function harness(opts: HarnessOptions = {}) {
       instructions: () => '',
     },
     context: {
-      foreground: async () => ({ app: 'notepad.exe', title: 'notes.txt' }),
+      foreground: async () => ({ app: 'notepad.exe', title: 'notes.txt', window: '263544' }),
       capture: async (req, signal) => {
         captures += 1;
         log.push(['capture', req.spots]);
@@ -148,7 +150,11 @@ function harness(opts: HarnessOptions = {}) {
         }
         const text = !req.text ? 'off' : system === 'slow' ? 'slow' : 'ok';
         return {
-          status: { marks: req.marks ? 'ok' : 'off', text, file: req.file ? 'ok' : 'off', boxes: req.boxes ? 'ok' : 'off' },
+          status: {
+            marks: req.marks ? 'ok' : 'off', text, file: req.file ? 'ok' : 'off', boxes: req.boxes ? 'ok' : 'off',
+            fields: req.fields ? 'ok' : 'off',
+          },
+          fields: req.fields ? { path: `${req.dir}/fields.jsonl`, count: 1 } : null,
           marks: req.marks ? { path: `${req.dir}/marks.tsv`, count: 1 } : null,
           text: typeof system === 'object' && req.text ? system : null,
           file: !req.file ? null : screen.doc
@@ -159,7 +165,7 @@ function harness(opts: HarnessOptions = {}) {
       },
     },
     readers: {
-      readFile: async () => screen.marksFile,
+      readFile: async (path) => (path.endsWith('fields.jsonl') ? screen.fields : screen.marksFile),
       readDocument: async () => {
         if (!screen.doc) throw new Error('no file');
         return screen.doc;
@@ -973,6 +979,26 @@ describe('AskController', () => {
       expect(names[2]).toEqual(expect.arrayContaining(['copy', 'paste', 'open']));
       expect(names[2]).not.toContain('fill');
       expect(names[2]).not.toContain('event');
+    });
+
+    it('lists the form fields for Do it and offers fill only then', async () => {
+      const said = answers([call('say', { text: 'Ok.' })]);
+      const fields = [
+        { id: '42.7.1', kind: 'text', label: 'Customer name', group: '', value: '', secure: false, required: true },
+        { id: '42.7.2', kind: 'text', label: 'Password', group: '', value: 'hunter2', secure: true, required: false },
+      ].map((f) => JSON.stringify({ ...f, options: [] })).join('\n');
+      const h = harness({ steps: [said, said], screen: { fields } });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      h.ctl.ask(spot('missing', 1500, 900));
+      await flush();
+      expect(h.requests[0].tools.map((d) => d.name)).toContain('fill');
+      const first = h.requests[0].turns[0];
+      const text = first.role === 'user' ? first.parts.map((p) => ('text' in p ? p.text : '')).join('\n') : '';
+      expect(text).toContain('42.7.1 | text | Customer name |');
+      expect(text).toContain('42.7.2 | text | Password | secure, never fill |');
+      expect(text).not.toContain('hunter2');
+      expect(h.requests[1].tools.map((d) => d.name)).not.toContain('fill');
     });
 
     it('hands each valid action call to the runner once and tells the model Done', async () => {
