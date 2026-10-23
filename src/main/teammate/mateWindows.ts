@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, nativeTheme, screen, type BrowserWindowConstructorOptions, type IpcMainEvent } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
-  parseMateAction, parseMateSize, TEAMMATE_CH, type BubbleState, type CardState, type ConsentState, type FormState,
+  parseMateAction, parseMateDrag, parseMateSize, TEAMMATE_CH, type BubbleState, type CardState, type ConsentState, type FormState,
   type HistoryState, type MateAction, type MateLeave, type MateState, type MateView, type WordsState,
 } from '../../shared/teammateIpc';
 import { besideSpot, placeInside } from '../coords';
@@ -42,19 +42,24 @@ interface Slot {
   hadFocus: boolean;
   /** The rows of the form preview last sent: a fill may name only these. */
   formIds: ReadonlySet<string>;
+  /** The card opens with the keyboard: the user asked for it (More), so Esc and the reply box work at once. */
+  focusOnShow: boolean;
+  /** Where the window was when the user started dragging it; null when no drag is on. */
+  dragFrom: Point | null;
 }
 
 const emptySlot = (view: MateView): Slot => ({
   view, win: null, loaded: false, state: null, shown: false, at: { x: 0, y: 0 }, size: { ...START_SIZE[view] }, ended: false,
-  leaveTimer: null, hadFocus: false, formIds: new Set(),
+  leaveTimer: null, hadFocus: false, formIds: new Set(), focusOnShow: false,
+  dragFrom: null,
 });
 
 /**
  * The teammate's windows. The bubble takes clicks without focus; the card takes focus only when clicked, so the app
  * underneath keeps the keyboard until the user replies; the words box takes focus and gives it back when it closes;
  * History is a normal window; the consent card and the form preview never take focus, as the bubble. Emits
- * 'action' with `{ view, action }`, already validated for that view. It only shows state and passes actions on: what an action
- * does is up to the caller.
+ * 'action' with `{ view, action }`, already validated for that view, and 'dragged' with the view the user moved. It
+ * only shows state and passes actions on: what an action does is up to the caller.
  */
 export class MateWindows extends EventEmitter {
   private readonly slots: Record<MateView, Slot> = {
@@ -70,6 +75,7 @@ export class MateWindows extends EventEmitter {
     super();
     ipcMain.on(TEAMMATE_CH.action, this.onAction);
     ipcMain.on(TEAMMATE_CH.size, this.onSize);
+    ipcMain.on(TEAMMATE_CH.drag, this.onDrag);
   }
 
   /** `at` is a screen point in DIPs: the bubble's top-left, kept inside that display's work area. */
@@ -86,8 +92,16 @@ export class MateWindows extends EventEmitter {
     this.leave('bubble', opts.stale ? 'stale' : 'fast');
   }
 
-  showCard(at: Point, s: CardState): void {
+  /** `focus`: the user opened it (More), so it takes the keyboard; a card that opens by itself leaves it where it is. */
+  showCard(at: Point, s: CardState, opts: { focus?: boolean } = {}): void {
+    if (opts.focus) this.slots.card.focusOnShow = true;
     this.showPopup('card', at, s);
+  }
+
+  /** Where the bubble or card is now (DIPs), after any drag; null when it isn't shown. */
+  placeOf(view: 'bubble' | 'card'): Point | null {
+    const slot = this.slots[view];
+    return slot.shown && slot.win && !slot.win.isDestroyed() ? { ...slot.at } : null;
   }
 
   updateCard(s: CardState): void {
@@ -241,6 +255,7 @@ export class MateWindows extends EventEmitter {
   destroy(): void {
     ipcMain.removeListener(TEAMMATE_CH.action, this.onAction);
     ipcMain.removeListener(TEAMMATE_CH.size, this.onSize);
+    ipcMain.removeListener(TEAMMATE_CH.drag, this.onDrag);
     for (const view of VIEWS) {
       const slot = this.slots[view];
       if (slot.leaveTimer) clearTimeout(slot.leaveTimer);
@@ -268,7 +283,7 @@ export class MateWindows extends EventEmitter {
     w.setBounds(this.rect(slot));
     if (!slot.loaded) return; // 'did-finish-load' sends the state and shows the window
     this.push(slot);
-    this.reveal(w);
+    this.reveal(w, slot);
   }
 
   private popupOptions(): BrowserWindowConstructorOptions {
@@ -345,10 +360,13 @@ export class MateWindows extends EventEmitter {
     if (slot.win && !slot.win.isDestroyed() && slot.loaded && slot.state) slot.win.webContents.send(TEAMMATE_CH.state, slot.state);
   }
 
-  private reveal(w: BrowserWindow): void {
+  private reveal(w: BrowserWindow, slot: Slot): void {
     // Windows can drop an always-on-top window behind normal ones after a while (#70): set the level again each time.
     w.setAlwaysOnTop(true, 'screen-saver');
-    w.showInactive();
+    if (!slot.focusOnShow) return void w.showInactive();
+    slot.focusOnShow = false;
+    w.show();
+    w.focus();
   }
 
   private create(view: MateView, slot: Slot, opts: BrowserWindowConstructorOptions): BrowserWindow {
@@ -384,7 +402,7 @@ export class MateWindows extends EventEmitter {
       if (view === 'words' || view === 'history') return this.push(slot); // shown on 'ready-to-show'
       if (!slot.shown) return;
       this.push(slot);
-      this.reveal(w);
+      this.reveal(w, slot);
     });
     const drop = (): void => {
       if (!w.isDestroyed()) w.destroy();
@@ -442,6 +460,28 @@ export class MateWindows extends EventEmitter {
       slot.ended = true;
     }
     this.emit('action', { view, action });
+  };
+
+  /** The user drags the bubble or card: it stays where it is dropped when its page resizes, and the card opens there. */
+  private readonly onDrag = (event: IpcMainEvent, raw: unknown): void => {
+    const view = this.viewOf(event);
+    const d = view ? parseMateDrag(raw, view) : null;
+    if (!view || !d || (view !== 'bubble' && view !== 'card')) return;
+    const slot = this.slots[view];
+    const w = slot.win;
+    if (!w || w.isDestroyed()) return;
+    if (d.phase === 'start') {
+      const { x, y } = w.getBounds();
+      slot.dragFrom = { x, y };
+      return;
+    }
+    const from = slot.dragFrom;
+    if (!from) return;
+    slot.at = { x: from.x + d.dx, y: from.y + d.dy };
+    w.setPosition(slot.at.x, slot.at.y);
+    if (d.phase !== 'end') return;
+    slot.dragFrom = null;
+    this.emit('dragged', view);
   };
 
   private readonly onSize = (event: IpcMainEvent, raw: unknown): void => {

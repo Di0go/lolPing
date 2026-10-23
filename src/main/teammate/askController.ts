@@ -49,7 +49,7 @@ export interface AskDeps {
     'spawnMate' | 'spawnMateEmote' | 'mateSaid' | 'clearMate' | 'fadeMate' | 'setMateTicket' | 'setCaptureExcluded'
     | 'displayAt' | 'toLocal' | 'toDip' | 'primaryDip'>;
   windows: Pick<MateWindows,
-    'showBubble' | 'updateBubble' | 'hideBubble' | 'hideNow' | 'showCard' | 'updateCard' | 'hideCard'
+    'showBubble' | 'updateBubble' | 'hideBubble' | 'hideNow' | 'showCard' | 'updateCard' | 'hideCard' | 'placeOf'
     | 'setCaptureExcluded'>;
   history: Pick<HistoryStore, 'append' | 'current' | 'amend'>;
   /** The folder each ask's own capture folder goes in. */
@@ -315,13 +315,20 @@ export class AskController extends EventEmitter {
     this.viewed = record;
   }
 
+  /** The user moved the bubble: they are reading it, so its time on screen starts again. */
+  onDragged(view: MateView): void {
+    const run = this.shown;
+    if (view !== 'bubble' || !run || !this.bubbleShown || !this.bubbleTimer) return;
+    this.armBubble(run, run.line);
+  }
+
   /** What the bubble and card ask for; the rest (copy, link, history) is the app's to handle. */
   onTeammateAction(view: MateView, a: MateAction): void {
     const run = this.shown;
     if (!run && this.viewed && view === 'card' && (a.t === 'reply' || a.t === 'deep')) return this.askFromViewed(a);
     switch (a.t) {
       case 'more':
-        if (view === 'bubble' && run) this.openCard(run);
+        if (view === 'bubble' && run) this.openCard(run, true);
         break;
       case 'dismiss':
         this.hideBubble();
@@ -888,10 +895,12 @@ export class AskController extends EventEmitter {
     };
   }
 
-  private openCard(run: Run): void {
-    // The card grows out of the bubble, which goes.
+  /** `focus`: the user asked for it (More), so it takes the keyboard. */
+  private openCard(run: Run, focus = false): void {
+    // The card grows out of the bubble, which goes; where the user dragged the bubble, the card opens.
+    const at = this.deps.windows.placeOf('bubble') ?? this.popupAt(run);
     this.hideBubble();
-    this.deps.windows.showCard(this.popupAt(run), this.cardState(run, this.alive(run)));
+    this.deps.windows.showCard(at, this.cardState(run, this.alive(run)), { focus });
     this.cardShown = true;
     this.clearTimer('fade'); // the marks stay while the card is up; closing it schedules their fade
   }

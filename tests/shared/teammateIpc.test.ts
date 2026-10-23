@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMateAction, parseMateSize, type MateView } from '../../src/shared/teammateIpc';
+import { parseMateAction, parseMateDrag, parseMateSize, type MateView } from '../../src/shared/teammateIpc';
 
 const VIEWS: MateView[] = ['bubble', 'card', 'words', 'history', 'consent', 'form'];
 const SAMPLES: Record<string, unknown> = {
@@ -113,6 +113,19 @@ describe('parseMateAction', () => {
     expect(parseMateAction({ t: 'open', id: '../secrets' }, 'history')).toBeNull();
     expect(parseMateAction({ t: 'delete', id: '' }, 'history')).toBeNull();
     expect(parseMateAction({ t: 'search', query: 'x'.repeat(201) }, 'history')).toBeNull();
+  });
+});
+
+describe('parseMateDrag', () => {
+  it('takes a drag of the bubble or card by its offset from where it started', () => {
+    expect(parseMateDrag({ phase: 'start', dx: 0, dy: 0 }, 'bubble')).toEqual({ phase: 'start', dx: 0, dy: 0 });
+    expect(parseMateDrag({ phase: 'move', dx: 40.4, dy: -12.6 }, 'card')).toEqual({ phase: 'move', dx: 40, dy: -13 });
+    expect(parseMateDrag({ phase: 'end', dx: 5, dy: 5 }, 'bubble')).toEqual({ phase: 'end', dx: 5, dy: 5 });
+    expect(parseMateDrag({ phase: 'move', dx: 5, dy: 5 }, 'consent')).toBeNull();
+    expect(parseMateDrag({ phase: 'fly', dx: 5, dy: 5 }, 'card')).toBeNull();
+    expect(parseMateDrag({ phase: 'move', dx: Number.NaN, dy: 5 }, 'card')).toBeNull();
+    expect(parseMateDrag({ phase: 'move', dx: 1e6, dy: 5 }, 'card')).toBeNull();
+    expect(parseMateDrag(null, 'card')).toBeNull();
   });
 });
 

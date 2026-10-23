@@ -45,6 +45,9 @@ vi.mock('electron', async () => {
     setBounds(r: Rect): void {
       this.bounds = r;
     }
+    setPosition(x: number, y: number): void {
+      this.bounds = { ...this.bounds, x, y };
+    }
     getBounds(): Rect {
       return this.bounds;
     }
@@ -135,6 +138,7 @@ let mate: InstanceType<Mod['MateWindows']>;
 let actions: unknown[];
 
 const sendAction = (i: number, raw: unknown): void => h.handlers.get('mate:action')?.({ sender: h.windows[i].webContents }, raw);
+const sendDrag = (i: number, raw: unknown): void => h.handlers.get('mate:drag')?.({ sender: h.windows[i].webContents }, raw);
 
 beforeEach(async () => {
   h.windows.length = 0;
@@ -169,6 +173,40 @@ describe('MateWindows', () => {
     expect(h.windows[0].opts.focusable).toBe(false);
     expect(h.windows[1].opts.focusable).toBe(true);
     expect(h.windows.map((w) => [w.visible, w.focused])).toEqual([[true, 0], [true, 0]]);
+  });
+
+  it('gives the card the keyboard when asked to, whether its window is new or already open', () => {
+    mate.showCard({ x: 10, y: 10 }, card, { focus: true });
+    const w = h.windows[0];
+    expect(w.focused).toBe(0);
+    w.webContents.emit('did-finish-load');
+    expect([w.visible, w.focused]).toEqual([true, 1]);
+    mate.showCard({ x: 10, y: 10 }, card);
+    expect(w.focused).toBe(1);
+    mate.showCard({ x: 10, y: 10 }, card, { focus: true });
+    expect(w.focused).toBe(2);
+  });
+
+  it('moves a bubble or card the user drags, keeps it there when it resizes, and tells where it is', () => {
+    mate.showBubble({ x: 100, y: 100 }, bubble);
+    const w = h.windows[0];
+    w.webContents.emit('did-finish-load');
+    const start = { ...w.bounds };
+    sendDrag(0, { phase: 'start', dx: 0, dy: 0 });
+    sendDrag(0, { phase: 'move', dx: 300, dy: 200 });
+    const dragged: unknown[] = [];
+    mate.on('dragged', (v) => dragged.push(v));
+    sendDrag(0, { phase: 'end', dx: 500, dy: 300 });
+    expect(w.bounds).toMatchObject({ x: start.x + 500, y: start.y + 300 });
+    expect(dragged).toEqual(['bubble']);
+    h.handlers.get('mate:size')?.({ sender: w.webContents }, { width: 300, height: 90 });
+    expect(w.bounds).toMatchObject({ x: start.x + 500, y: start.y + 300, width: 300, height: 90 });
+    expect(mate.placeOf('bubble')).toEqual({ x: start.x + 500, y: start.y + 300 });
+    // A move without a start (its start was lost) does nothing.
+    sendDrag(0, { phase: 'move', dx: 50, dy: 50 });
+    expect(w.bounds).toMatchObject({ x: start.x + 500, y: start.y + 300 });
+    mate.hideBubble();
+    expect(mate.placeOf('bubble')).toBeNull();
   });
 
   it('keeps a window inside the work area', () => {

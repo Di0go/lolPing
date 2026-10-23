@@ -10,6 +10,7 @@ import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type CardState, type MateAction, type MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
 import { cardButtons, copyText, footerText, PutGuard, putLabel } from './cardText';
+import { dragHandle } from './drag';
 import { renderMarkdown } from './markdown';
 import { stagger, useMotion } from './motion';
 import { NameTag } from './NameTag';
@@ -155,6 +156,8 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
   const put = putLabel(s.put, t);
   const [guard] = useState(() => new PutGuard(() => performance.now()));
   guard.show(put);
+  // The head drags the card; its text stays selectable.
+  const [drag] = useState(() => dragHandle((d) => window.mateApi.drag(d)));
   const button = (b: ReturnType<typeof cardButtons>[number]) => {
     switch (b) {
       case 'copy':
@@ -198,7 +201,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
     <div className={sf.frame}>
       <FluentCard className={mergeClasses(sf.surface, st.card, m.grow, leave)}>
         {s.streaming && <ProgressBar className={st.progress} thickness="medium" shape="square" aria-hidden />}
-        <div className={st.head}>
+        <div className={st.head} {...drag}>
           <NameTag tag={s.tag} thinking={s.streaming} thinkingLabel={t.thinking} />
           <Subtitle2 className={st.title}>{s.title}</Subtitle2>
           <Button

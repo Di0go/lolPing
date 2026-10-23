@@ -5,7 +5,9 @@ import type { Platform } from './platform';
 import { FIELD_ID_MAX, type LeftField, type PreviewRow, type PutAction } from './teammate/doRules';
 
 /** state, leave (play the closing motion; the window hides after it): main → page. action, size: page → main. */
-export const TEAMMATE_CH = { state: 'mate:state', leave: 'mate:leave', action: 'mate:action', size: 'mate:size' } as const;
+export const TEAMMATE_CH = {
+  state: 'mate:state', leave: 'mate:leave', action: 'mate:action', size: 'mate:size', drag: 'mate:drag',
+} as const;
 
 /** How a bubble or card leaves: the quick close, or the slow fade of a stale signal. */
 export type MateLeave = 'fast' | 'stale';
@@ -147,6 +149,18 @@ export interface MateApi {
   act(action: MateAction): void;
   /** The page's content size in DIPs, so a transparent window doesn't cover more of the screen than it draws. */
   size(size: { width: number; height: number }): void;
+  /** The user drags the bubble or card: the window moves by the pointer's offset from where the drag started. */
+  drag(d: MateDrag): void;
+}
+
+/**
+ * A drag of the bubble or card, in DIPs from where it started. Windows can't drag a window that never takes focus by a
+ * CSS drag region, so the page reports the pointer and the main process moves the window.
+ */
+export interface MateDrag {
+  phase: 'start' | 'move' | 'end';
+  dx: number;
+  dy: number;
 }
 
 /** Longest words the user may type for an ask or a reply. */
@@ -249,6 +263,18 @@ export function parseMateAction(raw: unknown, view: MateView): MateAction | null
   // The form preview's Cancel is a decision too: it carries its preview's serial, as every decision does.
   if (view === 'form' && action.t === 'cancel' && !('serial' in action)) return null;
   return action;
+}
+
+/** Farther than any desktop: a bigger offset is not a drag. */
+const DRAG_MAX = 20_000;
+
+/** A drag a page reported; only the bubble and the card can be dragged. */
+export function parseMateDrag(raw: unknown, view: MateView): MateDrag | null {
+  if ((view !== 'bubble' && view !== 'card') || typeof raw !== 'object' || raw === null) return null;
+  const { phase, dx, dy } = raw as Record<string, unknown>;
+  if (phase !== 'start' && phase !== 'move' && phase !== 'end') return null;
+  const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= DRAG_MAX;
+  return ok(dx) && ok(dy) ? { phase, dx: Math.round(dx), dy: Math.round(dy) } : null;
 }
 
 /** A size a page reported, clamped to its view's limits; null for views with a fixed size or a bad report. */

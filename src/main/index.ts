@@ -801,6 +801,7 @@ function start(): void {
     });
     controller.on('state', pushMateTray);
     windows.on('action', onMateAction);
+    windows.on('dragged', (view: MateView) => controller.onDragged(view));
     return { secrets, history, usage, context, windows, actions, controller };
   };
   /** Takes the teammate down; settles once its context helper has exited and its usage is on disk. */

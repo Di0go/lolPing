@@ -119,6 +119,8 @@ function harness(opts: HarnessOptions = {}) {
   let captures = 0;
   let skew = 0;
   const popupsAt: Array<{ x: number; y: number }> = [];
+  const cardOpens: Array<{ at: { x: number; y: number }; focus: boolean }> = [];
+  let bubblePlace: { x: number; y: number } | null = null;
   /** The fake disk: folders and files under the temp folder. */
   const disk = new Set<string>();
   const dirs: string[] = [];
@@ -231,7 +233,11 @@ function harness(opts: HarnessOptions = {}) {
       updateBubble: (s) => log.push(['bubble', s]),
       hideBubble: () => log.push(['bubbleHidden', null]),
       hideNow: (view) => log.push(['hiddenNow', view]),
-      showCard: (_at, s) => log.push(['card', s]),
+      showCard: (at, s, o) => {
+        cardOpens.push({ at, focus: o?.focus ?? false });
+        log.push(['card', s]);
+      },
+      placeOf: () => bubblePlace,
       updateCard: (s) => log.push(['card', s]),
       hideCard: () => log.push(['cardHidden', null]),
       setCaptureExcluded: (on) => log.push(['windowsExcluded', on]),
@@ -270,7 +276,10 @@ function harness(opts: HarnessOptions = {}) {
 
   const of = (kind: string): unknown[] => log.filter((e) => e[0] === kind).map((e) => e[1]);
   return {
-    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen, taken,
+    ctl, log, requests, signals, adapters, tickets, appends, states, of, popupsAt, disk, dirs, screen, taken, cardOpens,
+    dragBubble: (to: { x: number; y: number } | null) => {
+      bubblePlace = to;
+    },
     takenRuns, runner, dones, amends, putClicks, runnerCancels: () => runnerCancels,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
@@ -391,6 +400,22 @@ describe('AskController', () => {
     await vi.advanceTimersByTimeAsync(bubbleMs('Short.') - 100);
     expect(h.of('bubbleHidden')).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(200);
+    expect(h.of('bubbleHidden')).toHaveLength(1);
+  });
+
+  it('gives a bubble the user dragged its reading time again', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Short.' }), call('answer', { markdown: 'More.' })])] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    await vi.advanceTimersByTimeAsync(bubbleMs('Short.') - 100);
+    h.ctl.onDragged('bubble');
+    await vi.advanceTimersByTimeAsync(bubbleMs('Short.') - 100);
+    expect(h.of('bubbleHidden')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.of('bubbleHidden')).toHaveLength(1);
+    // Once it has gone, a late drag report brings nothing back.
+    h.ctl.onDragged('bubble');
+    await vi.advanceTimersByTimeAsync(bubbleMs('Short.') * 2);
     expect(h.of('bubbleHidden')).toHaveLength(1);
   });
 
@@ -550,6 +575,32 @@ describe('AskController', () => {
     const answered = card?.entries.filter((e) => e.kind === 'answer').map((e) => e.line);
     expect(answered).toEqual(['First answer.', 'More detail.']);
     expect(card?.streaming).toBe(false);
+  });
+
+  it('gives the card the keyboard when the user opens it from More, and not when it opens by itself', async () => {
+    const h = harness({
+      steps: [
+        answers([call('say', { text: 'A typo.' }), call('answer', { markdown: '**teh** should be **the**' })]),
+        answers([call('say', { text: 'A plan.' }), call('answer', { markdown: '## Risks' })]),
+      ],
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    expect(h.cardOpens.at(-1)?.focus).toBe(true);
+
+    h.ctl.ask(spot('allin'));
+    await flush();
+    expect(h.cardOpens.at(-1)?.focus).toBe(false);
+  });
+
+  it('opens the card where the user dragged the bubble', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'A typo.' }), call('answer', { markdown: 'More.' })])] });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.dragBubble({ x: 700, y: 300 });
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    expect(h.cardOpens.at(-1)?.at).toEqual({ x: 700, y: 300 });
   });
 
   it('opens the card by itself for Whole picture', async () => {

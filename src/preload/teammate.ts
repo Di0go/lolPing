@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { MateAction, MateApi, MateLeave, MateState } from '../shared/teammateIpc';
+import type { MateAction, MateApi, MateDrag, MateLeave, MateState } from '../shared/teammateIpc';
 
 const api: MateApi = {
   // Inlined rather than imported: a sandboxed preload can't require a shared chunk.
@@ -17,6 +17,7 @@ const api: MateApi = {
   },
   act: (action: MateAction) => ipcRenderer.send('mate:action', action),
   size: (size) => ipcRenderer.send('mate:size', size),
+  drag: (d: MateDrag) => ipcRenderer.send('mate:drag', d),
 };
 
 contextBridge.exposeInMainWorld('mateApi', api);
