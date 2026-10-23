@@ -1,5 +1,5 @@
 import type { Strings } from '../../shared/i18n';
-import { MATE_COPY_MAX, type CardState, type PutState } from '../../shared/teammateIpc';
+import { MATE_COPY_MAX, type CardState, type ConsentState, type PutState } from '../../shared/teammateIpc';
 
 /**
  * What Copy takes: the latest answer without its line, so a reply, rewrite or grab pastes as it is; the line when
@@ -61,4 +61,9 @@ export class PutGuard {
   click(): boolean {
     return this.label !== null && this.now() - this.since >= PUT_ARM_MS;
   }
+}
+
+/** What a consent card asks, for a PutGuard: a new card or a changed one is new under the pointer. */
+export function consentKey(s: Pick<ConsentState, 'serial' | 'action' | 'text' | 'detail' | 'always'>): string {
+  return JSON.stringify([s.serial ?? 0, s.action, s.text, s.detail, s.always]);
 }

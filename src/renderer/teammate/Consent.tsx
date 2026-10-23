@@ -1,7 +1,9 @@
 import { Button, Card as FluentCard, Caption1, makeStyles, mergeClasses, Text, tokens } from '@fluentui/react-components';
+import { useState } from 'react';
 import type { Strings } from '../../shared/i18n';
 import type { ConsentState, MateAction, MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
+import { consentKey, PutGuard } from './cardText';
 import { useMotion } from './motion';
 import { NameTag } from './NameTag';
 
@@ -54,9 +56,12 @@ export function Consent({ s, t, act, leaving }: {
   const st = useStyles();
   const sf = useSurfaceStyles();
   const m = useMotion();
-  // The card is already decided while it leaves: a click then does nothing.
+  const [guard] = useState(() => new PutGuard(() => performance.now()));
+  guard.show(consentKey(s));
+  // The card is already decided while it leaves, and a click within its first moments was meant for what was there
+  // before: neither is an answer.
   const send = (a: MateAction): void => {
-    if (!leaving) act(a);
+    if (!leaving && guard.click()) act(a);
   };
   // Main drops a click whose serial isn't the card on screen now.
   const serial = s.serial ?? 0;
