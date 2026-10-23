@@ -50,8 +50,8 @@ export interface RunInfo {
   at: Point;
   /** The element under the spot (physical px): where a paste glows when no field box is known. */
   box: Rect | null;
-  /** The field that had the keyboard at the ask; null when none did. */
-  focus: { label: string; secure: boolean } | null;
+  /** What had the keyboard at the ask (`kind` 'field' for a text field or combo box); null when nothing did. */
+  focus: { kind: string; label: string; secure: boolean } | null;
   /** The selection at the ask: what a replace pastes over. */
   selection: string;
   fields: FormField[];
@@ -106,6 +106,15 @@ const firstChars = (text: string, max: number): string => Array.from(text).slice
 function fieldAt(run: RunInfo): FormField | null {
   const text = (f: FormField): boolean => f.kind === 'text' || f.kind === 'multiline';
   return run.fields.find((f) => text(f) && f.box !== undefined && inside(run.spot, f.box)) ?? null;
+}
+
+/**
+ * Whether `field` had the keyboard at the ask, so a click into it would only move the caret. The focus carries no
+ * box, so the label tells; a page (Chrome and Edge give the keyboard to the document) is no field.
+ */
+function hadKeyboard(run: RunInfo, field: FormField): boolean {
+  const f = run.focus;
+  return f !== null && f.kind === 'field' && f.label.trim() !== '' && f.label.trim() === field.label.trim();
 }
 
 function whyCopied(t: UiText, why: CopyWhy, app: string): string {
@@ -393,9 +402,9 @@ export class ActionRunner extends EventEmitter {
       mode: call.mode, secure, sameWindow, selectionNow: run.selection, selectionAsked: run.selection,
     });
     if (plan.method === 'copy') return this.copyInstead(run, call.text, plan.why ?? 'failed');
-    // A click puts the caret in the field under the spot when nothing had the keyboard. A replace never clicks: that
-    // would drop the selection it pastes over.
-    const click = call.mode === 'insert' && run.focus === null && field?.box ? centre(field.box) : null;
+    // A click puts the caret in the text field under the spot unless that field had the keyboard already. A replace
+    // never clicks: that would drop the selection it pastes over.
+    const click = call.mode === 'insert' && field?.box && !hadKeyboard(run, field) ? centre(field.box) : null;
     if (click) this.clearForClick();
     let reply: Awaited<ReturnType<ActionDeps['context']['paste']>>;
     try {

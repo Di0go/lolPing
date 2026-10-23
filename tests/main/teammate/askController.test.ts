@@ -1115,7 +1115,7 @@ describe('AskController', () => {
         screen: {
           system: {
             selection: 'teh text', spotTexts: [], address: '',
-            focus: { kind: 'edit', label: 'Reply', value: 'teh text', secure: false },
+            focus: { kind: 'field', label: 'Reply', value: 'teh text', secure: false },
           },
           boxes: [box, DISPLAY],
           fields,
@@ -1126,7 +1126,7 @@ describe('AskController', () => {
       expect(h.taken).toEqual([{ tool: 'paste', text: 'Friday works.', mode: 'replace' }]);
       expect(h.takenRuns).toEqual([{
         id: h.tickets[0], profileId: 'fast', tag: TAG, app: 'notepad.exe', window: '263544', lang: 'en',
-        spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box, focus: { label: 'Reply', secure: false },
+        spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box, focus: { kind: 'field', label: 'Reply', secure: false },
         selection: 'teh text',
         fields: [{
           id: '42.7.1', kind: 'text', label: 'Reply', group: '', value: '', secure: false, required: false, options: [],

@@ -18,7 +18,7 @@ const REPLY_BOX = { x: 900, y: 780, w: 400, h: 40 };
 const info = (over: Partial<RunInfo> = {}): RunInfo => ({
   id: 'ask1', profileId: 'fast', tag: TAG, app: 'Chrome', window: ASK_WINDOW, lang: 'en',
   spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box: REPLY_BOX,
-  focus: { label: 'Reply', secure: false }, selection: '', fields: [], ...over,
+  focus: { kind: 'field', label: 'Reply', secure: false }, selection: '', fields: [], ...over,
 });
 
 const paste = (text = 'Friday works.', mode: 'insert' | 'replace' = 'insert'): ActionCall => (
@@ -273,9 +273,9 @@ describe('ActionRunner', () => {
 
   it('refuses to paste into a secure field and copies instead', async () => {
     const h = harness({ permissions: ['fast:paste'] });
-    h.runner.take(info({ focus: { label: 'Password', secure: true } }), paste('hunter2'));
+    h.runner.take(info({ focus: { kind: 'field', label: 'Password', secure: true } }), paste('hunter2'));
     await flush();
-    h.runner.take(info({ id: 'ask2', focus: { label: 'Card number', secure: false } }), paste('4111'));
+    h.runner.take(info({ id: 'ask2', focus: { kind: 'field', label: 'Card number', secure: false } }), paste('4111'));
     await flush();
     expect(h.of('paste')).toEqual([]);
     expect(h.of('clip')).toEqual([{ text: 'hunter2' }, { text: '4111' }]);
@@ -568,7 +568,7 @@ describe('ActionRunner', () => {
     expect(hung.runner.described()).toEqual([t.didFill(0, 2)]);
   });
 
-  it('clicks the field under the spot only when nothing had the keyboard', async () => {
+  it('clicks the field under the spot unless that field had the keyboard', async () => {
     const reply = field('9', 'Reply', { box: REPLY_BOX });
     const h = harness({ permissions: ['fast:paste'] });
     h.runner.take(info({ focus: null, fields: [reply] }), paste());
@@ -578,7 +578,29 @@ describe('ActionRunner', () => {
     ]);
     // The bubble may be over the point: lolPing's own window there would make the helper refuse.
     expect(h.kinds().indexOf('bubbleHidden')).toBeLessThan(h.kinds().indexOf('paste'));
+    // The Reply field had the keyboard: a click would only move its caret.
     h.runner.take(info({ id: 'ask2', fields: [reply] }), paste());
+    await flush();
+    expect((h.of('paste')[1] as PasteRequest).click).toBeNull();
+    // Another field had it: the paste goes where the user pointed.
+    h.runner.take(info({ id: 'ask3', focus: { kind: 'field', label: 'Search', secure: false }, fields: [reply] }),
+      paste());
+    await flush();
+    expect((h.of('paste')[2] as PasteRequest).click).toEqual({ x: 1100, y: 800 });
+  });
+
+  it('clicks the field under the spot when the focus is on the page, not a field', async () => {
+    const reply = field('9', 'Reply', { box: REPLY_BOX });
+    const h = harness({ permissions: ['fast:paste'] });
+    // Chrome and Edge give the keyboard to the page itself; Ctrl+V there pastes into no field at all.
+    h.runner.take(info({ focus: { kind: 'other', label: 'Reply', secure: false }, fields: [reply] }), paste());
+    await flush();
+    expect(h.of('paste')).toEqual([
+      { window: ASK_WINDOW, text: 'Friday works.', click: { x: 1100, y: 800 }, field: '9', mode: 'insert', asked: '' },
+    ]);
+    // A replace still never clicks: that would drop the selection it pastes over.
+    h.runner.take(info({ id: 'ask2', focus: { kind: 'other', label: 'Inbox', secure: false }, fields: [reply],
+      selection: 'Fri' }), paste('Friday', 'replace'));
     await flush();
     expect((h.of('paste')[1] as PasteRequest).click).toBeNull();
   });
