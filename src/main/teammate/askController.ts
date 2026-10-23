@@ -479,7 +479,7 @@ export class AskController extends EventEmitter {
     // The same `file` and intent decide the tools and the prompt's rules for them, so the two never disagree.
     let tools = toolDefs({
       emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id),
-      kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0,
+      kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0, selection: (ctx.system?.selection ?? '') !== '',
     });
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();

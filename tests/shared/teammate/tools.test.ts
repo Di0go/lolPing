@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyLimits, parseToolCall, toolDefs, type ToolCall } from '../../../src/shared/teammate/tools';
 import { EMOTE_CATALOG } from '../../../src/shared/emoteCatalog';
 
-const OFF = { emotes: false, spots: 1, file: false, look: false, kind: 'answer', form: false } as const;
+const OFF = { emotes: false, spots: 1, file: false, look: false, kind: 'answer', form: false, selection: false } as const;
 type Opts = Parameters<typeof toolDefs>[0];
 const names = (o: Partial<Opts> = {}): string[] => toolDefs({ ...OFF, ...o }).map((d) => d.name);
 const ping = (n: number): ToolCall => ({ tool: 'ping', type: 'danger', at: { x: n, y: n } });
@@ -245,6 +245,16 @@ describe('tools', () => {
     expect(fill?.description).toMatch(/radio/);
     const event = toolDefs({ ...OFF, kind: 'grab' }).find((d) => d.name === 'event');
     expect(event?.description).toMatch(/last day/);
+  });
+
+  it('offers a replace only when text was selected at the ask', () => {
+    const modes = (selection: boolean): unknown => {
+      const paste = toolDefs({ ...OFF, kind: 'act', selection }).find((d) => d.name === 'paste');
+      const props = paste?.parameters.properties as Record<string, { enum?: string[] }> | undefined;
+      return props?.mode.enum;
+    };
+    expect(modes(true)).toEqual(['insert', 'replace']);
+    expect(modes(false)).toEqual(['insert']);
   });
 
   it('says a copy happens at once, with no question to the user', () => {

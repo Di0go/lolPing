@@ -66,6 +66,8 @@ export function toolDefs(opts: {
   kind: IntentKind;
   /** Form fields were read, so `fill` has ids to use. */
   form: boolean;
+  /** Text was selected at the ask: only then can a paste replace anything. */
+  selection: boolean;
 }): ToolDef[] {
   const spotNote = opts.spots > 0 ? ` The user marked ${opts.spots} spot${opts.spots === 1 ? '' : 's'}.` : '';
   const defs: ToolDef[] = [
@@ -178,11 +180,14 @@ export function toolDefs(opts: {
         type: 'object',
         properties: {
           text: { type: 'string', description: `The finished text, at most ${MAX_PASTE} characters.` },
-          mode: {
-            type: 'string',
-            enum: ['insert', 'replace'],
-            description: '`insert` at the caret, or `replace` to overwrite the text that is selected.',
-          },
+          // With nothing selected a replace can only be copied instead, so the model isn't offered one.
+          mode: opts.selection
+            ? {
+              type: 'string',
+              enum: ['insert', 'replace'],
+              description: '`insert` at the caret, or `replace` to overwrite the text that is selected.',
+            }
+            : { type: 'string', enum: ['insert'], description: 'Nothing is selected: the text goes in at the caret.' },
         },
         required: ['text', 'mode'],
       },
