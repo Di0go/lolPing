@@ -50,8 +50,11 @@ export interface RunInfo {
   at: Point;
   /** The element under the spot (physical px): where a paste glows when no field box is known. */
   box: Rect | null;
-  /** What had the keyboard at the ask (`kind` 'field' for a text field or combo box); null when nothing did. */
-  focus: { kind: string; label: string; secure: boolean } | null;
+  /**
+   * What had the keyboard at the ask (`kind` 'field' for a text field or combo box), with its text ('' for a secure
+   * one); null when nothing did.
+   */
+  focus: { kind: string; label: string; value: string; secure: boolean } | null;
   /** The selection at the ask: what a replace pastes over. */
   selection: string;
   fields: FormField[];
@@ -109,12 +112,15 @@ function fieldAt(run: RunInfo): FormField | null {
 }
 
 /**
- * Whether `field` had the keyboard at the ask, so a click into it would only move the caret. The focus carries no
- * box, so the label tells; a page (Chrome and Edge give the keyboard to the document) is no field.
+ * Whether `field` had the keyboard at the ask, so a click into it would move the caret the user placed. The focus
+ * carries no box, so the same label or the same text tells; a page (Chrome and Edge give the keyboard to the
+ * document) is no field.
  */
 function hadKeyboard(run: RunInfo, field: FormField): boolean {
   const f = run.focus;
-  return f !== null && f.kind === 'field' && f.label.trim() !== '' && f.label.trim() === field.label.trim();
+  if (f === null || f.kind !== 'field') return false;
+  const same = (a: string, b: string): boolean => a.trim() !== '' && a.trim() === b.trim();
+  return same(f.label, field.label) || same(f.value, field.value);
 }
 
 function whyCopied(t: UiText, why: CopyWhy, app: string): string {

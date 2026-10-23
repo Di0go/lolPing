@@ -18,7 +18,7 @@ const REPLY_BOX = { x: 900, y: 780, w: 400, h: 40 };
 const info = (over: Partial<RunInfo> = {}): RunInfo => ({
   id: 'ask1', profileId: 'fast', tag: TAG, app: 'Chrome', window: ASK_WINDOW, lang: 'en',
   spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box: REPLY_BOX,
-  focus: { kind: 'field', label: 'Reply', secure: false }, selection: '', fields: [], ...over,
+  focus: { kind: 'field', label: 'Reply', value: '', secure: false }, selection: '', fields: [], ...over,
 });
 
 const paste = (text = 'Friday works.', mode: 'insert' | 'replace' = 'insert'): ActionCall => (
@@ -273,9 +273,10 @@ describe('ActionRunner', () => {
 
   it('refuses to paste into a secure field and copies instead', async () => {
     const h = harness({ permissions: ['fast:paste'] });
-    h.runner.take(info({ focus: { kind: 'field', label: 'Password', secure: true } }), paste('hunter2'));
+    h.runner.take(info({ focus: { kind: 'field', label: 'Password', value: '', secure: true } }), paste('hunter2'));
     await flush();
-    h.runner.take(info({ id: 'ask2', focus: { kind: 'field', label: 'Card number', secure: false } }), paste('4111'));
+    h.runner.take(info({ id: 'ask2', focus: { kind: 'field', label: 'Card number', value: '', secure: false } }),
+      paste('4111'));
     await flush();
     expect(h.of('paste')).toEqual([]);
     expect(h.of('clip')).toEqual([{ text: 'hunter2' }, { text: '4111' }]);
@@ -596,8 +597,28 @@ describe('ActionRunner', () => {
     await flush();
     expect((h.of('paste')[1] as PasteRequest).click).toBeNull();
     // Another field had it: the paste goes where the user pointed.
-    h.runner.take(info({ id: 'ask3', focus: { kind: 'field', label: 'Search', secure: false }, fields: [reply] }),
+    const search = { kind: 'field', label: 'Search', value: '', secure: false };
+    h.runner.take(info({ id: 'ask3', focus: search, fields: [reply] }), paste());
+    await flush();
+    expect((h.of('paste')[2] as PasteRequest).click).toEqual({ x: 1100, y: 800 });
+  });
+
+  it('takes a focused field with no label for the field under the spot when it holds the same text', async () => {
+    const reply = field('9', '', { box: REPLY_BOX, value: 'Thanks, ' });
+    const h = harness({ permissions: ['fast:paste'] });
+    h.runner.take(info({ focus: { kind: 'field', label: '', value: 'Thanks, ', secure: false }, fields: [reply] }),
       paste());
+    await flush();
+    expect((h.of('paste')[0] as PasteRequest).click).toBeNull();
+    // Another empty-labelled field with other text had the keyboard: click where the user pointed.
+    h.runner.take(info({ id: 'ask2', focus: { kind: 'field', label: '', value: 'Search', secure: false },
+      fields: [reply] }), paste());
+    await flush();
+    expect((h.of('paste')[1] as PasteRequest).click).toEqual({ x: 1100, y: 800 });
+    // Two empty fields say nothing about being the same one.
+    const empty = field('9', '', { box: REPLY_BOX });
+    h.runner.take(info({ id: 'ask3', focus: { kind: 'field', label: '', value: '', secure: false },
+      fields: [empty] }), paste());
     await flush();
     expect((h.of('paste')[2] as PasteRequest).click).toEqual({ x: 1100, y: 800 });
   });
@@ -606,14 +627,15 @@ describe('ActionRunner', () => {
     const reply = field('9', 'Reply', { box: REPLY_BOX });
     const h = harness({ permissions: ['fast:paste'] });
     // Chrome and Edge give the keyboard to the page itself; Ctrl+V there pastes into no field at all.
-    h.runner.take(info({ focus: { kind: 'other', label: 'Reply', secure: false }, fields: [reply] }), paste());
+    const page = { kind: 'other', label: 'Reply', value: '', secure: false };
+    h.runner.take(info({ focus: page, fields: [reply] }), paste());
     await flush();
     expect(h.of('paste')).toEqual([
       { window: ASK_WINDOW, text: 'Friday works.', click: { x: 1100, y: 800 }, field: '9', mode: 'insert', asked: '' },
     ]);
     // A replace still never clicks: that would drop the selection it pastes over.
-    h.runner.take(info({ id: 'ask2', focus: { kind: 'other', label: 'Inbox', secure: false }, fields: [reply],
-      selection: 'Fri' }), paste('Friday', 'replace'));
+    h.runner.take(info({ id: 'ask2', focus: { ...page, label: 'Inbox' }, fields: [reply], selection: 'Fri' }),
+      paste('Friday', 'replace'));
     await flush();
     expect((h.of('paste')[1] as PasteRequest).click).toBeNull();
   });

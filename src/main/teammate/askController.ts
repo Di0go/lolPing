@@ -660,7 +660,8 @@ export class AskController extends EventEmitter {
     run.info ??= {
       id: run.machine.id, profileId: run.profile?.id ?? '', tag: run.tag, app: run.app, window: run.window,
       lang: run.lang, spot: run.spot.phys, at: this.deps.overlay.toDip(run.spot.phys) ?? this.deps.overlay.primaryDip(),
-      box: run.box, focus: focus ? { kind: focus.kind, label: focus.label, secure: focus.secure } : null,
+      box: run.box,
+      focus: focus ? { kind: focus.kind, label: focus.label, value: focus.value, secure: focus.secure } : null,
       selection: run.system?.selection ?? '', fields: run.fields,
     };
     return run.info;
