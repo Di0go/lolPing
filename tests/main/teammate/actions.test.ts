@@ -251,6 +251,22 @@ describe('ActionRunner', () => {
     expect(h.of('paste')).toHaveLength(2);
   });
 
+  it('says when a card or preview is waiting for the user, and when it has gone', async () => {
+    const h = harness();
+    const asking: boolean[] = [];
+    h.runner.on('asking', (on: boolean) => asking.push(on));
+    h.runner.take(info(), paste());
+    await flush();
+    expect(asking).toEqual([true]);
+    h.runner.onAction('consent', { t: 'decline', serial: h.card() });
+    await flush();
+    expect(asking).toEqual([true, false]);
+    h.runner.take(info({ id: 'ask2' }), paste('Again.'));
+    await flush();
+    await h.advance(30_000);
+    expect(asking).toEqual([true, false, true, false]);
+  });
+
   it('declines after 30 s and keeps the Paste button', async () => {
     const h = harness();
     h.runner.take(info({ selection: 'teh text' }), paste('the text', 'replace'));

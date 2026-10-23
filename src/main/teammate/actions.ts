@@ -150,7 +150,8 @@ function detailOf(call: Paste | EventCall | Open): string {
  * open waits for its consent card (or Always allow); a fill always waits for its form preview. One card or preview is
  * up at a time, and the next waits until the action before it is done. Emits 'put' (PutState) when the bubble's and
  * card's put button changes, and again after a paste that did not land, so a bubble hidden for its click can come back
- * with the button. Emits 'described' (ask id, descriptions) each time an action of that ask is done.
+ * with the button. Emits 'described' (ask id, descriptions) each time an action of that ask is done, and 'asking'
+ * (true, then false) while a consent card or form preview waits for the user.
  */
 export class ActionRunner extends EventEmitter {
   private queue: Waiting[] = [];
@@ -324,6 +325,7 @@ export class ActionRunner extends EventEmitter {
       this.pump();
     });
     this.shown = { item, serial, stop, preview: null };
+    this.emit('asking', true);
   }
 
   private showPreview(item: Extract<Waiting, { kind: 'form' }>): void {
@@ -333,6 +335,7 @@ export class ActionRunner extends EventEmitter {
       view: 'form', lang: run.lang, tag: run.tag, app: run.app || this.text(run).thisApp, ...preview,
     });
     this.shown = { item, serial, stop: () => undefined, preview };
+    this.emit('asking', true);
   }
 
   private closeShown(): void {
@@ -342,6 +345,7 @@ export class ActionRunner extends EventEmitter {
     shown.stop();
     if (shown.item.kind === 'consent') this.deps.windows.hideConsent();
     else this.deps.windows.hideForm();
+    this.emit('asking', false);
   }
 
   private remember(profileId: string, action: PutAction): void {

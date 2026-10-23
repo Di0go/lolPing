@@ -1195,6 +1195,25 @@ describe('AskController', () => {
       expect(h.runnerCancels()).toBe(before + 2);
     });
 
+    it('keeps the bubble and its button while a consent card waits, then gives it its time again', async () => {
+      const h = harness({
+        recordActions: true,
+        steps: [answers([call('say', { text: 'Ok.' }), call('paste', { text: 'Friday works.', mode: 'insert' })])],
+      });
+      h.ctl.ask(spot('omw'));
+      await flush();
+      h.runner.emit('put', 'paste');
+      h.runner.emit('asking', true);
+      await vi.advanceTimersByTimeAsync(bubbleMs('Ok.') * 3);
+      expect(h.of('bubbleHidden')).toHaveLength(0);
+      // Declined: the line and its Paste button stay for the line's whole time.
+      h.runner.emit('asking', false);
+      await vi.advanceTimersByTimeAsync(bubbleMs('Ok.') - 100);
+      expect(h.of('bubbleHidden')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(h.of('bubbleHidden')).toHaveLength(1);
+    });
+
     it('shows Paste when ready after hands stayed on the keys', async () => {
       const h = harness({
         recordActions: true,

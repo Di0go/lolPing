@@ -221,6 +221,8 @@ export class AskController extends EventEmitter {
    * doesn't land; one the user closed, or whose time ran out, stays closed.
    */
   private hiddenForPut: Run | null = null;
+  /** A consent card or form preview waits for the user: the bubble under it keeps its line and button till it goes. */
+  private asking = false;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -233,6 +235,7 @@ export class AskController extends EventEmitter {
     };
     deps.actions?.on('described', (ask: string, done: string[]) => this.amendDone(ask, done));
     deps.actions?.on('put', (state: PutState) => this.showPut(state));
+    deps.actions?.on('asking', (on: boolean) => this.onAsking(on));
   }
 
   get running(): boolean {
@@ -313,6 +316,15 @@ export class AskController extends EventEmitter {
     });
     this.cardShown = true;
     this.viewed = record;
+  }
+
+  /** The bubble's time stops while a card or preview waits, and starts again whole when it goes. */
+  private onAsking(on: boolean): void {
+    this.asking = on;
+    const run = this.shown;
+    if (!run || !this.bubbleShown) return;
+    if (on) this.clearTimer('bubble');
+    else this.armBubble(run, run.line);
   }
 
   /** The user moved the bubble: they are reading it, so its time on screen starts again. */
@@ -878,6 +890,7 @@ export class AskController extends EventEmitter {
   /** The line's time on screen. While its answer is still coming the line stays, and finish() starts its time again. */
   private armBubble(run: Run, line: string): void {
     this.clearTimer('bubble');
+    if (this.asking) return; // onAsking(false) starts its time
     const ms = bubbleMs(line);
     this.bubbleEndsAt = this.deps.now() + ms;
     this.bubbleTimer = this.timer(ms, () => {
