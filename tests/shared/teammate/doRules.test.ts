@@ -120,7 +120,10 @@ describe('formPreview', () => {
     expect(formPreview([box], [{ id: 'k', value: 'on' }]).rows).toHaveLength(1);
     expect(formPreview([box], [{ id: 'k', value: 'off' }]).rows).toHaveLength(1);
     expect(formPreview([box], [{ id: 'k', value: 'yes' }]).left).toEqual([{ label: 'Subscribe', reason: 'kind' }]);
-    expect(formPreview([radio], [{ id: 'r', value: 'Express' }]).rows).toHaveLength(1);
+    // The writer chooses a radio only with `on`: the row says so, whatever the model gave.
+    expect(formPreview([radio], [{ id: 'r', value: 'Express' }]).rows).toEqual([
+      { id: 'r', label: 'Express', value: 'on', checked: true },
+    ]);
   });
 });
 

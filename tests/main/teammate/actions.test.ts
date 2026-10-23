@@ -671,6 +671,17 @@ describe('ActionRunner', () => {
     expect(h.runner.putState).toBeNull();
   });
 
+  it('sends on for a radio row whatever value the model gave', async () => {
+    const medium = field('5', 'Medium', { kind: 'radio', group: 'Pizza size' });
+    const h = harness();
+    h.runner.take(info({ fields: [medium] }), { tool: 'fill', fields: [{ id: '5', value: 'Medium' }] });
+    await flush();
+    expect((h.of('form')[0] as FormState).rows).toEqual([{ id: '5', label: 'Medium', value: 'on', checked: true }]);
+    h.runner.onAction('form', { t: 'fill', ids: ['5'], serial: h.preview() });
+    await flush();
+    expect(h.of('setField')).toEqual([{ window: ASK_WINDOW, field: '5', value: 'on' }]);
+  });
+
   it('pastes into a refusing text field only with clipboardForForms on', async () => {
     const fill: ActionCall = { tool: 'fill', fields: [{ id: '1', value: 'Ada' }] };
     const off = harness({ setField: { 1: 'refused' } });

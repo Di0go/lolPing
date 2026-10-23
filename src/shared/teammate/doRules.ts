@@ -105,7 +105,8 @@ export function formPreview(
     } else if (f.kind === 'combo' && !comboAccepts(f.options, value)) {
       left.push({ label: f.label, reason: 'option' });
     } else {
-      rows.push({ id, label: f.label, value, checked: true });
+      // Any value chooses a radio (tools.ts), and the writer chooses it with `on`.
+      rows.push({ id, label: f.label, value: f.kind === 'radio' ? 'on' : value, checked: true });
     }
   }
   return { rows, left };
