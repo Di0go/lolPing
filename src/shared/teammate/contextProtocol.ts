@@ -190,8 +190,9 @@ const isSetFieldResult = (v: unknown): v is SetFieldResult => SET_FIELD_RESULTS.
 /** Between spot texts in the read reply. */
 const RECORD_SEPARATOR = '\u001e';
 
-/** The helper's caps (kSelectionMax and the rest in context.h), applied again here in case a helper ever doesn't. */
-const SELECTION_MAX = 4000;
+/** The helper's caps (kSelectionMax and the rest in context.h), applied again here in case a helper ever doesn't. A
+ *  selection this long in code points may have been cut. */
+export const SELECTION_MAX = 4000;
 const SPOT_TEXT_MAX = 2000;
 const FOCUS_VALUE_MAX = 2000;
 const ADDRESS_MAX = 2000;

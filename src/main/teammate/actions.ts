@@ -4,7 +4,7 @@ import { strings, type Lang, type Strings } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
 import type { Platform } from '../../shared/platform';
 import type { Settings } from '../../shared/settings';
-import type { PasteResult } from '../../shared/teammate/contextProtocol';
+import { SELECTION_MAX, type PasteResult } from '../../shared/teammate/contextProtocol';
 import type { Rect } from '../../shared/teammate/coords';
 import {
   allowed, formPreview, neverFill, pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow,
@@ -397,10 +397,10 @@ export class ActionRunner extends EventEmitter {
     if (run.window === '') return this.copyInstead(run, call.text, 'failed');
     const sameWindow = await this.askWindowInFront(run, signal);
     if (signal.aborted) return;
-    // The helper compares the live selection with the asked one; here it only matters that there was one.
-    const plan = pastePlan({
-      mode: call.mode, secure, sameWindow, selectionNow: run.selection, selectionAsked: run.selection,
-    });
+    // The helper compares the live selection with the asked one; here it only matters that there was one, read whole:
+    // both sides are cut at the cap, so two long selections that differ past it would compare equal.
+    const asked = Array.from(run.selection).length >= SELECTION_MAX ? '' : run.selection;
+    const plan = pastePlan({ mode: call.mode, secure, sameWindow, selectionNow: asked, selectionAsked: asked });
     if (plan.method === 'copy') return this.copyInstead(run, call.text, plan.why ?? 'failed');
     // A click puts the caret in the text field under the spot unless that field had the keyboard already. A replace
     // never clicks: that would drop the selection it pastes over.

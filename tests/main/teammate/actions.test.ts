@@ -435,6 +435,19 @@ describe('ActionRunner', () => {
     expect(h.of('toast')).toEqual([t.pasteSelection]);
   });
 
+  it('copies a replace whose selection reached the 4,000-character cap, as the rest of it was never read', async () => {
+    const h = harness({ permissions: ['fast:paste'] });
+    h.runner.take(info({ selection: 'a'.repeat(4_000) }), paste('Better.', 'replace'));
+    await flush();
+    expect(h.of('paste')).toEqual([]);
+    expect(h.of('clip')).toEqual([{ text: 'Better.' }]);
+    expect(h.of('toast')).toEqual([t.pasteSelection]);
+    // Just under the cap, the helper compares it whole.
+    h.runner.take(info({ id: 'ask2', selection: 'a'.repeat(3_999) }), paste('Better.', 'replace'));
+    await flush();
+    expect(h.of('paste')).toHaveLength(1);
+  });
+
   it('says it could not paste when the ask had no window, not that the user moved', async () => {
     const h = harness({ permissions: ['fast:paste'], foreground: [''] });
     h.runner.take(info({ window: '' }), paste());
