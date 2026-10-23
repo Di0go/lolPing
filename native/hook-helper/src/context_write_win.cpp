@@ -605,7 +605,14 @@ bool readClipboard(ClipFormat& f) {
     return GetEnhMetaFileBits(emf, n, f.bytes.data()) == n;
   }
   const SIZE_T n = GlobalSize(h);
-  const void* data = n ? GlobalLock(h) : nullptr;
+  if (n == 0) {
+    // An empty marker format (Excel, Word and password managers put some on) is a 0-byte block, which reads as
+    // discarded: it is empty, not unreadable. Only a handle that is not a memory block at all can't be saved.
+    if (GlobalFlags(h) == GMEM_INVALID_HANDLE) return false;
+    f.bytes.clear();
+    return true;
+  }
+  const void* data = GlobalLock(h);
   if (!data) return false;
   f.bytes.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + n);
   GlobalUnlock(h);
@@ -626,15 +633,18 @@ bool writeClipboard(const std::vector<ClipFormat>& formats) {
       }
       continue;
     }
-    const HGLOBAL g = id ? GlobalAlloc(GMEM_MOVEABLE, std::max<size_t>(f.bytes.size(), 1)) : nullptr;
-    void* data = g ? GlobalLock(g) : nullptr;
-    if (!data) {
+    // An empty format goes back as the 0-byte block it was read from, which has no memory to lock.
+    const HGLOBAL g = id ? GlobalAlloc(GMEM_MOVEABLE, f.bytes.size()) : nullptr;
+    void* data = g && !f.bytes.empty() ? GlobalLock(g) : nullptr;
+    if (!g || (!f.bytes.empty() && !data)) {
       if (g) GlobalFree(g);
       all = false;
       continue;
     }
-    std::copy(f.bytes.begin(), f.bytes.end(), static_cast<uint8_t*>(data));
-    GlobalUnlock(g);
+    if (data) {
+      std::copy(f.bytes.begin(), f.bytes.end(), static_cast<uint8_t*>(data));
+      GlobalUnlock(g);
+    }
     // The clipboard owns the memory once it takes it.
     if (!SetClipboardData(id, g)) {
       GlobalFree(g);

@@ -1136,6 +1136,20 @@ static void test_restore_keeps_every_saved_format() {
   }
 }
 
+// Excel, Word and password managers put empty marker formats on the clipboard; read as empty, not as unreadable, they
+// let the paste go ahead and come back empty.
+static void test_paste_keeps_an_empty_marker_format() {
+  const auto s = std::make_shared<PasteState>();
+  s->clip = {format(13, "", std::string("h\0i\0\0\0", 6)), format(0xC0E0, "Clipboard Viewer Ignore", "")};
+  CHECK(pasteResult(pastePlatform(s), pasteLine()) == "ok");
+  std::vector<ClipFormat> restored;
+  for (const ClipFormat& f : s->clip) {
+    if (!isExclusion(f)) restored.push_back(f);
+  }
+  CHECK(restored.size() == 2);
+  if (restored.size() == 2) CHECK(restored[1].name == "Clipboard Viewer Ignore" && restored[1].bytes.empty());
+}
+
 static void test_exclusion_formats_are_recognised_by_name() {
   const std::vector<ClipFormat> marks = exclusionFormats();
   CHECK(marks.size() == 3);
@@ -1605,6 +1619,7 @@ int main() {
   test_parse_paste_command();
   test_parse_set_field_command();
   test_restore_keeps_every_saved_format();
+  test_paste_keeps_an_empty_marker_format();
   test_exclusion_formats_are_recognised_by_name();
   test_paste_marks_both_writes_as_excluded();
   test_paste_refuses_a_window_that_does_not_answer();
