@@ -867,7 +867,7 @@ const char* setPopUp(AXUIElementRef el, const Node& n, const std::string& value)
   return result;
 }
 
-std::string setFieldIn(const SetFieldRequest& r, const std::function<std::string(const FieldFacts&)>& check) {
+std::string setFieldIn(const SetFieldRequest& r, const std::function<std::string(const FieldFacts&)>& vet) {
   @autoreleasepool {
     pid_t pid = 0;
     uint32_t number = 0;
@@ -879,7 +879,7 @@ std::string setFieldIn(const SetFieldRequest& r, const std::function<std::string
     if (!registry().find(r.field, known) || known.pid != pid || known.window != number) return "gone";
     const Node n = readNode(known.el.el());
     if (n.role.empty()) return "gone";
-    if (const std::string refused = check(factsOf(known.el.el(), n)); !refused.empty()) return refused;
+    if (const std::string refused = vet(factsOf(known.el.el(), n)); !refused.empty()) return refused;
     const std::string& role = n.role;
     if (role == "AXCheckBox") return setChecked(known.el.el(), r.value);
     if (role == "AXRadioButton") return setRadio(known.el.el(), r.value);
