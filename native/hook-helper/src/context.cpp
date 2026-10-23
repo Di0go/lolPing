@@ -808,6 +808,7 @@ std::string formFieldsFileText(const std::vector<RawField>& fields) {
   std::string out;
   for (size_t i = 0; i < fields.size() && i < kMaxFormFields; ++i) {
     const RawField& f = fields[i];
+    if (f.id.size() > kFieldIdMax) continue;  // a cut id would name another field, or none
     // A password, card number or ID number is a secret whether or not the page marks it as one.
     const bool secure = f.secure || neverFillLabel(f.label);
     out += "{\"id\":" + quoted(f.id, kFieldIdMax) + ",\"kind\":" + quoted(f.kind, 16) +

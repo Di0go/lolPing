@@ -648,6 +648,9 @@ static void test_form_fields_file_keeps_one_line_per_field_and_the_caps() {
   size_t options = 0;
   for (size_t at = rows[0].find("\"o\""); at != std::string::npos; at = rows[0].find("\"o\"", at + 1)) ++options;
   CHECK(options == kMaxFieldOptions);
+  // A cut id would name another field: one that is too long is left out, as the TS parser does.
+  const std::string tooLong = formFieldsFileText({field("1." + std::string(kFieldIdMax - 1, '2'), "text", "Long"), f});
+  CHECK(lines(tooLong).size() == 1 && tooLong.find("Long") == std::string::npos);
 }
 
 static void test_form_fields_file_gives_each_field_its_box() {
