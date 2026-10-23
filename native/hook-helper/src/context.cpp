@@ -732,30 +732,46 @@ std::string marksFileText(const std::vector<RawMark>& marks) {
 
 bool neverFillLabel(const std::string& label) {
   // The same list, in the same order, as NEVER_FILL_LABELS in src/shared/teammate/doRules.ts; both are tested against
-  // tests/fixtures/never-fill-labels.json. English patterns match whole words, so "PIN" does not catch "Shipping".
-  // Chinese has no word breaks: substrings.
+  // tests/fixtures/never-fill-labels.json. English patterns match whole words, plural too, so "PIN" does not catch
+  // "Shipping"; a `_` in the label counts as a word break. Chinese has no word breaks: substrings.
   static const std::vector<std::regex> patterns = [] {
     const char* const sources[] = {
-        R"(\bpass(?:word|wd|code|phrase)\b)",
-        R"(\bpin\b)",
-        R"(\b(?:credit|debit)\s+card\b)",
+        R"(\bpass(?:word|wd|code|phrase)s?\b)",
+        R"(\bpins?\b)",
+        R"(\b(?:credit|debit)\s+cards?\b)",
         R"(\bcard\s*(?:number|num|no|#)(?!\w))",
-        R"(\bcv[vcn]2?\b)",
-        R"(\bsecurity\s+code\b)",
-        R"(\bexpir(?:y|ation|es)\b)",
-        R"(\biban\b)",
-        R"(\b(?:account|routing)\s*(?:number|num|no)\b)",
-        R"(\bssn\b)",
+        R"(\bcv[vcn]2?s?\b)",
+        R"(\bsecurity\s+codes?\b)",
+        R"(\bexpir(?:y|ation|es)s?\b)",
+        R"(\bibans?\b)",
+        R"(\b(?:account|routing)\s*(?:number|num|no)s?\b)",
+        R"(\bssns?\b)",
         R"(\bsocial\s+security\b)",
-        R"(\bpassport\b)",
-        R"(\b(?:id|identity|identification)\s*(?:number|num|no)\b)",
+        R"(\bpassports?\b)",
+        R"(\b(?:id|identity|identification)\s*(?:number|num|no)s?\b)",
+        R"(\bexp\.?\s*dates?\b)",
+        R"(\bmm\s*/\s*yy)",
+        R"(\bvalid\s+(?:thru|through|until)\b)",
+        R"(\b(?:national|tax)\s+ids?\b)",
+        R"(\bid\s+cards?\b)",
+        R"(\btins?\b)",
+        R"(\bcc\s*(?:number|num|no)s?\b)",
+        R"(\bcard\s+verification\b)",
+        R"(\bone[-\s]time\s+codes?\b)",
+        R"(\bverification\s+codes?\b)",
+        R"(\botps?\b)",
+        R"(\bpwds?\b)",
+        R"(\bsort\s+codes?\b)",
+        R"(\ba/c\s*(?:number|num|no)s?\b)",
+        R"(\bsocial\s+insurance\b)",
     };
     std::vector<std::regex> out;
     for (const char* source : sources) out.emplace_back(source, std::regex::ECMAScript | std::regex::icase);
     return out;
   }();
   // UTF-8 bytes, as the compiler may not read this file as UTF-8: the TS list's password, card number, bank card,
-  // security code, validity period, ID card, passport and document number words, in that order.
+  // security code, validity period, ID card, passport, document number, credit card, debit card, bank account (two
+  // words), verification code, taxpayer number and social insurance words, in that order.
   static const char* const kChinese[] = {
       "\xe5\xaf\x86\xe7\xa0\x81",
       "\xe5\x8d\xa1\xe5\x8f\xb7",
@@ -765,9 +781,18 @@ bool neverFillLabel(const std::string& label) {
       "\xe8\xba\xab\xe4\xbb\xbd\xe8\xaf\x81",
       "\xe6\x8a\xa4\xe7\x85\xa7",
       "\xe8\xaf\x81\xe4\xbb\xb6\xe5\x8f\xb7",
+      "\xe4\xbf\xa1\xe7\x94\xa8\xe5\x8d\xa1",
+      "\xe5\x80\x9f\xe8\xae\xb0\xe5\x8d\xa1",
+      "\xe9\x93\xb6\xe8\xa1\x8c\xe8\xb4\xa6\xe5\x8f\xb7",
+      "\xe9\x93\xb6\xe8\xa1\x8c\xe8\xb4\xa6\xe6\x88\xb7",
+      "\xe9\xaa\x8c\xe8\xaf\x81\xe7\xa0\x81",
+      "\xe7\xba\xb3\xe7\xa8\x8e\xe4\xba\xba\xe8\xaf\x86\xe5\x88\xab\xe5\x8f\xb7",
+      "\xe7\xa4\xbe\xe4\xbf\x9d",
   };
+  std::string words = label;
+  std::replace(words.begin(), words.end(), '_', ' ');
   for (const std::regex& p : patterns) {
-    if (std::regex_search(label, p)) return true;
+    if (std::regex_search(words, p)) return true;
   }
   for (const char* word : kChinese) {
     if (label.find(word) != std::string::npos) return true;

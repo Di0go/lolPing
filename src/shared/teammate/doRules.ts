@@ -19,22 +19,39 @@ export function allowed(permissions: readonly string[], profileId: string, actio
   return permissions.includes(permissionKey(profileId, action));
 }
 
-// English patterns match whole words, so "PIN" does not catch "Shipping". Chinese has no word breaks: substrings.
+// English patterns match whole words, plural too, so "PIN" does not catch "Shipping"; a `_` in the label counts as a
+// word break ("password_confirm"). Chinese has no word breaks: substrings. 账号 alone is also a login name, so only
+// 银行账号 and 银行账户 (bank account) are listed.
 const NEVER_FILL_LABELS: readonly RegExp[] = [
-  /\bpass(?:word|wd|code|phrase)\b/i,
-  /\bpin\b/i,
-  /\b(?:credit|debit)\s+card\b/i,
+  /\bpass(?:word|wd|code|phrase)s?\b/i,
+  /\bpins?\b/i,
+  /\b(?:credit|debit)\s+cards?\b/i,
   /\bcard\s*(?:number|num|no|#)(?!\w)/i,
-  /\bcv[vcn]2?\b/i,
-  /\bsecurity\s+code\b/i,
-  /\bexpir(?:y|ation|es)\b/i,
-  /\biban\b/i,
-  /\b(?:account|routing)\s*(?:number|num|no)\b/i,
-  /\bssn\b/i,
+  /\bcv[vcn]2?s?\b/i,
+  /\bsecurity\s+codes?\b/i,
+  /\bexpir(?:y|ation|es)s?\b/i,
+  /\bibans?\b/i,
+  /\b(?:account|routing)\s*(?:number|num|no)s?\b/i,
+  /\bssns?\b/i,
   /\bsocial\s+security\b/i,
-  /\bpassport\b/i,
-  /\b(?:id|identity|identification)\s*(?:number|num|no)\b/i,
-  /密码|卡号|银行卡|安全码|有效期|身份证|护照|证件号/,
+  /\bpassports?\b/i,
+  /\b(?:id|identity|identification)\s*(?:number|num|no)s?\b/i,
+  /\bexp\.?\s*dates?\b/i,
+  /\bmm\s*\/\s*yy/i,
+  /\bvalid\s+(?:thru|through|until)\b/i,
+  /\b(?:national|tax)\s+ids?\b/i,
+  /\bid\s+cards?\b/i,
+  /\btins?\b/i,
+  /\bcc\s*(?:number|num|no)s?\b/i,
+  /\bcard\s+verification\b/i,
+  /\bone[-\s]time\s+codes?\b/i,
+  /\bverification\s+codes?\b/i,
+  /\botps?\b/i,
+  /\bpwds?\b/i,
+  /\bsort\s+codes?\b/i,
+  /\ba\/c\s*(?:number|num|no)s?\b/i,
+  /\bsocial\s+insurance\b/i,
+  /密码|卡号|银行卡|安全码|有效期|身份证|护照|证件号|信用卡|借记卡|银行账号|银行账户|验证码|纳税人识别号|社保/,
 ];
 
 // HTML autocomplete tokens for secrets; a field can carry several tokens ("billing cc-number").
@@ -42,11 +59,13 @@ const NEVER_FILL_AUTOCOMPLETE =
   /^(?:cc-number|cc-csc|cc-exp(?:-month|-year)?|current-password|new-password|one-time-code)$/;
 
 /** True for a field that is never filled: secure, an autocomplete token for a secret, or an EN or ZH label for a
- *  password, PIN, card number, security code, expiry, bank account, SSN, passport or ID number. */
+ *  password, PIN, card number, security code, expiry, bank account, SSN, passport, ID or tax number, or one-time
+ *  code. */
 export function neverFill(field: { label: string; secure: boolean; autocomplete?: string }): boolean {
   if (field.secure) return true;
   if (field.autocomplete?.toLowerCase().split(/\s+/).some((t) => NEVER_FILL_AUTOCOMPLETE.test(t))) return true;
-  return NEVER_FILL_LABELS.some((p) => p.test(field.label));
+  const label = field.label.replace(/_/g, ' ');
+  return NEVER_FILL_LABELS.some((p) => p.test(label));
 }
 
 export interface FormField {
