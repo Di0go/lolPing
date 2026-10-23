@@ -67,7 +67,8 @@ export type LayerStatus = 'off' | 'ok' | 'slow' | 'capture' | 'permission';
 /** How the helper found the file behind the window. */
 export type FileHow = 'office' | 'address' | 'title' | 'none';
 
-/** What the system says is selected, under the spots and in focus. A secure field's value is always ''. */
+/** What the system says is selected, under the spots and in focus. A secure or never-fill field gives no value and no
+ *  selection. */
 export interface SystemTextLayer {
   selection: string;
   spotTexts: string[];
@@ -222,12 +223,15 @@ function parseSystemText(o: Record<string, unknown>): SystemTextLayer | null {
   if (typeof selection !== 'string' || typeof spotTexts !== 'string' || typeof focusKind !== 'string') return null;
   if (typeof focusLabel !== 'string' || typeof focusValue !== 'string' || typeof address !== 'string') return null;
   if (typeof focusSecure !== 'boolean') return null;
-  // The helper already sends no value for a secure field; blanking it here keeps that true whatever arrives.
-  const value = focusSecure ? '' : capChars(focusValue, FOCUS_VALUE_MAX);
+  // The helper already sends no value or selection for a secure or never-fill field; blanking them here keeps that true
+  // whatever arrives. The selection is read from the focused field. Only a field's label counts: a page's is its title.
+  const secure = focusSecure || (focusKind === 'field' && neverFill({ label: focusLabel, secure: false }));
   return {
-    selection: capChars(selection, SELECTION_MAX),
+    selection: secure ? '' : capChars(selection, SELECTION_MAX),
     spotTexts: spotTexts === '' ? [] : spotTexts.split(RECORD_SEPARATOR).map((t) => capChars(t, SPOT_TEXT_MAX)),
-    focus: focusKind === '' ? null : { kind: focusKind, label: focusLabel, value, secure: focusSecure },
+    focus: focusKind === '' ? null : {
+      kind: focusKind, label: focusLabel, value: secure ? '' : capChars(focusValue, FOCUS_VALUE_MAX), secure,
+    },
     address: capChars(address, ADDRESS_MAX),
   };
 }

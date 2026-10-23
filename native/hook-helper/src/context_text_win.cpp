@@ -405,12 +405,18 @@ bool touchesPassword(IUIAutomation* uia, IUIAutomationTextRange* range) {
   return false;
 }
 
-// The paragraph under the spot when the element has text, else its name and value.
+// The paragraph under the spot when the element has text, else its name and value. A field named like a card number
+// or a password gives only its name, as its value never leaves the helper.
 std::string spotText(IUIAutomation* uia, Point p) {
   winrt::com_ptr<IUIAutomationElement> el;
   if (FAILED(uia->ElementFromPoint(POINT{p.x, p.y}, el.put())) || !el) return "";
   bool secure = false;
   if (!readable(uia, el.get(), secure)) return "";
+  const std::string name = nameOf(el.get());
+  CONTROLTYPEID type = 0;
+  el->get_CurrentControlType(&type);
+  const char* kind = kindOf(type);
+  if (kind && std::string(kind) == "field" && neverFillLabel(name)) return cutText(name, kSpotTextMax);
   if (const auto text = textPatternOf(el.get())) {
     winrt::com_ptr<IUIAutomationTextRange> range;
     if (SUCCEEDED(text->RangeFromPoint(POINT{p.x, p.y}, range.put())) && range &&
@@ -420,7 +426,6 @@ std::string spotText(IUIAutomation* uia, Point p) {
       if (paragraph.find_first_not_of(" \t\r\n") != std::string::npos) return paragraph;
     }
   }
-  const std::string name = nameOf(el.get());
   const std::string value = valuePatternText(el.get(), kSpotTextMax);
   if (value.empty() || value == name) return cutText(name, kSpotTextMax);
   return cutText(name.empty() ? value : name + "\n" + value, kSpotTextMax);

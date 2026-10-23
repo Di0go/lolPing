@@ -200,7 +200,7 @@ describe('teammate prompt context', () => {
       system: layer({ focus: { kind: 'edit', label: 'Password', value: 'hunter2', secure: true } }),
     }));
     expect(secure).toContain('Focused field: edit "Password"');
-    expect(secure).toContain('(a password field; its value is hidden)');
+    expect(secure).toContain('(a password or other secret field; its value is hidden)');
     expect(secure).not.toContain('hunter2');
     const plain = bodyOf(ctx({
       system: layer({ focus: { kind: 'edit', label: 'Name', value: 'Sam', secure: false } }),

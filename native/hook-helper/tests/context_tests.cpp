@@ -432,7 +432,7 @@ static void test_secure_focus_sends_no_value() {
   CHECK(reply.find("hunter2") == std::string::npos);
   const auto m = fields(reply);
   CHECK(m.at("type") == "read" && m.at("id") == "s1");
-  CHECK(m.at("selection") == "picked" && m.at("focusKind") == "field" && m.at("focusLabel") == "Password");
+  CHECK(m.at("selection").empty() && m.at("focusKind") == "field" && m.at("focusLabel") == "Password");
   CHECK(m.at("focusSecure") == "true");
   CHECK(m.at("spotTexts") == "spot 1");
   CHECK(m.at("address") == "https://example.com/login");
@@ -440,6 +440,33 @@ static void test_secure_focus_sends_no_value() {
   const std::string two = handleCommand(parseCommand(
       R"({"type":"read","id":"s2","spots":"1,2;3,4","text":true,"dir":"C:\\t"})"), p).line;
   CHECK(two.find(R"("spotTexts":"spot 1\u001espot 2")") != std::string::npos);
+}
+
+static void test_never_fill_focus_sends_no_value_and_no_selection() {
+  Fake fake;
+  ContextPlatform p = readPlatform(fake);
+  p.systemText = [](const std::vector<Point>&, bool, SystemText& out, Failure&) {
+    out.selection = "4111111111111111";
+    out.focusKind = "field";
+    out.focusLabel = "Card number";  // the page does not mark it as a password
+    out.focusValue = "4111111111111111";
+    out.focusSecure = false;
+    return true;
+  };
+  const std::string reply = handleCommand(parseCommand(readLine("s3", R"("text":true,)")), p).line;
+  CHECK(reply.find("4111") == std::string::npos);
+  const auto m = fields(reply);
+  CHECK(m.at("focusValue").empty() && m.at("selection").empty());
+  CHECK(m.at("focusSecure") == "true" && m.at("focusLabel") == "Card number");
+  // A page is named after its title; a selection on a page about passwords is still sent.
+  p.systemText = [](const std::vector<Point>&, bool, SystemText& out, Failure&) {
+    out.selection = "Step 2";
+    out.focusKind = "other";
+    out.focusLabel = "Reset your password";
+    return true;
+  };
+  const auto page = fields(handleCommand(parseCommand(readLine("s4", R"("text":true,)")), p).line);
+  CHECK(page.at("selection") == "Step 2" && page.at("focusSecure") == "false");
 }
 
 static void test_read_runs_its_layers_under_one_deadline() {
@@ -1621,6 +1648,7 @@ int main() {
   test_read_leaves_out_the_layers_that_are_off();
   test_read_reports_a_failed_layer_and_keeps_the_others();
   test_secure_focus_sends_no_value();
+  test_never_fill_focus_sends_no_value_and_no_selection();
   test_read_runs_its_layers_under_one_deadline();
   test_read_looks_up_a_browser_address_once();
   test_read_sends_what_finished_and_exits_after_a_slow_layer();

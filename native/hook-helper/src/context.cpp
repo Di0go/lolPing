@@ -563,11 +563,14 @@ Reply handleRead(const Command& cmd, const ContextPlatform& platform, int budget
       if (i > 0) spotTexts += kRecordSep;
       spotTexts += s;
     }
-    // A password field's value never leaves the helper, whatever the probe read.
-    const std::string value = t.focusSecure ? std::string() : t.focusValue;
-    line += ",\"selection\":\"" + jsonEscape(t.selection) + "\",\"spotTexts\":\"" + jsonEscape(spotTexts) +
+    // A password or never-fill field's value never leaves the helper, whatever the probe read; the selection is read
+    // from the focused field, so it goes too. Only a field's label counts: a page's is its title ("Reset password").
+    const bool secure = t.focusSecure || (t.focusKind == "field" && neverFillLabel(t.focusLabel));
+    const std::string value = secure ? std::string() : t.focusValue;
+    const std::string selection = secure ? std::string() : t.selection;
+    line += ",\"selection\":\"" + jsonEscape(selection) + "\",\"spotTexts\":\"" + jsonEscape(spotTexts) +
             "\",\"focusKind\":\"" + jsonEscape(t.focusKind) + "\",\"focusLabel\":\"" + jsonEscape(t.focusLabel) +
-            "\",\"focusValue\":\"" + jsonEscape(value) + "\",\"focusSecure\":" + (t.focusSecure ? "true" : "false") +
+            "\",\"focusValue\":\"" + jsonEscape(value) + "\",\"focusSecure\":" + (secure ? "true" : "false") +
             ",\"address\":\"" + jsonEscape(t.address) + "\"";
   }
   const std::string boxes = layerStatus(wantBoxes, inTime(wantBoxes, screenAt), *boxesJob);

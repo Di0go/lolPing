@@ -267,8 +267,8 @@ const oneLine = (t: string): string => t.replace(/\s*[\r\n]+\s*/g, ' ').replace(
 
 function focusSection(focus: NonNullable<SystemTextLayer['focus']>): string {
   const head = `Focused field: ${oneLine(focus.kind)} "${oneLine(focus.label)}"`;
-  // A password's value is never printed, even if one got here.
-  if (focus.secure) return `${head}\n(a password field; its value is hidden)`;
+  // A password's value is never printed, even if one got here. A card number or ID field counts as secure too.
+  if (focus.secure) return `${head}\n(a password or other secret field; its value is hidden)`;
   return focus.value ? `${head}\n${focus.value}` : head;
 }
 

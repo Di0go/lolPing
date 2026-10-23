@@ -146,6 +146,21 @@ describe('contextProtocol', () => {
     expect(parseContextLine(readLine(noFlag))).toBeNull();
   });
 
+  it('treats a focused field with a never-fill label as secure: no value, no selection', () => {
+    const reply = parseContextLine(readLine({
+      ...textFields, focusLabel: 'Card number', focusValue: '4111111111111111', selection: '4111111111111111',
+    }));
+    expect(reply).toMatchObject({
+      text: { selection: '', focus: { kind: 'field', label: 'Card number', value: '', secure: true } },
+    });
+    expect(JSON.stringify(reply)).not.toContain('4111');
+    // A page is named after its title; a selection on a page about passwords is still read.
+    const page = parseContextLine(readLine({
+      ...textFields, focusKind: 'other', focusLabel: 'Reset your password', focusValue: '', selection: 'Step 2',
+    }));
+    expect(page).toMatchObject({ text: { selection: 'Step 2', focus: { secure: false } } });
+  });
+
   it('cuts the helper\'s text to its caps in code points, whatever the helper sent', () => {
     const han = '\u{20000}'; // one code point, two UTF-16 units
     const reply = parseContextLine(readLine({

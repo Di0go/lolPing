@@ -231,12 +231,15 @@ bool pageAddress(AXUIElementRef window, Clock::time_point deadline, std::string&
   return bar;
 }
 
-// The paragraph under the spot when the element has text, else its name and value.
+// The paragraph under the spot when the element has text, else its name and value. A field named like a card number
+// or a password gives only its name, as its value never leaves the helper.
 std::string spotText(AXUIElementRef system, Point p, Clock::time_point deadline) {
   const Ref el = elementAt(system, p);
   if (!el || guardOf(el.el()) != Guard::Open) return "";
   const Node n = readNode(el.el());
   const std::string name = nameOf(n);
+  const char* kind = kindOf(n);
+  if (kind && std::string(kind) == "field" && neverFillLabel(name)) return cutText(name, kSpotTextMax);
   std::string value = textOf(attr(el.el(), kAXValueAttribute).get(), kSpotTextMax);
   if (!value.empty() && mayHoldSecureField(el.el(), deadline)) value.clear();
   if (value.empty() || value == name) return cutText(name, kSpotTextMax);
