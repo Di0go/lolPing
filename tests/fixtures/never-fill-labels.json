@@ -62,6 +62,7 @@
   {"label":"Valid until","neverFill":true},
   {"label":"OTP","neverFill":true},
   {"label":"银行账户","neverFill":true},
+  {"label":"Expiry (MM/YY)","neverFill":true},
   {"label":"Full name","neverFill":false},
   {"label":"Email","neverFill":false},
   {"label":"Address","neverFill":false},
@@ -82,5 +83,7 @@
   {"label":"Destination","neverFill":false},
   {"label":"CC","neverFill":false},
   {"label":"Expected arrival","neverFill":false},
-  {"label":"Option","neverFill":false}
+  {"label":"Option","neverFill":false},
+  {"label":"Date of birth (DD/MM/YYYY)","neverFill":false},
+  {"label":"Start date (MM/YYYY)","neverFill":false}
 ]

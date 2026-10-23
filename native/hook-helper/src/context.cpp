@@ -753,7 +753,7 @@ bool neverFillLabel(const std::string& label) {
         R"(\bpassports?\b)",
         R"(\b(?:id|identity|identification)\s*(?:number|num|no)s?\b)",
         R"(\bexp\.?\s*dates?\b)",
-        R"(\bmm\s*/\s*yy)",
+        R"(\bmm\s*/\s*yy\b)",
         R"(\bvalid\s+(?:thru|through|until)\b)",
         R"(\b(?:national|tax)\s+ids?\b)",
         R"(\bid\s+cards?\b)",

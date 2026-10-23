@@ -37,7 +37,7 @@ const NEVER_FILL_LABELS: readonly RegExp[] = [
   /\bpassports?\b/i,
   /\b(?:id|identity|identification)\s*(?:number|num|no)s?\b/i,
   /\bexp\.?\s*dates?\b/i,
-  /\bmm\s*\/\s*yy/i,
+  /\bmm\s*\/\s*yy\b/i,
   /\bvalid\s+(?:thru|through|until)\b/i,
   /\b(?:national|tax)\s+ids?\b/i,
   /\bid\s+cards?\b/i,
