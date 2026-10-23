@@ -167,8 +167,10 @@ bool responsive(const std::string& window) {
     CFTypeRef role = nullptr;
     const AXError error = AXUIElementCopyAttributeValue(el.el(), kAXRoleAttribute, &role);
     if (role) CFRelease(role);
-    // An unsupported attribute or API still answered; only a messaging failure means it may paste late.
-    return error != kAXErrorCannotComplete;
+    // Only an answer from the app counts, even one saying the attribute is missing; any other error (a timeout, a
+    // denied or failed call) may mean it would take the ⌘V late.
+    return error == kAXErrorSuccess || error == kAXErrorAttributeUnsupported || error == kAXErrorNoValue ||
+           error == kAXErrorNotImplemented;
   }
 }
 
