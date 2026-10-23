@@ -83,6 +83,8 @@ const TITLE_MAX = 60;
 const BUBBLE_OFFSET = { x: 24, y: -24 };
 
 const DONE: Part[] = [{ text: 'Done.' }];
+/** A paste, fill, event or open waits for the user's consent or the form preview: not done yet. */
+const ASKED: Part[] = [{ text: 'Asked the user; it happens if they agree.' }];
 const NOT_AVAILABLE: Part[] = [{ text: 'Not available.' }];
 const INVALID: Part[] = [{ text: 'Ignored: the arguments were not valid.' }];
 const OVER_LIMIT: Part[] = [{
@@ -605,7 +607,7 @@ export class AskController extends EventEmitter {
       } else if (!kept.has(call)) {
         results.set(raw, OVER_LIMIT);
       } else {
-        results.set(raw, DONE);
+        results.set(raw, isAction(call) && call.tool !== 'copy' ? ASKED : DONE);
         valid.push({ raw, call });
       }
     }

@@ -1024,7 +1024,7 @@ describe('AskController', () => {
       expect(h.requests[1].tools.map((d) => d.name)).not.toContain('fill');
     });
 
-    it('hands each valid action call to the runner once and tells the model Done', async () => {
+    it('hands each valid action call to the runner once and tells the model which wait for the user', async () => {
       let second: Turn[] = [];
       const h = harness({
         recordActions: true,
@@ -1050,8 +1050,10 @@ describe('AskController', () => {
         { tool: 'copy', text: 'Friday works.' },
         { tool: 'open', url: 'https://example.com' },
       ]);
+      // A copy is done at once; a paste or an open waits for the user, and the model must not take it as done.
       const done = [{ text: 'Done.' }];
-      expect(results(second).map((r) => r.content)).toEqual([done, done, done, done, [{ text: 'Not available.' }]]);
+      const asked = [{ text: 'Asked the user; it happens if they agree.' }];
+      expect(results(second).map((r) => r.content)).toEqual([asked, done, asked, done, [{ text: 'Not available.' }]]);
     });
 
     it('refuses a call to a tool the ask was not given, and passes nothing to the runner', async () => {
