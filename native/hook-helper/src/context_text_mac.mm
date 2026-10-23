@@ -32,6 +32,8 @@ constexpr size_t kAddressNodes = 1500;
 // The probe's own limit, inside the 1 s the caller gives it: past it a walk stops and the probe answers with what
 // it has, rather than the helper being restarted for answering late.
 constexpr std::chrono::milliseconds kWalkBudget{800};
+// Paste checks also read field facts within 800 ms; leave room for those and the last AX call.
+constexpr std::chrono::milliseconds kSelectionBudget{400};
 
 bool isFile(const std::string& path) {
   struct stat st;
@@ -313,7 +315,6 @@ bool systemTextAt(const std::vector<Point>& spots, bool withAddress, SystemText&
     if (!withAddress) return true;
     const Ref app = attr(system.el(), kAXFocusedApplicationAttribute);
     if (isElement(app) && !unreadableApp(app.el()) && isBrowser(app.el())) {
-      AXUIElementSetMessagingTimeout(app.el(), 1.0f);  // a hung browser must not stall the reply
       const Ref window = attr(app.el(), kAXFocusedWindowAttribute);
       std::string path, address;
       if (isElement(window) && pageAddress(window.el(), deadline, path, address)) {
@@ -334,7 +335,7 @@ bool focusedSelection(std::string& out) {
     const Ref system = systemWide();
     if (!system) return false;
     SystemText text;
-    readFocus(system.el(), Clock::now() + kWalkBudget, text);
+    readFocus(system.el(), Clock::now() + kSelectionBudget, text);
     if (text.focusKind.empty() || text.focusSecure) return false;
     out = std::move(text.selection);
     return true;
@@ -355,7 +356,6 @@ bool fileBehindWindow(std::string& path, std::string& address, std::string& how,
     }
     const Ref app = attr(system.el(), kAXFocusedApplicationAttribute);
     if (!isElement(app) || unreadableApp(app.el())) return true;
-    AXUIElementSetMessagingTimeout(app.el(), 1.0f);
     const Ref window = attr(app.el(), kAXFocusedWindowAttribute);
     if (!isElement(window)) return true;
     if (isBrowser(app.el())) {

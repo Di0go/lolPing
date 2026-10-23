@@ -849,6 +849,7 @@ struct PasteState {
   int failedOpens = 0;   // opens that fail before one succeeds; -1: every open fails
   int opensAllowed = -1;  // opens that succeed before every later one fails; -1: no limit
   std::vector<ClipFormat> clip;
+  std::string unreadable;  // the name of a listed format whose bytes can't be read
   std::vector<std::vector<ClipFormat>> writes;
   uint32_t sequence = 1;  // the clipboard's: each write moves it on
   // The command loop's clock: waits move it on, and so do the calls given a cost here.
@@ -939,8 +940,9 @@ ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
     return listed;
   };
   p.readClipboard = [s](ClipFormat& f) {
+    if (!s->unreadable.empty() && f.name == s->unreadable) return false;
     for (const ClipFormat& have : s->clip) {
-      if (have.id == f.id) {
+      if (have.id == f.id && have.name == f.name) {
         f.bytes = have.bytes;
         return true;
       }
@@ -1256,6 +1258,86 @@ static void test_paste_gives_up_on_a_busy_clipboard() {
   CHECK(pasteResult(pastePlatform(later), pasteLine()) == "ok");
 }
 
+static void test_paste_refuses_when_the_clipboard_cannot_be_saved() {
+  // Windows formats and macOS items (whose ids are all zero) must both survive a partial read failure.
+  const std::vector<std::vector<ClipFormat>> clipboards = {
+      {format(13, "", std::string("h\0i\0\0\0", 6)), format(0xC09E, "HTML Format", "<b>mine</b>"),
+       format(0xC0C0, "Private Format", "\x01")},
+      {format(0, "0|public.utf8-plain-text", "mine"), format(0, "0|public.html", "<b>mine</b>"),
+       format(0, "1|com.apple.pasteboard.promised-file-url", "promise")}};
+  for (const std::vector<ClipFormat>& original : clipboards) {
+    const auto s = std::make_shared<PasteState>();
+    s->clip = original;
+    s->unreadable = original.back().name;
+    const std::string line = pasteLine(R"("click":"-1820,200",)");
+    CHECK(pasteResult(pastePlatform(s), line) == "busy");
+    CHECK(s->writes.empty() && !s->saw("write") && !s->saw("ctrl+v") && !s->saw("click"));
+    const std::vector<std::string> seen = s->seen();
+    CHECK(std::count(seen.begin(), seen.end(), "open") == 1);
+    CHECK(std::count(seen.begin(), seen.end(), "close") == 1 && seen.back() == "close");
+    CHECK(s->sequence == 1 && s->clip.size() == original.size());
+    if (s->clip.size() == original.size()) {
+      for (size_t i = 0; i < original.size(); ++i) {
+        CHECK(s->clip[i].id == original[i].id && s->clip[i].name == original[i].name &&
+              s->clip[i].bytes == original[i].bytes);
+      }
+    }
+    // With every format readable, the same route still pastes and restores each original byte.
+    s->unreadable.clear();
+    CHECK(pasteResult(pastePlatform(s), line) == "ok");
+    CHECK(s->clip.size() == original.size() + 3);
+    if (s->clip.size() == original.size() + 3) {
+      for (size_t i = 0; i < original.size(); ++i) {
+        CHECK(s->clip[i].id == original[i].id && s->clip[i].name == original[i].name &&
+              s->clip[i].bytes == original[i].bytes);
+      }
+    }
+  }
+}
+
+static void test_paste_asks_the_front_window_without_calling_into_the_app() {
+  const auto s = std::make_shared<PasteState>();
+  ContextPlatform p = pastePlatform(s);
+  p.foreground = [s](std::string&, std::string&, std::string&, Failure&) {
+    s->note("foreground");
+    return false;
+  };
+  p.frontWindowId = [s] {
+    s->note("front");
+    return s->fg;
+  };
+  CHECK(pasteResult(p, pasteLine()) == "ok");
+  CHECK(s->saw("front") && !s->saw("foreground") && s->saw("ctrl+v"));
+  s->answers = false;
+  CHECK(pasteResult(p, pasteLine()) == "hung");
+  // An unreadable or different front window refuses, even if foreground could name the original window.
+  p.foreground = pastePlatform(s).foreground;
+  p.frontWindowId = [] { return std::string(); };
+  CHECK(pasteResult(p, pasteLine()) == "window");
+  p.frontWindowId = [] { return std::string("777"); };
+  CHECK(pasteResult(p, pasteLine()) == "window");
+}
+
+static void test_setfield_asks_the_front_window_without_calling_into_the_app() {
+  const auto s = std::make_shared<PasteState>();
+  ContextPlatform p = pastePlatform(s);
+  p.foreground = [s](std::string&, std::string&, std::string&, Failure&) {
+    s->note("foreground");
+    return false;
+  };
+  p.frontWindowId = [s] {
+    s->note("front");
+    return s->fg;
+  };
+  const Command cmd = parseCommand(R"({"type":"setField","id":"s1","window":"263544","field":"1.2","value":"x"})");
+  const auto got = fields(handleCommand(cmd, p).line);
+  CHECK(got.at("type") == "set" && got.at("result") == "ok");
+  CHECK(s->saw("front") && !s->saw("foreground") && s->written == std::vector<std::string>{"x"});
+  s->fg = "777";
+  CHECK(fields(handleCommand(cmd, p).line).at("result") == "window");
+  CHECK(!s->saw("foreground") && s->written.size() == 1);
+}
+
 static void test_paste_clicks_presses_ctrl_v_and_restores_a_second_later() {
   const auto s = std::make_shared<PasteState>();
   CHECK(pasteResult(pastePlatform(s), pasteLine(R"("click":"-1820,200",)")) == "ok");
@@ -1505,6 +1587,9 @@ int main() {
   test_paste_fails_closed_when_its_checks_run_over();
   test_hands_off_ignores_released_keys();
   test_paste_gives_up_on_a_busy_clipboard();
+  test_paste_refuses_when_the_clipboard_cannot_be_saved();
+  test_paste_asks_the_front_window_without_calling_into_the_app();
+  test_setfield_asks_the_front_window_without_calling_into_the_app();
   test_paste_clicks_presses_ctrl_v_and_restores_a_second_later();
   test_paste_clicks_only_on_the_field_it_was_meant_for();
   test_paste_click_finds_its_field_above_the_element_hit();

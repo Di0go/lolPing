@@ -1040,6 +1040,7 @@ std::string resultLine(const char* type, const std::string& id, const std::strin
 
 // The window in front now, by the foreground reply's id; empty when it can't be read.
 std::string frontWindow(const ContextPlatform& p) {
+  if (p.frontWindowId) return p.frontWindowId();
   std::string app, title, window;
   Failure fail;
   return p.foreground(app, title, window, fail) ? window : std::string();
@@ -1233,9 +1234,19 @@ Reply handlePaste(const Command& cmd, const ContextPlatform& p, int budgetMs) {
   if (replace && !checks->selectionHolds) return reply("selection");
 
   if (!openClipboardSoon(p)) return reply("busy");
+  // A clipboard that can't be read whole can't be put back: nothing is written over it.
   std::vector<ClipFormat> saved;
+  bool whole = true;
   for (ClipFormat f : formatsToRestore(p.clipboardFormats())) {
-    if (p.readClipboard(f)) saved.push_back(std::move(f));
+    if (p.readClipboard(f)) {
+      saved.push_back(std::move(f));
+    } else {
+      whole = false;
+    }
+  }
+  if (!whole) {
+    p.closeClipboard();
+    return reply("busy");
   }
   // Too late to click, wait a second and put the clipboard back before the client gives up on the reply.
   const int64_t tail = (r.click ? kClickSettleMs : 0) + kAnswerWaitMs + kRestoreAfterMs + kRestoreReserveMs;

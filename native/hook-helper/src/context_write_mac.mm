@@ -6,13 +6,14 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <Carbon/Carbon.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <ctime>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <iterator>
@@ -34,12 +35,6 @@ bool focusedSelection(std::string& out);
 
 namespace {
 
-// Each Accessibility call is held to these, so one app that stops answering costs a call, not a whole budget. They are
-// set on the system-wide element, which covers every element this process reads.
-constexpr float kWalkCallSeconds = 0.3f;
-constexpr float kFactsCallSeconds = 0.4f;
-constexpr float kSetCallSeconds = 0.5f;
-constexpr float kAnswerSeconds = static_cast<float>(kAnswerWaitMs) / 1000.0f;
 // Stops with the fields found so far, short of the 1 s probe budget, so a big form still gives some.
 constexpr std::chrono::milliseconds kFieldsBudget{700};
 constexpr size_t kFieldNodes = 6000;  // elements looked at before the search gives up
@@ -60,7 +55,7 @@ constexpr int kEventGapMs = 10;
 // The nspasteboard.org markers: clipboard managers skip an item that has either one.
 NSString* const kTransientType = @"org.nspasteboard.TransientType";
 NSString* const kConcealedType = @"org.nspasteboard.ConcealedType";
-constexpr CGKeyCode kKeyV = 9;  // kVK_ANSI_V
+constexpr CGKeyCode kFallbackKeyV = 9;  // kVK_ANSI_V
 
 void sleepMs(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
@@ -81,13 +76,6 @@ std::string oneLine(const std::string& text) {
     }
   }
   return trimmed(out);
-}
-
-// The system-wide element, with every call this process makes held to `seconds`.
-Ref systemWithin(float seconds) {
-  Ref system(AXUIElementCreateSystemWide());
-  if (system) AXUIElementSetMessagingTimeout(system.el(), seconds);
-  return system;
 }
 
 bool flagOf(AXUIElementRef el, CFStringRef name) {
@@ -175,11 +163,12 @@ bool responsive(const std::string& window) {
     if (!app || app.terminated) return false;
     const Ref el(AXUIElementCreateApplication(pid));
     if (!el) return false;
-    AXUIElementSetMessagingTimeout(el.el(), kAnswerSeconds);
+    AXUIElementSetMessagingTimeout(el.el(), static_cast<float>(kAnswerWaitMs) / 1000.0f);
     CFTypeRef role = nullptr;
     const AXError error = AXUIElementCopyAttributeValue(el.el(), kAXRoleAttribute, &role);
     if (role) CFRelease(role);
-    return error == kAXErrorSuccess;
+    // An unsupported attribute or API still answered; only a messaging failure means it may paste late.
+    return error != kAXErrorCannotComplete;
   }
 }
 
@@ -198,10 +187,9 @@ struct Known {
 
 class Registry {
  public:
-  /** A number for the read about to start; it starts from the clock, so a restarted helper does not repeat one. */
+  /** A generation for this read, seeded per process so quick helper restarts do not start at the same number. */
   int32_t nextRead() {
     const std::lock_guard<std::mutex> hold(lock_);
-    if (counter_ == 0) counter_ = static_cast<int32_t>(std::time(nullptr) % 1000000000) + 1;
     counter_ = counter_ >= 2000000000 ? 1 : counter_ + 1;
     return counter_;
   }
@@ -243,7 +231,7 @@ class Registry {
   static constexpr size_t kReads = 4;
   mutable std::mutex lock_;
   std::deque<std::vector<Known>> reads_;
-  int32_t counter_ = 0;
+  int32_t counter_ = static_cast<int32_t>((arc4random() ^ static_cast<uint32_t>(getpid())) % 2000000000u) + 1;
 };
 
 // Never destroyed: a probe thread that ran over its budget may still be using it when the helper exits.
@@ -277,12 +265,15 @@ std::string labelOf(AXUIElementRef el, const Node& n) {
   }
   if (!n.title.empty()) return n.title;
   if (!n.description.empty()) return n.description;
-  return trimmed(textOf(attr(el, kAXPlaceholderValueAttribute).get(), kNameMax));
+  return trimmed(textOf(attr(el, CFSTR("AXPlaceholderValue")).get(), kNameMax));
 }
 
 // A checkbox's or radio's AXValue: 1 on, 0 off, 2 mixed; -1 when it can't be read.
 int checkState(AXUIElementRef el) {
   const Ref v = attr(el, kAXValueAttribute);
+  if (v && CFGetTypeID(v.get()) == CFBooleanGetTypeID()) {
+    return CFBooleanGetValue(static_cast<CFBooleanRef>(v.get())) ? 1 : 0;
+  }
   int state = -1;
   if (v && CFGetTypeID(v.get()) == CFNumberGetTypeID() &&
       CFNumberGetValue(static_cast<CFNumberRef>(v.get()), kCFNumberIntType, &state)) {
@@ -435,7 +426,7 @@ bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, F
   @autoreleasepool {
     if (noAccess(fail)) return false;
     const Clock::time_point deadline = Clock::now() + kFieldsBudget;
-    const Ref system = systemWithin(kWalkCallSeconds);
+    const Ref system = systemWide();
     if (!system) {
       fail.message = "could not reach the Accessibility API";
       return false;
@@ -512,14 +503,24 @@ bool fieldFactsAt(std::optional<Point> at, FieldFacts& out) {
   @autoreleasepool {
     Failure fail;
     if (noAccess(fail)) return false;
-    const Ref system = systemWithin(kFactsCallSeconds);
+    const Ref system = systemWide();
     if (!system) return false;
     Ref el;
     if (at) {
       el = elementAt(system.el(), *at);
     } else {
-      el = attr(system.el(), kAXFocusedUIElementAttribute);
-      if (!isElement(el) || unreadableApp(el.el())) el.reset();
+      const AXError error = AXUIElementCopyAttributeValue(system.el(), kAXFocusedUIElementAttribute, el.put());
+      if (error == kAXErrorNoValue) {
+        // A responsive app can have no focused control; a click may still put the caret in an allowed field.
+        const Ref app = attr(system.el(), kAXFocusedApplicationAttribute);
+        pid_t pid = 0;
+        if (!isElement(app) || unreadableApp(app.el()) || AXUIElementGetPid(app.el(), &pid) != kAXErrorSuccess ||
+            !responsive(frontWindowKey(pid))) return false;
+        out = FieldFacts{};
+        out.kind = "other";
+        return true;
+      }
+      if (error != kAXErrorSuccess || !isElement(el) || unreadableApp(el.el())) el.reset();
     }
     if (!el) return false;
     const Node n = readNode(el.el());
@@ -570,7 +571,7 @@ bool parseFormatName(const std::string& name, size_t& item, std::string& type) {
 // only.
 NSArray<NSPasteboardItem*>* g_items = nil;
 
-// Data an app promises and makes up when asked (a file drag, say) can block on its owner: not saved.
+// A promised type stays listed, but reading it is refused before asking its owner to produce data.
 bool promised(NSString* type) { return [type.lowercaseString containsString:@"promise"]; }
 
 // The pasteboard is not opened or locked: nothing to wait for.
@@ -583,7 +584,7 @@ std::vector<ClipFormat> clipboardFormats() {
     for (NSUInteger i = 0; i < g_items.count; ++i) {
       for (NSPasteboardType type in g_items[i].types) {
         const char* c = type.UTF8String;
-        if (c && !promised(type)) out.push_back(ClipFormat{0, formatName(i, c), {}});
+        if (c) out.push_back(ClipFormat{0, formatName(i, c), {}});
       }
     }
   }
@@ -596,10 +597,14 @@ bool readClipboard(ClipFormat& f) {
     std::string type;
     if (!parseFormatName(f.name, item, type) || !g_items || item >= g_items.count) return false;
     NSString* name = [NSString stringWithUTF8String:type.c_str()];
-    NSData* data = name ? [g_items[item] dataForType:name] : nil;
+    if (!name || promised(name)) return false;
+    NSData* data = [g_items[item] dataForType:name];
     if (!data) return false;
-    const auto* bytes = static_cast<const uint8_t*>(data.bytes);
-    f.bytes.assign(bytes, bytes + data.length);
+    f.bytes.clear();
+    if (data.length > 0) {
+      const auto* bytes = static_cast<const uint8_t*>(data.bytes);
+      f.bytes.assign(bytes, bytes + data.length);
+    }
     return true;
   }
 }
@@ -691,11 +696,44 @@ bool clickAt(Point at) {
   return up;
 }
 
+// The Command mapping matters for layouts such as Dvorak-QWERTY Command.
+std::optional<CGKeyCode> commandVInLayout(TISInputSourceRef source) {
+  if (!source) return std::nullopt;
+  const CFTypeRef property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
+  if (!property || CFGetTypeID(property) != CFDataGetTypeID()) return std::nullopt;
+  const CFDataRef data = static_cast<CFDataRef>(property);
+  if (CFDataGetLength(data) == 0) return std::nullopt;
+  const auto* layout = reinterpret_cast<const UCKeyboardLayout*>(CFDataGetBytePtr(data));
+  for (UInt16 key = 0; key < 128; ++key) {
+    UInt32 dead = 0;
+    UniChar chars[4] = {};
+    UniCharCount count = 0;
+    const OSStatus status = UCKeyTranslate(layout, key, kUCKeyActionDown, cmdKey >> 8,
+                                          static_cast<UInt32>(LMGetKbdType()), kUCKeyTranslateNoDeadKeysMask,
+                                          &dead, 4, &count, chars);
+    if (status == noErr && count == 1 && chars[0] == 'v') return key;
+  }
+  return std::nullopt;
+}
+
+CGKeyCode commandVKey() {
+  // The command loop (including pressPaste) is on main. TIS must never be called by an AX probe worker.
+  if (![NSThread isMainThread]) return kFallbackKeyV;
+  const TISInputSourceRef current = TISCopyCurrentKeyboardLayoutInputSource();
+  const Ref heldCurrent(current);
+  if (const auto key = commandVInLayout(current)) return *key;
+  const TISInputSourceRef ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
+  const Ref heldAscii(ascii);
+  if (const auto key = commandVInLayout(ascii)) return *key;
+  return kFallbackKeyV;
+}
+
 // ⌘V as a V key press carrying the Command flag, the way the wheel's own replayed keys do (hooks_mac.cpp): the real
 // ⌘ key never goes down, so nothing can be left held. Both events are made before either is sent.
 bool pressCommandV() {
-  CGEventRef down = CGEventCreateKeyboardEvent(nullptr, kKeyV, true);
-  CGEventRef up = CGEventCreateKeyboardEvent(nullptr, kKeyV, false);
+  const CGKeyCode key = commandVKey();
+  CGEventRef down = CGEventCreateKeyboardEvent(nullptr, key, true);
+  CGEventRef up = CGEventCreateKeyboardEvent(nullptr, key, false);
   if (!down || !up) {
     if (down) CFRelease(down);
     if (up) CFRelease(up);
@@ -791,6 +829,20 @@ Ref itemNamed(const Node& n, int levels, const std::string& value, bool& listed)
   return Ref();
 }
 
+// AXCancel belongs to the menu, not to the pop-up button that opened it.
+Ref menuBelow(const Node& n, int levels) {
+  if (levels == 0 || !n.children) return Ref();
+  const CFArrayRef kids = static_cast<CFArrayRef>(n.children.get());
+  for (CFIndex i = 0; i < CFArrayGetCount(kids); ++i) {
+    const CFTypeRef kid = CFArrayGetValueAtIndex(kids, i);
+    if (!kid || CFGetTypeID(kid) != AXUIElementGetTypeID()) continue;
+    const Node child = readNode(static_cast<AXUIElementRef>(kid));
+    if (child.role == "AXMenu") return retained(kid);
+    if (Ref found = menuBelow(child, levels - 1)) return found;
+  }
+  return Ref();
+}
+
 // Chooses the option by name: where the tree keeps it, else in the list a press opens. A web page's select takes
 // a value set and ignores it (spec §16), so the item is pressed.
 const char* setPopUp(AXUIElementRef el, const Node& n, const std::string& value) {
@@ -806,7 +858,10 @@ const char* setPopUp(AXUIElementRef el, const Node& n, const std::string& value)
     }
   }
   const char* result = item && press(item.el()) ? "ok" : "refused";
-  if (opened && std::string(result) != "ok") AXUIElementPerformAction(el, kAXCancelAction);  // close what we opened
+  if (opened && std::string(result) != "ok") {
+    const Ref menu = menuBelow(readNode(el), kOptionLevels);
+    if (menu) AXUIElementPerformAction(menu.el(), kAXCancelAction);
+  }
   // A pop-up that lists nothing takes any text (comboAccepts in doRules.ts).
   if (!listed) result = setText(el, value);
   return result;
@@ -818,7 +873,7 @@ std::string setFieldIn(const SetFieldRequest& r, const std::function<std::string
     uint32_t number = 0;
     Failure fail;
     if (!splitKey(r.window, pid, number) || noAccess(fail)) return "refused";
-    const Ref system = systemWithin(kSetCallSeconds);
+    const Ref system = systemWide();
     // A field of this window only, as the id says: one from another window, or from before the helper started, is gone.
     Known known;
     if (!registry().find(r.field, known) || known.pid != pid || known.window != number) return "gone";
@@ -837,6 +892,14 @@ std::string setFieldIn(const SetFieldRequest& r, const std::function<std::string
 
 // There is no integrity level above the user's on macOS that drops input: `elevated` is never reported.
 void addWriting(ContextPlatform& p) {
+  p.frontWindowId = [] {
+    @autoreleasepool {
+      // Refresh NSWorkspace's cached foreground pid without an AX query to the target app.
+      [[NSRunLoop currentRunLoop] runUntilDate:[NSDate date]];
+      NSRunningApplication* front = NSWorkspace.sharedWorkspace.frontmostApplication;
+      return front ? frontWindowKey(front.processIdentifier) : std::string();
+    }
+  };
   p.responsive = responsive;
   p.elevated = [](const std::string&) { return false; };
   p.windowAt = windowKeyAt;

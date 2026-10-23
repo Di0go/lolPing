@@ -229,6 +229,12 @@ struct ContextPlatform {
   // Writing: paste and setField (context_write_win.cpp). Unset where the platform has none: both answer `bad`.
   // focusedSelection, fieldFacts and setField call into the target app by UI Automation: each runs on a fresh thread,
   // like the probes above, and only after `responsive` said the app answers.
+  /**
+   * The id of the window in front now, by foreground's ids, without calling into the app (no Accessibility or UI
+   * Automation call, which a frozen app would block). Optional: paste and setField window checks use it when set,
+   * else foreground. macOS sets it; Windows reads the foreground window without blocking.
+   */
+  std::function<std::string()> frontWindowId;
   /** Whether the window answers a message within 200 ms: a frozen app would take a Ctrl+V late, after the restore. */
   std::function<bool(const std::string& window)> responsive;
   /**
@@ -249,7 +255,7 @@ struct ContextPlatform {
   std::function<void()> closeClipboard;
   /** The formats on the clipboard, ids and names only, in its order. */
   std::function<std::vector<ClipFormat>()> clipboardFormats;
-  /** Fills in `format.bytes`; false for a format that has no memory handle. */
+  /** Fills in `format.bytes`; false when a listed format cannot be safely read and restored. */
   std::function<bool(ClipFormat& format)> readClipboard;
   /** Empties the clipboard and puts these formats on it. */
   std::function<bool(const std::vector<ClipFormat>& formats)> writeClipboard;

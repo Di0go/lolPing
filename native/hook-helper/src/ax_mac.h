@@ -15,6 +15,12 @@ namespace lp::ctx {
 
 using Clock = std::chrono::steady_clock;
 
+// A timeout on the system-wide element changes the default for this entire process, not just this thread.
+// All probes use the same value so concurrent reads cannot lengthen each other's calls. Half a second holds a hung
+// app to one call, and is long enough for a busy browser's tree. The frozen-app check alone sets a shorter timeout, on
+// the one app element it asks.
+constexpr float kAxMessagingTimeoutSeconds = 0.5f;
+
 constexpr size_t kNameMax = 200;  // characters of a control's name kept; the marks file cuts it further
 constexpr int kPasswordParents = 3;  // how far up a password field's inner nodes are looked for
 
@@ -179,7 +185,7 @@ inline Guard guardOf(AXUIElementRef el) {
 
 inline Ref systemWide() {
   Ref system(AXUIElementCreateSystemWide());
-  if (system) AXUIElementSetMessagingTimeout(system.el(), 1.0f);  // a hung app must not stall the reply
+  if (system) AXUIElementSetMessagingTimeout(system.el(), kAxMessagingTimeoutSeconds);
   return system;
 }
 

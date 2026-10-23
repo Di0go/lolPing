@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "ax_mac.h"
 #include "context.h"
 
 namespace lp::ctx {
@@ -247,7 +248,7 @@ bool foreground(std::string& app, std::string& title, std::string& windowId, Fai
     windowId = frontWindowId(front.processIdentifier);
     AXUIElementRef el = AXUIElementCreateApplication(front.processIdentifier);
     if (!el) return true;
-    AXUIElementSetMessagingTimeout(el, 1.0f);  // a hung app must not stall the reply
+    AXUIElementSetMessagingTimeout(el, kAxMessagingTimeoutSeconds);
     CFTypeRef window = nullptr;
     if (AXUIElementCopyAttributeValue(el, kAXFocusedWindowAttribute, &window) == kAXErrorSuccess && window) {
       CFTypeRef value = nullptr;
@@ -276,6 +277,7 @@ void addWriting(ContextPlatform& p);
 
 ContextPlatform nativePlatform() {
   NSApplicationLoad();  // a command-line process needs a window server connection for ScreenCaptureKit
+  systemWide();  // set the process-wide AX timeout before any foreground read or probe
   ContextPlatform p;
   p.grab = grab;
   p.resize = resize;

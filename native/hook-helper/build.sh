@@ -13,7 +13,7 @@ case "$(uname -s)" in
       -framework ApplicationServices -framework CoreFoundation -o build/hook-helper
     "$CXX" $FLAGS -fobjc-arc -O2 src/context_main_posix.cpp src/context_capture_mac.mm src/context_text_mac.mm \
       src/context_write_mac.mm src/context.cpp src/json.cpp -framework ScreenCaptureKit -framework CoreGraphics \
-      -framework ImageIO -framework AppKit \
+      -framework ImageIO -framework AppKit -framework Carbon \
       -framework ApplicationServices -framework CoreFoundation -o build/context-helper
     ;;
   Linux)
