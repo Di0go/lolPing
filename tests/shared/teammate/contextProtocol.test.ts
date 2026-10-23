@@ -203,6 +203,13 @@ describe('contextProtocol', () => {
     expect(parseContextLine(readLine({ fields: 'slow' }))).toMatchObject({ status: { fields: 'slow' }, fields: null });
   });
 
+  it('skips a field whose id is longer than the cap instead of cutting it into another id', () => {
+    const fields = parseFieldsFile([
+      fieldLine({ id: `1.${'2'.repeat(119)}` }), fieldLine({ id: `3.${'4'.repeat(118)}` }), fieldLine({ id: '5.6' }),
+    ].join('\n'));
+    expect(fields.map((f) => f.id)).toEqual([`3.${'4'.repeat(118)}`, '5.6']);
+  });
+
   it('skips a fields line that is not a field and keeps the rest', () => {
     const file = [
       'not json', '', '[1]', fieldLine({ id: '' }), fieldLine({ kind: 'slider' }), fieldLine({ secure: 'yes' }),

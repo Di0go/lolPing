@@ -68,6 +68,9 @@ export function neverFill(field: { label: string; secure: boolean; autocomplete?
   return NEVER_FILL_LABELS.some((p) => p.test(label));
 }
 
+/** The longest FormField id, as the helper's kFieldIdMax: one that is longer is no id of a field, not one to cut. */
+export const FIELD_ID_MAX = 120;
+
 export interface FormField {
   id: string;
   kind: 'text' | 'multiline' | 'combo' | 'checkbox' | 'radio' | 'other';

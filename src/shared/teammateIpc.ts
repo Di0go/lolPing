@@ -2,7 +2,7 @@ import type { Lang } from './i18n';
 import type { PingTag } from './ipc';
 import type { PingId } from './pings';
 import type { Platform } from './platform';
-import type { LeftField, PreviewRow, PutAction } from './teammate/doRules';
+import { FIELD_ID_MAX, type LeftField, type PreviewRow, type PutAction } from './teammate/doRules';
 
 /** state, leave (play the closing motion; the window hides after it): main → page. action, size: page → main. */
 export const TEAMMATE_CH = { state: 'mate:state', leave: 'mate:leave', action: 'mate:action', size: 'mate:size' } as const;
@@ -155,9 +155,8 @@ export const MATE_TEXT_MAX = 2000;
 export const MATE_COPY_MAX = 100_000;
 const URL_MAX = 2048;
 const QUERY_MAX = 200;
-/** The most fields one fill may name (the plan's limit), and the longest id a field has. */
+/** The most fields one fill may name (the plan's limit); each id is at most FIELD_ID_MAX long. */
 const FILL_IDS_MAX = 60;
-const FIELD_ID_MAX = 200;
 /** The same rule as HistoryStore uses before an id reaches a file name. */
 const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 

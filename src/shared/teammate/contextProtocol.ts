@@ -1,6 +1,6 @@
 import type { Point } from '../ipc';
 import type { Rect } from './coords';
-import { neverFill, type FormField } from './doRules';
+import { FIELD_ID_MAX, neverFill, type FormField } from './doRules';
 
 /** The overview's long side, its JPEG quality and the zoom crop size (spec §6.1). */
 export const OVERVIEW_LONG_SIDE = 1600;
@@ -199,7 +199,6 @@ const ADDRESS_MAX = 2000;
 
 /** The helper's caps on the form fields file (kMaxFormFields and the rest in context.h), applied again here. */
 const FIELDS_MAX = 60;
-const FIELD_ID_MAX = 120;
 const FIELD_LABEL_MAX = 120;
 const FIELD_VALUE_MAX = 2000;
 const FIELD_OPTIONS_MAX = 50;
@@ -241,7 +240,8 @@ function parseField(v: unknown): FormField | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
   const o = v as Record<string, unknown>;
   const { id, kind, label, group, value, secure, required, options, box } = o;
-  if (typeof id !== 'string' || id === '' || typeof kind !== 'string') return null;
+  // A cut id would name another field, or none: a field whose id is too long is skipped.
+  if (typeof id !== 'string' || id === '' || id.length > FIELD_ID_MAX || typeof kind !== 'string') return null;
   if (!FIELD_KINDS.includes(kind as FormField['kind'])) return null;
   if (typeof label !== 'string' || typeof group !== 'string' || typeof value !== 'string') return null;
   if (typeof secure !== 'boolean' || typeof required !== 'boolean' || !Array.isArray(options)) return null;
@@ -249,7 +249,7 @@ function parseField(v: unknown): FormField | null {
   // Without a box a field is still filled; it only gets no ping and no paste fallback.
   const rect = typeof box === 'string' ? parseRect(box) : null;
   return {
-    id: capChars(id, FIELD_ID_MAX),
+    id,
     kind: kind as FormField['kind'],
     label: capChars(label, FIELD_LABEL_MAX),
     group: capChars(group, FIELD_LABEL_MAX),

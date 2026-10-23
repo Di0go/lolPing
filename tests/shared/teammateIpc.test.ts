@@ -83,9 +83,11 @@ describe('parseMateAction', () => {
       .toEqual({ t: 'fill', ids: ['f1', 'f2'], serial: 2 });
     expect(parseMateAction({ t: 'fill', ids: ['f1'], serial: 2, extra: 1 }, 'form'))
       .toEqual({ t: 'fill', ids: ['f1'], serial: 2 });
-    for (const ids of [[], 'f1', [1], ['f1', null], [''], ['x'.repeat(201)], Array.from({ length: 61 }, (_, i) => `f${i}`)]) {
+    for (const ids of [[], 'f1', [1], ['f1', null], [''], ['x'.repeat(121)], Array.from({ length: 61 }, (_, i) => `f${i}`)]) {
       expect(parseMateAction({ t: 'fill', ids, serial: 2 }, 'form'), JSON.stringify(ids)).toBeNull();
     }
+    // As long as the helper's longest field id, and no longer.
+    expect(parseMateAction({ t: 'fill', ids: ['1'.repeat(120)], serial: 2 }, 'form')).not.toBeNull();
     expect(parseMateAction({ t: 'fill', serial: 2 }, 'form')).toBeNull();
     for (const view of ['bubble', 'card', 'words', 'history', 'consent'] as const) {
       expect(parseMateAction({ t: 'fill', ids: ['f1'], serial: 2 }, view), view).toBeNull();
