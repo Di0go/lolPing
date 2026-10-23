@@ -247,6 +247,12 @@ describe('tools', () => {
     expect(event?.description).toMatch(/last day/);
   });
 
+  it('says a copy happens at once, with no question to the user', () => {
+    const copy = toolDefs({ ...OFF, kind: 'grab' }).find((d) => d.name === 'copy');
+    expect(copy?.description).not.toMatch(/agrees/);
+    expect(copy?.description).toMatch(/at once/);
+  });
+
   it('refuses a second paste in one answer', () => {
     const paste = (text: string): ToolCall => ({ tool: 'paste', text, mode: 'insert' });
     const fill: ToolCall = { tool: 'fill', fields: [{ id: 'a', value: 'x' }] };

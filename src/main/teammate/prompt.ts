@@ -171,9 +171,10 @@ export function systemPrompt(ctx: AskContext): string {
     '- The app and the window title say what the user is doing.',
     '- Never ask the user a question back or ask for more detail. Take the most likely reading, answer it, and say in '
     + 'the line what you assumed when it was a guess.',
-    "- You can't click or type for the user. You can only do what your tools offer (`copy`, `paste`, `fill`, `event`, "
-    + '`open`), and lolPing asks the user before each one. When the task is to do something, do all of the work '
-    + 'yourself and give the finished result in `answer`, ready to copy. Never hand the job back to the user.',
+    "- You can't click or type for the user. You can only do what your tools offer, when they are offered: `copy` "
+    + 'happens at once; for `paste`, `fill`, `event` and `open`, lolPing asks the user first. When the task is to do '
+    + 'something, do all of the work yourself and give the finished result in `answer`, ready to copy. Never hand the '
+    + 'job back to the user.',
     '',
     'How to answer (the same for every ask):',
     '1. Call `say` with one sentence that is the answer or the result itself, shown in a bubble at the spot. No '

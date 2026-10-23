@@ -137,7 +137,7 @@ export function toolDefs(opts: {
   if (opts.kind === 'grab' || opts.kind === 'act') {
     defs.push({
       name: 'copy',
-      description: 'Put text or a table on the clipboard, after the user agrees. Give `text`, or `table` for a table.',
+      description: 'Put text or a table on the clipboard at once. Give `text`, or `table` for a table.',
       parameters: {
         type: 'object',
         properties: {

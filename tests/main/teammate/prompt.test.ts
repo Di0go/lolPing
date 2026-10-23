@@ -375,4 +375,12 @@ describe('teammate prompt action briefs', () => {
   it('no longer says the teammate cannot paste or copy', () => {
     expect(systemPrompt(ctx())).not.toMatch(/can't click, type, paste or copy/);
   });
+
+  it('says copy happens at once and the other actions are asked first, without promising every tool', () => {
+    const s = systemPrompt(ctx());
+    expect(s).toContain('`copy` happens at once');
+    expect(s).toContain('lolPing asks the user first');
+    expect(s).not.toContain('asks the user before each one');
+    expect(s).toMatch(/when they are offered/);
+  });
 });
