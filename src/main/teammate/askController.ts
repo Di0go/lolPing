@@ -49,7 +49,8 @@ export interface AskDeps {
     'spawnMate' | 'spawnMateEmote' | 'mateSaid' | 'clearMate' | 'fadeMate' | 'setMateTicket' | 'setCaptureExcluded'
     | 'displayAt' | 'toLocal' | 'toDip' | 'primaryDip'>;
   windows: Pick<MateWindows,
-    'showBubble' | 'updateBubble' | 'hideBubble' | 'showCard' | 'updateCard' | 'hideCard' | 'setCaptureExcluded'>;
+    'showBubble' | 'updateBubble' | 'hideBubble' | 'hideNow' | 'showCard' | 'updateCard' | 'hideCard'
+    | 'setCaptureExcluded'>;
   history: Pick<HistoryStore, 'append' | 'current' | 'amend'>;
   /** The folder each ask's own capture folder goes in. */
   tempDir: () => string;
@@ -342,10 +343,13 @@ export class AskController extends EventEmitter {
     }
   }
 
-  /** The runner hides the bubble before a click paste, so nothing of lolPing's is over the point it clicks. */
+  /**
+   * The runner hides the bubble before a click paste, so nothing of lolPing's is over the point it clicks. At once:
+   * the helper checks the point as soon as the paste starts, and a bubble still fading out would be found there.
+   */
   hideBubbleForPut(): void {
-    if (!this.bubbleShown) return;
-    this.hideBubble();
+    if (!this.bubbleShown) return this.deps.windows.hideNow('bubble'); // one still fading out from a hide just before
+    this.hideBubble(true);
     this.hiddenForPut = this.shown;
   }
 
@@ -947,12 +951,13 @@ export class AskController extends EventEmitter {
   }
 
   /** Any hide but the runner's own (a dismiss, the line's time, a new ask, a pause) keeps the bubble from coming back. */
-  private hideBubble(): void {
+  private hideBubble(now = false): void {
     this.hiddenForPut = null;
     this.clearTimer('bubble');
     this.bubbleEndsAt = 0;
     if (!this.bubbleShown) return;
-    this.deps.windows.hideBubble();
+    if (now) this.deps.windows.hideNow('bubble');
+    else this.deps.windows.hideBubble();
     this.bubbleShown = false;
   }
 

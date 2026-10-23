@@ -303,6 +303,37 @@ describe('MateWindows consent card', () => {
     }
   });
 
+  it('hides at once for a paste, without waiting for the leave motion, and takes no more clicks', () => {
+    vi.useFakeTimers();
+    try {
+      const w = openConsent();
+      mate.hideConsent();
+      expect(w.visible).toBe(true); // still in its leave motion
+      mate.hideNow('consent');
+      expect(w.visible).toBe(false);
+      sendAction(0, { t: 'allow', serial: 1 });
+      expect(actions).toEqual([]);
+
+      const shown = openConsent();
+      mate.hideNow('consent');
+      expect(shown.visible).toBe(false);
+      sendAction(0, { t: 'allow', serial: 2 });
+      expect(actions).toEqual([]);
+
+      mate.showBubble({ x: 10, y: 10 }, bubble);
+      const b = h.windows[h.windows.length - 1];
+      b.webContents.emit('did-finish-load');
+      mate.hideNow('bubble');
+      expect(b.visible).toBe(false);
+      // A show after it is not undone by a leave timer left from before.
+      mate.showConsent({ x: 500, y: 400 }, consent);
+      vi.advanceTimersByTime(1000);
+      expect(w.visible).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ignores a click on a card that was hidden, and takes clicks again on the next one', async () => {
     vi.useFakeTimers();
     try {

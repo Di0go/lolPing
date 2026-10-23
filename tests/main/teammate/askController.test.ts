@@ -230,6 +230,7 @@ function harness(opts: HarnessOptions = {}) {
       },
       updateBubble: (s) => log.push(['bubble', s]),
       hideBubble: () => log.push(['bubbleHidden', null]),
+      hideNow: (view) => log.push(['hiddenNow', view]),
       showCard: (_at, s) => log.push(['card', s]),
       updateCard: (s) => log.push(['card', s]),
       hideCard: () => log.push(['cardHidden', null]),
@@ -1151,8 +1152,10 @@ describe('AskController', () => {
       // The runner took the paste: the bubble offers it.
       h.runner.emit('put', 'paste');
       expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Ok.', put: 'paste' }));
-      // A click paste hides the bubble first; the helper then answers `hands`.
+      // A click paste hides the bubble first, at once, with no leave motion; the helper then answers `hands`.
       h.ctl.hideBubbleForPut();
+      expect(h.of('hiddenNow')).toEqual(['bubble']);
+      expect(h.of('bubbleHidden')).toHaveLength(0);
       const shown = h.of('bubble').length;
       h.runner.emit('put', 'ready');
       // The bubble comes back, so Paste when ready has somewhere to be.
@@ -1165,7 +1168,8 @@ describe('AskController', () => {
       // The paste landed: the button goes, the bubble stays.
       h.runner.emit('put', null);
       expect(h.bubbles().at(-1)?.put).toBeNull();
-      expect(h.of('bubbleHidden')).toHaveLength(1);
+      expect(h.of('bubbleHidden')).toHaveLength(0);
+      expect(h.of('hiddenNow')).toHaveLength(1);
 
       // With the card up, the card carries the button and the bubble stays away.
       h.ctl.onTeammateAction('bubble', { t: 'more' });

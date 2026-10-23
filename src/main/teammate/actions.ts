@@ -70,7 +70,7 @@ export interface ActionDeps {
   /** The folder event files are written to. */
   tempDir: () => string;
   windows: Pick<MateWindows,
-    'showConsent' | 'hideConsent' | 'showForm' | 'hideForm' | 'cardHadFocus' | 'hideCard' | 'hideBubble'>;
+    'showConsent' | 'hideConsent' | 'showForm' | 'hideForm' | 'cardHadFocus' | 'hideCard' | 'hideBubble' | 'hideNow'>;
   overlay: Pick<OverlayManager, 'toast' | 'spawnMate' | 'toLocal' | 'glow'>;
   /** Which OS the toasts are worded for (the undo key). */
   platform: Platform;
@@ -396,8 +396,7 @@ export class ActionRunner extends EventEmitter {
     // A click puts the caret in the field under the spot when nothing had the keyboard. A replace never clicks: that
     // would drop the selection it pastes over.
     const click = call.mode === 'insert' && run.focus === null && field?.box ? centre(field.box) : null;
-    // lolPing's own window over the click point would make the helper refuse.
-    if (click) this.deps.windows.hideBubble();
+    if (click) this.clearForClick();
     let reply: Awaited<ReturnType<ActionDeps['context']['paste']>>;
     try {
       reply = await this.deps.context.paste({
@@ -418,6 +417,16 @@ export class ActionRunner extends EventEmitter {
     if (box) this.deps.overlay.glow([box], run.tag);
     this.describe(run, t.didPaste(lineCount(call.text), run.app || t.thisApp));
     this.setPut(null);
+  }
+
+  /**
+   * lolPing's own window over the click point would make the helper refuse, and a card or preview still fading out
+   * counts: they go at once, and the bubble through the controller, which brings it back if the paste doesn't land.
+   */
+  private clearForClick(): void {
+    this.deps.windows.hideBubble();
+    this.deps.windows.hideNow('consent');
+    this.deps.windows.hideNow('form');
   }
 
   private async copyInstead(run: RunInfo, text: string, why: CopyWhy, extra = ''): Promise<void> {
@@ -511,7 +520,7 @@ export class ActionRunner extends EventEmitter {
   private async pasteInto(
     run: RunInfo, field: FormField, box: Rect, text: string, signal: AbortSignal,
   ): Promise<{ result: 'ok' | 'refused' | 'hung' | 'error'; restored: boolean }> {
-    this.deps.windows.hideBubble();
+    this.clearForClick();
     try {
       const r = await this.deps.context.paste(
         { window: run.window, text, click: centre(box), field: field.id, mode: 'insert', asked: '' }, signal);

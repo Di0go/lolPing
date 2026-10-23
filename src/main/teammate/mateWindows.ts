@@ -148,6 +148,24 @@ export class MateWindows extends EventEmitter {
     this.leave('form', 'fast');
   }
 
+  /**
+   * Hides the window now, without the leave motion: a paste is about to click, and the helper refuses a click that
+   * would land on a window of lolPing's, even one still fading out. A consent card or preview takes no more clicks.
+   */
+  hideNow(view: 'bubble' | 'consent' | 'form'): void {
+    const slot = this.slots[view];
+    if (slot.leaveTimer) clearTimeout(slot.leaveTimer);
+    slot.leaveTimer = null;
+    slot.ended = true;
+    const shown = slot.shown;
+    slot.shown = false;
+    const w = slot.win;
+    if (!w || w.isDestroyed()) return;
+    // The page starts its next show from the hidden state, as after a leave.
+    if (shown && slot.loaded) w.webContents.send(TEAMMATE_CH.leave, 'fast');
+    w.hide();
+  }
+
   /** Whether the open card, or the one just closed, has had keyboard focus. Cleared when the next card opens. */
   cardHadFocus(): boolean {
     return this.slots.card.hadFocus;

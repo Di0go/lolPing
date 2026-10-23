@@ -134,6 +134,7 @@ function harness(opts: Options = {}) {
       cardHadFocus: () => opts.cardHadFocus ?? false,
       hideCard: () => log.push(['cardHidden', null]),
       hideBubble: () => log.push(['bubbleHidden', null]),
+      hideNow: (view) => log.push(['hiddenNow', view]),
     },
     overlay: {
       toast: (_title, body) => log.push(['toast', body]),
@@ -580,6 +581,28 @@ describe('ActionRunner', () => {
     h.runner.take(info({ id: 'ask2', fields: [reply] }), paste());
     await flush();
     expect((h.of('paste')[1] as PasteRequest).click).toBeNull();
+  });
+
+  it('sends no click paste until the bubble, the consent card and the form preview are hidden', async () => {
+    const reply = field('9', 'Reply', { box: REPLY_BOX });
+    const h = harness();
+    h.runner.take(info({ focus: null, fields: [reply] }), paste());
+    await flush();
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    await flush();
+    const kinds = h.kinds();
+    expect(h.of('hiddenNow')).toEqual(['consent', 'form']);
+    expect(kinds.lastIndexOf('hiddenNow')).toBeLessThan(kinds.indexOf('paste'));
+    expect(kinds.indexOf('bubbleHidden')).toBeLessThan(kinds.indexOf('paste'));
+
+    // A refusing field filled by a paste: the preview it was chosen in is gone at once too.
+    const form = harness({ setField: { 1: 'refused' }, clipboardForForms: true });
+    form.runner.take(info({ fields: FIELDS }), { tool: 'fill', fields: [{ id: '1', value: 'Ada' }] });
+    await flush();
+    form.runner.onAction('form', { t: 'fill', ids: ['1'], serial: form.preview() });
+    await flush();
+    expect(form.of('hiddenNow')).toEqual(['consent', 'form']);
+    expect(form.kinds().lastIndexOf('hiddenNow')).toBeLessThan(form.kinds().indexOf('paste'));
   });
 
   it('always shows the form preview, even with Always allow', async () => {

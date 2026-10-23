@@ -766,6 +766,7 @@ function start(): void {
         // Through the controller, which keeps track of what it has on screen and brings back what a paste hid.
         hideCard: () => controller.hideCardForPut(),
         hideBubble: () => controller.hideBubbleForPut(),
+        hideNow: (view) => windows.hideNow(view),
       },
       overlay: overlays,
       platform: PLATFORM,
