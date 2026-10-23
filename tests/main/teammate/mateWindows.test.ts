@@ -288,12 +288,10 @@ describe('MateWindows consent card', () => {
     expect(actions).toEqual([{ view: 'consent', action: { t: 'allow', serial: 1 } }]);
   });
 
-  it('updates the card in place and hides it without closing it', async () => {
+  it('hides the card without closing it', async () => {
     vi.useFakeTimers();
     try {
       const w = openConsent();
-      mate.updateConsent({ ...consent, detail: 'Changed' });
-      expect(w.webContents.send).toHaveBeenLastCalledWith('mate:state', { ...consent, detail: 'Changed', side: 'right', serial: 1 });
       mate.hideConsent();
       await vi.advanceTimersByTimeAsync(1000);
       expect(w.visible).toBe(false);
@@ -352,12 +350,11 @@ describe('MateWindows consent card', () => {
     }
   });
 
-  it('gives every shown card a new serial, and keeps it for updates, so the page restarts only for a new card', () => {
+  it('gives every shown card a new serial, so the page restarts for each card', () => {
     const w = openConsent();
     mate.showConsent({ x: 500, y: 400 }, { ...consent, detail: 'Second' });
-    mate.updateConsent({ ...consent, detail: 'Second, changed' });
     const serials = w.webContents.send.mock.calls.map(([, state]) => (state as ConsentState).serial);
-    expect(serials).toEqual([1, 2, 2]);
+    expect(serials).toEqual([1, 2]);
   });
 
   it('ignores a click meant for the card before, and lets the card now shown decide', () => {
@@ -408,11 +405,13 @@ describe('MateWindows form preview', () => {
     const card = h.windows[h.windows.length - 1];
     card.webContents.emit('did-finish-load');
     const w = openForm();
-    mate.updateConsent({ ...consent, detail: 'Changed' });
+    mate.showConsent({ x: 500, y: 400 }, { ...consent, detail: 'Next' });
+    expect(w.webContents.send).toHaveBeenCalledTimes(1);
     expect(w.webContents.send).toHaveBeenCalledWith('mate:state', { ...form, side: 'right', serial: 1 });
     expect(card.webContents.send).toHaveBeenLastCalledWith(
-      'mate:state', { ...consent, detail: 'Changed', side: 'right', serial: 1 },
+      'mate:state', { ...consent, detail: 'Next', side: 'right', serial: 2 },
     );
+    expect(mate.showForm({ x: 500, y: 400 }, form)).toBe(2);
   });
 
   it('passes on a fill of listed rows once, with each id once', () => {
@@ -432,13 +431,13 @@ describe('MateWindows form preview', () => {
     expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f1'], serial: 1 } }]);
   });
 
-  it('takes the listed rows from the latest state it sent', () => {
+  it('takes the listed rows from the latest preview it showed', () => {
     openForm();
-    mate.updateForm({ ...form, rows: [{ id: 'f3', label: 'Phone', value: '555', checked: true }] });
-    sendAction(0, { t: 'fill', ids: ['f1'], serial: 1 });
+    mate.showForm({ x: 500, y: 400 }, { ...form, rows: [{ id: 'f3', label: 'Phone', value: '555', checked: true }] });
+    sendAction(0, { t: 'fill', ids: ['f1'], serial: 2 });
     expect(actions).toEqual([]);
-    sendAction(0, { t: 'fill', ids: ['f3'], serial: 1 });
-    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f3'], serial: 1 } }]);
+    sendAction(0, { t: 'fill', ids: ['f3'], serial: 2 });
+    expect(actions).toEqual([{ view: 'form', action: { t: 'fill', ids: ['f3'], serial: 2 } }]);
   });
 
   it('passes on a cancel once, and takes a decision again for the next preview', () => {

@@ -111,11 +111,6 @@ export class MateWindows extends EventEmitter {
     return this.shows.consent;
   }
 
-  updateConsent(s: ConsentState): void {
-    const slot = this.slots.consent;
-    this.update('consent', this.withSide(slot, slot.at, s));
-  }
-
   /** The card is decided: clicks during its leave motion no longer count. */
   hideConsent(): void {
     this.slots.consent.ended = true;
@@ -133,13 +128,6 @@ export class MateWindows extends EventEmitter {
     this.shows.form++;
     this.showPopup('form', at, this.withSide(slot, at, s));
     return this.shows.form;
-  }
-
-  updateForm(s: FormState): void {
-    const slot = this.slots.form;
-    if (!slot.shown) return;
-    slot.formIds = new Set(s.rows.map((r) => r.id));
-    this.update('form', this.withSide(slot, slot.at, s));
   }
 
   /** The preview is decided: clicks during its leave motion no longer count. */
