@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { strings } from '../../src/shared/i18n';
 import { parseMateAction } from '../../src/shared/teammateIpc';
 import {
-  bubbleButtons, cardButtons, consentKey, copyText, footerText, PUT_ARM_MS, PutGuard, putLabel,
+  bubbleButtons, cardButtons, consentKey, copyText, footerText, formKey, PUT_ARM_MS, PutGuard, putLabel,
 } from '../../src/renderer/teammate/cardText';
 
 const footer = { profile: 'Default', model: 'gpt-x', tokens: 1234, used: ['screen', 'file'] };
@@ -87,6 +87,24 @@ describe('cardText', () => {
     now += PUT_ARM_MS;
     expect(guard.click()).toBe(true);
     guard.show(consentKey({ ...card, serial: 2, detail: 'Friday works for me.' }));
+    expect(guard.click()).toBe(false);
+  });
+
+  it('ignores a fill click within 400 ms of the preview appearing or changing', () => {
+    let now = 1000;
+    const guard = new PutGuard(() => now);
+    const rows = [{ id: 'f1', label: 'Name', value: 'Ada', checked: true }];
+    guard.show(formKey({ serial: 1, rows }));
+    now += PUT_ARM_MS - 1;
+    expect(guard.click()).toBe(false); // a click meant for what was there before
+    now += 1;
+    expect(guard.click()).toBe(true);
+    // The next preview, even with the same rows, is new under the pointer.
+    guard.show(formKey({ serial: 2, rows }));
+    expect(guard.click()).toBe(false);
+    now += PUT_ARM_MS;
+    expect(guard.click()).toBe(true);
+    guard.show(formKey({ serial: 2, rows: [...rows, { id: 'f2', label: 'Email', value: 'a@b.c', checked: true }] }));
     expect(guard.click()).toBe(false);
   });
 });

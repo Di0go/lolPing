@@ -4,6 +4,7 @@ import type { LeftField } from '../../shared/teammate/doRules';
 import type { Strings } from '../../shared/i18n';
 import type { FormState, MateAction, MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
+import { formKey, PutGuard } from './cardText';
 import { checkedIds } from './formChoice';
 import { useMotion } from './motion';
 import { NameTag } from './NameTag';
@@ -71,9 +72,12 @@ export function FormPreview({ s, t, act, leaving }: {
   // What the user ticked or cleared; a row nobody touched keeps the state's own tick.
   const [choice, setChoice] = useState<Record<string, boolean>>({});
   const ids = checkedIds(s.rows, choice);
-  // The preview is already decided while it leaves: a click then does nothing.
+  const [guard] = useState(() => new PutGuard(() => performance.now()));
+  guard.show(formKey(s));
+  // The preview is already decided while it leaves, and a click within its first moments was meant for what was there
+  // before: neither is an answer. A fill can't be undone.
   const send = (a: MateAction): void => {
-    if (!leaving) act(a);
+    if (!leaving && guard.click()) act(a);
   };
   // Main drops a click whose serial isn't the preview on screen now.
   const serial = s.serial ?? 0;
