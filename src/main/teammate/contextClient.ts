@@ -98,10 +98,12 @@ export class ContextClient {
    * could not be put back.
    */
   async paste(req: PasteRequest, signal: AbortSignal): Promise<{ result: PasteResult; restored: boolean }> {
+    // The helper answers in order: each request still waiting ahead of the paste may take its own time first.
+    const ownMs = PASTE_TIMEOUT_MS + this.pending.size * this.timeoutMs;
     const r = await this.request((id) => {
       this.pastes.add(id);
       return pasteCommand(id, req);
-    }, 'pasted', signal, PASTE_TIMEOUT_MS);
+    }, 'pasted', signal, ownMs);
     if (r.type !== 'pasted') throw new ContextError('bad', `unexpected reply ${r.type}`);
     return { result: r.result, restored: r.restored };
   }
@@ -113,8 +115,12 @@ export class ContextClient {
     return r.result;
   }
 
-  /** Always settles: on the child's exit or error, or after a 1 s fallback that kills it. */
+  /**
+   * Always settles: on the child's exit or error, or after a fallback that kills it: 1 s, or a paste's whole time while
+   * one runs, as a kill mid-paste would leave the pasted text on the clipboard instead of the user's own.
+   */
   stop(): Promise<void> {
+    const fallbackMs = this.pastes.size > 0 ? PASTE_TIMEOUT_MS : 1000;
     this.failAll('stopped', 'the context helper was stopped');
     const child = this.child;
     this.child = null;
@@ -129,7 +135,7 @@ export class ContextClient {
       const fallback = setTimeout(() => {
         child.kill();
         done();
-      }, 1000);
+      }, fallbackMs);
       this.write(child, { type: 'shutdown' });
       child.stdin?.end();
     });

@@ -1,7 +1,9 @@
 // Stand-in for context-helper in ContextClient tests. Mode comes from argv[2]:
 // ok answers everything (a paste with ok, not restored for the text "clipboard held"; a setField with refused),
 // silent answers nothing, denied refuses captures for missing permission, slow answers a read with its file layer
-// `slow`; after that, like the real helper, it reads nothing more and exits.
+// `slow`; after that, like the real helper, it reads nothing more and exits. lagged answers a foreground after 300 ms
+// and a paste after 1.5 s, writing the file the paste's text names as it answers. Like the real helper, it runs one
+// command at a time, shutdown and the end of its input included.
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -55,7 +57,29 @@ function read(cmd) {
   reply(out);
 }
 
+const later = (ms) => new Promise((resolve) => setTimeout(resolve, mode === 'lagged' ? ms : 0));
+
+async function handle(cmd) {
+  if (cmd.type === 'shutdown') process.exit(0);
+  if (mode === 'silent' || exiting) return;
+  if (cmd.type === 'capture') capture(cmd);
+  else if (cmd.type === 'foreground') {
+    await later(300);
+    reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
+  }
+  else if (cmd.type === 'read') read(cmd);
+  else if (cmd.type === 'ping') reply({ type: 'pong', id: cmd.id });
+  else if (cmd.type === 'paste') {
+    await later(1500);
+    if (mode === 'lagged') writeFileSync(cmd.text, 'pasted');
+    const held = cmd.text === 'clipboard held';
+    reply({ type: 'pasted', id: cmd.id, result: 'ok', ...(held ? { restored: false } : {}) });
+  }
+  else if (cmd.type === 'setField') reply({ type: 'set', id: cmd.id, result: 'refused' });
+}
+
 let buf = '';
+let queue = Promise.resolve();
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buf += chunk;
@@ -63,17 +87,9 @@ process.stdin.on('data', (chunk) => {
   while ((i = buf.indexOf('\n')) >= 0) {
     const cmd = JSON.parse(buf.slice(0, i));
     buf = buf.slice(i + 1);
-    if (cmd.type === 'shutdown') process.exit(0);
-    if (mode === 'silent' || exiting) continue;
-    if (cmd.type === 'capture') capture(cmd);
-    else if (cmd.type === 'foreground') reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
-    else if (cmd.type === 'read') read(cmd);
-    else if (cmd.type === 'ping') reply({ type: 'pong', id: cmd.id });
-    else if (cmd.type === 'paste') {
-      const held = cmd.text === 'clipboard held';
-      reply({ type: 'pasted', id: cmd.id, result: 'ok', ...(held ? { restored: false } : {}) });
-    }
-    else if (cmd.type === 'setField') reply({ type: 'set', id: cmd.id, result: 'refused' });
+    queue = queue.then(() => handle(cmd));
   }
 });
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => {
+  queue = queue.then(() => process.exit(0));
+});

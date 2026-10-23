@@ -174,6 +174,34 @@ describe('ContextClient', () => {
     expect(starts()).toBe(2);
   });
 
+  it('lets a running paste put the clipboard back before the helper stops', async () => {
+    const { c } = client(['lagged']);
+    // The fake writes this file as it answers the paste, after 1.5 s: longer than a stop's usual 1 s wait.
+    const answered = join(tempDir(), 'pasted');
+    const req = { window: '263544', text: answered, click: null, mode: 'insert' as const, asked: '' };
+    const paste = c.paste(req, signal()).catch((e: unknown) => e);
+    await c.stop();
+    expect(existsSync(answered)).toBe(true);
+    await paste;
+  });
+
+  it('gives a paste the time of each request still waiting ahead of it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { c, starts } = client(['lagged']);
+    const fg = c.foreground(signal());
+    const req = { window: '263544', text: join(tempDir(), 'pasted'), click: null, mode: 'insert' as const, asked: '' };
+    let settled = false;
+    const paste = c.paste(req, signal()).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(2900);
+    await fg; // answered after the foreground's 3 s would have run out for a paste behind it
+    await vi.advanceTimersByTimeAsync(3200); // 6.1 s since the paste was sent
+    expect(settled).toBe(false);
+    expect(starts()).toBe(1);
+    await expect(paste).resolves.toEqual({ result: 'ok', restored: true });
+  });
+
   it('gives a request behind a paste the paste\'s time too, so it never restarts the helper mid-paste', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { c, starts } = client(['silent', 'ok']);
