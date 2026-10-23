@@ -257,6 +257,13 @@ describe('tools', () => {
     expect(modes(false)).toEqual(['insert']);
   });
 
+  it('tells the model an insert adds only the new text, never what is already there', () => {
+    for (const selection of [true, false]) {
+      const paste = toolDefs({ ...OFF, kind: 'act', selection }).find((d) => d.name === 'paste');
+      expect(paste?.description).toMatch(/only the new text/);
+    }
+  });
+
   it('says a copy happens at once, with no question to the user', () => {
     const copy = toolDefs({ ...OFF, kind: 'grab' }).find((d) => d.name === 'copy');
     expect(copy?.description).not.toMatch(/agrees/);

@@ -175,7 +175,8 @@ export function toolDefs(opts: {
   if (opts.kind === 'act') {
     defs.push({
       name: 'paste',
-      description: 'Paste text into the text field or editor the user pinged, after the user agrees. Use at most one.',
+      description: 'Paste text into the text field or editor the user pinged, after the user agrees. Use at most one. '
+        + 'An insert adds only the new text at the caret: never repeat text that is already there.',
       parameters: {
         type: 'object',
         properties: {
