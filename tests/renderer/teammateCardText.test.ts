@@ -2,12 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { strings } from '../../src/shared/i18n';
 import { parseMateAction } from '../../src/shared/teammateIpc';
 import {
-  bubbleButtons, cardButtons, consentKey, copyText, footerText, formKey, PUT_ARM_MS, PutGuard, putLabel,
+  bubbleButtons, cardButtons, consentKey, consentMore, copyText, footerText, formKey, PUT_ARM_MS, PutGuard, putLabel,
 } from '../../src/renderer/teammate/cardText';
 
 const footer = { profile: 'Default', model: 'gpt-x', route: '', tokens: 1234, used: ['screen', 'file'] };
 
 describe('cardText', () => {
+  it('says what the detail of an agent card left out, in either language', () => {
+    const en = strings('en').teammate.ui;
+    const zh = strings('zh-CN').teammate.ui;
+    expect(consentMore({}, en)).toBe('');
+    expect(consentMore({ moreLines: 1 }, en)).toBe('+1 more line');
+    expect(consentMore({ moreLines: 12, moreEdits: 1 }, en)).toBe('+12 more lines · +1 more edit');
+    expect(consentMore({ moreEdits: 3 }, en)).toBe('+3 more edits');
+    expect(consentMore({ moreLines: 12, moreEdits: 3 }, zh)).toBe('还有 12 行 · 还有 3 处修改');
+  });
+
   it('copies the latest answer without its line, so a written reply pastes as it is', () => {
     const entries = [
       { kind: 'ask' as const, label: 'Explain', markdown: 'what?' },

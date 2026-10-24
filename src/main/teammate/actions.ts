@@ -397,11 +397,14 @@ export class ActionRunner extends EventEmitter {
 
   private showAgent(item: Extract<Waiting, { kind: 'agent' }>): void {
     const { run, tool, input } = item;
+    const detail = describeAgentInput(tool, input);
     const serial = this.deps.windows.showConsent(run.at, {
       view: 'consent', lang: run.lang, tag: run.tag, action: 'agent', tool,
-      text: this.agentLine(run, tool, input, false), detail: describeAgentInput(tool, input),
+      text: this.agentLine(run, tool, input, false), detail: detail.text,
       always: !isShellTool(tool), seconds: CONSENT_MS / 1000,
       ...(isEditTool(tool) && !this.editCovered(run, tool, input) ? { alwaysAsks: true } : {}),
+      ...(detail.moreLines > 0 ? { moreLines: detail.moreLines } : {}),
+      ...(detail.moreEdits > 0 ? { moreEdits: detail.moreEdits } : {}),
     });
     const stop = this.deps.timer(CONSENT_MS, () => {
       if (this.shown?.item !== item) return;

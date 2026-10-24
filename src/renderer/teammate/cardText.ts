@@ -71,6 +71,13 @@ export function consentKey(s: Pick<ConsentState, 'serial' | 'action' | 'text' | 
   return JSON.stringify([s.serial ?? 0, s.action, s.text, s.detail, s.always]);
 }
 
+/** "+12 more lines · +3 more edits": what an agent's detail left out, said under its box; '' when nothing was. */
+export function consentMore(s: Pick<ConsentState, 'moreLines' | 'moreEdits'>, ui: Strings['teammate']['ui']): string {
+  return [
+    s.moreLines ? ui.moreLines(s.moreLines) : '', s.moreEdits ? ui.moreEdits(s.moreEdits) : '',
+  ].filter(Boolean).join(ui.sep);
+}
+
 /** What a form preview lists, for a PutGuard: a fill can't be undone, so a new or changed preview arms again. */
 export function formKey(s: Pick<FormState, 'serial' | 'rows'>): string {
   return JSON.stringify([s.serial ?? 0, s.rows.map((r) => r.id)]);

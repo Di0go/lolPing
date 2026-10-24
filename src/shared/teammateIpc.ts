@@ -94,6 +94,9 @@ export interface ConsentState {
   always: boolean;
   /** An agent's edit outside its folder or of a settings file: the card says lolPing asks each time. */
   alwaysAsks?: boolean;
+  /** Lines of an agent's command or edit, and edits of a MultiEdit, that the detail left out; absent when none. */
+  moreLines?: number;
+  moreEdits?: number;
   /** The countdown bar's total length; ending it is the caller's job, the page only draws it. */
   seconds: number;
   /** Which side of the spot the card is on, so it slides in from there. Set by the window; the right when absent. */

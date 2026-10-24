@@ -61,6 +61,9 @@ const enMateUi = {
   agentOpen: (agent: string, url: string) => `${agent} wants to open ${url}`,
   agentUse: (agent: string, tool: string) => `${agent} wants to use ${tool}`,
   agentAlwaysAsks: 'Outside the project folder, or a settings file: lolPing always asks.',
+  /** Under an agent's detail: what it left out. */
+  moreLines: (n: number) => (n === 1 ? '+1 more line' : `+${n} more lines`),
+  moreEdits: (n: number) => (n === 1 ? '+1 more edit' : `+${n} more edits`),
   allowOnce: 'Allow once',
   alwaysAllow: 'Always allow',
   decline: 'Decline',
@@ -1093,6 +1096,8 @@ const zh: Strings = {
       agentOpen: (agent: string, url: string) => `${agent} 想打开 ${url}`,
       agentUse: (agent: string, tool: string) => `${agent} 想使用 ${tool}`,
       agentAlwaysAsks: '在项目文件夹外或是设置文件：lolPing 每次都会问。',
+      moreLines: (n: number) => `还有 ${n} 行`,
+      moreEdits: (n: number) => `还有 ${n} 处修改`,
       allowOnce: '允许一次',
       alwaysAllow: '总是允许',
       decline: '拒绝',

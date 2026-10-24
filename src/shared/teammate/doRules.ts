@@ -97,12 +97,11 @@ const squeeze = (text: string): string => text
   .replace(/[\t\p{Zs}]{4,}/gu, ' ')
   .replace(/(?:[\t\p{Zs}]*\n){3,}/gu, '\n\n');
 
-/** However the padding is made, a command shows this many lines and then says how many it left out. */
-function capLines(text: string): string {
+/** However the padding is made, a command shows this many lines, then "…", and counts the lines it left out. */
+function capLines(text: string): { text: string; left: number } {
   const lines = text.split('\n');
-  if (lines.length <= AGENT_COMMAND_LINES) return text;
-  const left = lines.length - AGENT_COMMAND_LINES;
-  return [...lines.slice(0, AGENT_COMMAND_LINES), `… +${left} line${left === 1 ? '' : 's'}`].join('\n');
+  if (lines.length <= AGENT_COMMAND_LINES) return { text, left: 0 };
+  return { text: [...lines.slice(0, AGENT_COMMAND_LINES), '…'].join('\n'), left: lines.length - AGENT_COMMAND_LINES };
 }
 
 /**
@@ -123,10 +122,10 @@ function agentPath(path: string): string {
 
 /**
  * The start of the text an edit puts in. Each tool keeps it under its own name, and only that one is read, so a stray
- * extra key can't change what the card shows. What is left out is said: "…" after the first lines, and the number of
- * edits a MultiEdit has besides its first.
+ * extra key can't change what the card shows. What is left out is marked with "…" after the first lines and counted,
+ * with the edits a MultiEdit has besides its first.
  */
-function newText(tool: string, input: Record<string, unknown>): string {
+function newText(tool: string, input: Record<string, unknown>): { text: string; lines: number; edits: number } {
   const edits = Array.isArray(input.edits) && /^multiedit$/i.test(tool) ? input.edits : [];
   const first = isRecord(edits[0]) ? edits[0].new_string : undefined;
   const field: Record<string, unknown> = {
@@ -136,30 +135,41 @@ function newText(tool: string, input: Record<string, unknown>): string {
   const lines = typeof text === 'string' ? text.replace(/\r\n/g, '\n').split('\n') : [];
   const shown = lines.slice(0, AGENT_EDIT_LINES);
   if (lines.length > AGENT_EDIT_LINES) shown.push('…');
-  if (edits.length > 1) shown.push(`+${edits.length - 1} more edit${edits.length === 2 ? '' : 's'}`);
-  return shown.join('\n');
+  return {
+    text: shown.join('\n'), lines: Math.max(0, lines.length - AGENT_EDIT_LINES), edits: Math.max(0, edits.length - 1),
+  };
 }
+
+/** The card's detail and what it left out: lines of a command or of the new text, and a MultiEdit's other edits. */
+export interface AgentDetail { text: string; moreLines: number; moreEdits: number }
 
 /**
  * What the consent card shows for an agent's tool call: a command, a file and the first lines of an edit, an address,
- * or the input as compact JSON. At most 400 characters, and whatever is left out is marked with "…" (or "+N more
- * edits"). A path shows its start and end, and control, line-separator and invisible characters are escaped.
+ * or the input as compact JSON. At most 400 characters, and whatever is left out is marked with "…" and the lines and
+ * edits left out counted, for the card to say below its detail box. A path shows its start and end, and control,
+ * line-separator and invisible characters are escaped.
  */
-export function describeAgentInput(tool: string, input: unknown): string {
+export function describeAgentInput(tool: string, input: unknown): AgentDetail {
   const { kind, target } = agentWhat(tool, input);
-  if (!isRecord(input)) return '';
+  if (!isRecord(input)) return { text: '', moreLines: 0, moreEdits: 0 };
   let text = '';
+  let moreLines = 0;
+  let moreEdits = 0;
   if (kind === 'run' && typeof input.command === 'string') {
-    text = capLines(squeeze(escapeUnsafe(input.command, { foldCrlf: /^powershell$/i.test(tool) })));
+    const capped = capLines(squeeze(escapeUnsafe(input.command, { foldCrlf: /^powershell$/i.test(tool) })));
+    text = capped.text;
+    moreLines = capped.left;
   } else if (kind === 'edit') {
-    const body = escapeUnsafe(newText(tool, input), { foldCrlf: true });
-    text = [agentPath(target), body].filter((s) => s !== '').join('\n');
+    const body = newText(tool, input);
+    text = [agentPath(target), escapeUnsafe(body.text, { foldCrlf: true })].filter((s) => s !== '').join('\n');
+    moreLines = body.lines;
+    moreEdits = body.edits;
   } else if (kind === 'open') {
     text = escapeUnsafe(target, { oneLine: true });
   } else {
     text = escapeUnsafe(JSON.stringify(input));
   }
-  return cutTo(text, AGENT_DETAIL_MAX);
+  return { text: cutTo(text, AGENT_DETAIL_MAX), moreLines, moreEdits };
 }
 
 /** Whether the user chose Always allow for this action. Fill never is: it always shows its preview. */

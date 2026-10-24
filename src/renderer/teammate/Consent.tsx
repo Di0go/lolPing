@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { Strings } from '../../shared/i18n';
 import type { ConsentState, MateAction, MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
-import { consentKey, PutGuard } from './cardText';
+import { consentKey, consentMore, PutGuard } from './cardText';
 import { useMotion } from './motion';
 import { NameTag } from './NameTag';
 
@@ -71,6 +71,8 @@ export function Consent({ s, t, act, leaving }: {
   const left = s.side === 'left';
   const enter = left ? m.slideInLeft : m.slideInRight;
   const leave = leaving ? (left ? m.slideOutLeft : m.slideOutRight) : undefined;
+  // What the detail left out is said outside its box, where scrolling can't hide it.
+  const more = consentMore(s, t);
   // With reduced motion the bar ticks once a second instead of sliding.
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   return (
@@ -81,6 +83,7 @@ export function Consent({ s, t, act, leaving }: {
         </div>
         <Text className={st.text}>{s.text}</Text>
         {s.detail && <Caption1 className={st.detail}>{s.detail}</Caption1>}
+        {more && <Caption1 className={st.note}>{more}</Caption1>}
         {s.alwaysAsks && <Caption1 className={st.note}>{t.agentAlwaysAsks}</Caption1>}
         <div className={st.buttons}>
           <Button size="small" appearance="primary" onClick={() => send({ t: 'allow', serial })}>{t.allowOnce}</Button>
