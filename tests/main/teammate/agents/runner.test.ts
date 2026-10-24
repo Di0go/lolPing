@@ -85,7 +85,7 @@ async function installAgent(bin: string): Promise<void> {
 }
 
 const realRunner = (): AgentRunner => new AgentRunner({
-  spawn, platform, now: () => 0, killTree: killProcessTree(platform), writeFile: (p, t) => writeFile(p, t),
+  spawn, platform, killTree: killProcessTree(platform), writeFile: (p, t) => writeFile(p, t),
 });
 
 const script = (lines: string[], extra: Record<string, string> = {}): Record<string, string> => ({
@@ -126,7 +126,7 @@ function spyRunner(fails = false) {
   const killed: number[] = [];
   const written: [string, string][] = [];
   const runner = new AgentRunner({
-    spawn: fake.spawn, platform, now: () => 0, killTree: (pid) => killed.push(pid),
+    spawn: fake.spawn, platform, killTree: (pid) => killed.push(pid),
     writeFile: async (p, t) => { written.push([p, t]); },
   });
   return { runner, killed, written, ...fake };

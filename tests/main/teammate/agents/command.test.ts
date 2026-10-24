@@ -46,6 +46,12 @@ describe('findExecutable', () => {
     expect(findExecutable('dsh.cmd', winEnv, 'win', existing('C:\\tools\\dsh.cmd'))).toBe('C:\\tools\\dsh.cmd');
   });
 
+  it('tries a name with an extension before adding PATHEXT to it', () => {
+    const exists = existing('C:\\tools\\dsh.cmd', 'C:\\tools\\dsh.cmd.exe', 'C:\\a\\my agent.exe', 'C:\\a\\my agent.exe.cmd');
+    expect(findExecutable('dsh.cmd', winEnv, 'win', exists)).toBe('C:\\tools\\dsh.cmd');
+    expect(findExecutable('C:\\a\\my agent.exe', winEnv, 'win', exists)).toBe('C:\\a\\my agent.exe');
+  });
+
   it('uses the default PATHEXT when the environment has none', () => {
     expect(findExecutable('gemini', { PATH: 'C:\\tools' }, 'win', existing('C:\\tools\\gemini.cmd')))
       .toBe('C:\\tools\\gemini.cmd');
@@ -80,13 +86,22 @@ describe('spawnArgv', () => {
   });
 
   it('builds one cmd.exe line with every metacharacter caret-escaped twice', () => {
-    const argv = spawnArgv('C:\\x y\\codex.CMD', ['a&b', '50%', 'a"b', 'C:\\dir\\'], 'win');
-    expect(argv.file).toBe('cmd.exe');
+    const argv = spawnArgv('C:\\x y\\codex.CMD', ['a&b', 'a"b', 'C:\\dir\\'], 'win');
     expect(argv.verbatim).toBe(true);
     expect(argv.args).toEqual([
-      '/d', '/s', '/c',
-      '"C:\\x^ y\\codex.CMD ^^^"a^^^&b^^^" ^^^"50^^^%^^^" ^^^"a\\^^^"b^^^" ^^^"C:\\dir\\\\^^^""',
+      '/d', '/s', '/c', '"C:\\x^ y\\codex.CMD ^^^"a^^^&b^^^" ^^^"a\\^^^"b^^^" ^^^"C:\\dir\\\\^^^""',
     ]);
+  });
+
+  it('puts an empty expansion after every % so no variable name can form', () => {
+    expect(spawnArgv('C:\\50%\\x.cmd', ['%PATH%'], 'win').args[3])
+      .toBe('"C:\\50%%cd:~,%\\x.cmd ^^^"%%cd:~,%PATH%%cd:~,%^^^""');
+  });
+
+  it('runs cmd.exe by its full path, not through the agent\'s PATH', () => {
+    const { file } = spawnArgv('C:\\tools\\dsh.cmd', [], 'win');
+    expect(path.win32.isAbsolute(file)).toBe(true);
+    expect(path.win32.basename(file).toLowerCase()).toBe('cmd.exe');
   });
 
   it('refuses a line break in an argument for a .cmd', () => {
@@ -103,12 +118,12 @@ describe('spawnArgv', () => {
 
     it.runIf(process.platform === 'win32')('quotes every argument for cmd.exe so & and spaces stay inside it', async () => {
       // The folder name needs quoting too, like C:\Users\Darren Meng\AppData\Roaming\npm.
-      dir = await mkdtemp(path.join(os.tmpdir(), 'lolping shim (1) & '));
+      dir = await mkdtemp(path.join(os.tmpdir(), 'lolping shim (1) & 50% '));
       await writeFile(path.join(dir, 'fake.cmd'), '@node "%~dp0echo.cjs" %*\r\n');
       await writeFile(path.join(dir, 'echo.cjs'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
       // A lone quote first: cmd's own quote counting then flips, and only the carets keep the & after it inert.
       const args = [
-        'a"b', 'C:\\a b&c', '50%', '%PATH%', '!x!', 'a\\\\"b', '^', '(x)', 'C:\\dir\\', 'x|y<z>w', '',
+        'a"b', 'C:\\a b&c', '50%', '%PATH%', '%PATH:C=Q%', '%%', '%CD%', '%~dp0', '100%%PATH%', '!x!', 'a\\\\"b', '^', '(x)', 'C:\\dir\\', 'x|y<z>w', '',
         '-c', 'mcp_servers.lolping.command="C:\\\\x y\\\\node.exe"', 'Read ask.md in C:\\x y, then answer.',
         'then&echo INJECTED',
       ];

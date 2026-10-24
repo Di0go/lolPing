@@ -3,7 +3,7 @@ import { statSync } from 'node:fs';
 import type { Platform } from '../../../shared/platform';
 import { AGENT_PRESETS, type AgentParsed, type AgentRunSpec } from '../../../shared/teammate/agents';
 import type { AgentProfile } from '../../../shared/teammate/settings';
-import { findExecutable, spawnArgv } from './command';
+import { findExecutable, spawnArgv, system32 } from './command';
 
 const TAIL_MAX = 8 * 1024;
 const LINE_MAX = 1024 * 1024;
@@ -15,6 +15,7 @@ export interface AgentResult {
   code: number | null;
   /** The last session id the agent printed. */
   session: string | null;
+  /** The parsed error, else stderr's first line, so it can be set on a run that worked: judge success by `code`. */
   error: string | null;
   /** The last 8 KB of stdout and of stderr, joined by a line break. */
   tail: string;
@@ -35,7 +36,6 @@ export class AgentStartError extends Error {
 export interface AgentRunnerDeps {
   spawn: typeof nodeSpawn;
   platform: Platform;
-  now: () => number;
   killTree: (pid: number) => void;
   writeFile: (p: string, text: string) => Promise<void>;
 }
@@ -195,7 +195,7 @@ export class AgentRunner {
 export function killProcessTree(platform: Platform): (pid: number) => void {
   if (platform === 'win') {
     return (pid) => {
-      nodeSpawn('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
+      nodeSpawn(system32('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
         .on('error', () => undefined);
     };
   }
