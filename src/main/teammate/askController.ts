@@ -76,6 +76,8 @@ export interface AskDeps {
   actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described' | 'put' | 'askAgent'> & Pick<EventEmitter, 'on'>;
   /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
   cursor?: () => Point;
+  /** Hears the foreground app of each ask, which the rules card offers as app names. */
+  seenApp?: (app: string) => void;
   /** Makes, reads, writes and deletes an ask's capture folder; the file system by default. */
   files?: {
     read(path: string): Promise<Buffer>;
@@ -669,6 +671,7 @@ export class AskController extends EventEmitter {
     run.app = fg.app;
     run.title = fg.title;
     run.window = fg.window;
+    deps.seenApp?.(fg.app);
     const routed = route(t, { intent: run.spot.intent, deep: run.intent.def.deep, app: run.app, title: run.title });
     const routeText = routed ? routeLabel(routed.reason, t, run.lang) : '';
     if (routed && !isBuiltin(routed.profile)) return this.askAgent(run, routed.profile, routeText);

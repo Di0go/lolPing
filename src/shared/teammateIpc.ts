@@ -60,6 +60,8 @@ export interface HistoryThread {
   lastActivity: number;
   app: string;
   intents: PingId[];
+  /** The agent profile's name when the thread's session can be opened in a terminal; the button reads "Open in" it. */
+  agent?: string;
 }
 
 export interface HistoryState {
@@ -136,6 +138,7 @@ export type MateAction =
   | { t: 'open'; id: string }
   | { t: 'continue'; id: string }
   | { t: 'delete'; id: string }
+  | { t: 'openInAgent'; id: string }
   | { t: 'search'; query: string }
   /** The bubble's or card's put button: the click is the user's consent to that paste or fill. */
   | { t: 'put' }
@@ -185,7 +188,7 @@ const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
   bubble: new Set(['more', 'dismiss', 'put']),
   card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put']),
   words: new Set(['ask', 'cancel']),
-  history: new Set(['open', 'continue', 'delete', 'search']),
+  history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent']),
   consent: new Set(['allow', 'always', 'decline']),
   form: new Set(['fill', 'cancel']),
 };
@@ -240,6 +243,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'open':
     case 'continue':
     case 'delete':
+    case 'openInAgent':
       return threadId(a.id) ? { t: a.t, id: a.id } : null;
     case 'fill': {
       const ids: unknown = a.ids;

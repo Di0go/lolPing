@@ -74,6 +74,8 @@ interface HarnessOptions {
   done?: string[];
   /** The helper never says which window is in front. */
   foregroundHangs?: boolean;
+  /** Hears the foreground app of each ask. */
+  seenApp?: (app: string) => void;
 }
 
 interface Screen {
@@ -268,6 +270,7 @@ function harness(opts: HarnessOptions = {}) {
     now: () => Date.now() + skew,
     usage: () => undefined,
     cursor: () => ({ x: 1200, y: 900 }),
+    seenApp: opts.seenApp,
     ...(opts.recordActions ? { actions: runner } : {}),
     files: {
       read: async (p) => Buffer.from(p),
@@ -530,6 +533,14 @@ describe('AskController', () => {
     expect(h.ctl.running).toBe(false);
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.timeout]);
     expect(h.adapters).toEqual([]);
+  });
+
+  it('tells the foreground app of each ask, for the rules card', async () => {
+    const apps: string[] = [];
+    const h = harness({ seenApp: (app) => apps.push(app) });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(apps).toEqual(['notepad.exe']);
   });
 
   it('answers look with a new capture and continues', async () => {

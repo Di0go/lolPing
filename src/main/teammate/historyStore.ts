@@ -15,6 +15,8 @@ export interface ThreadSummary {
   lastActivity: number;
   app: string;
   intents: PingId[];
+  /** The agent profile whose session the thread continues, for the History window's Open in button. */
+  agent?: string;
 }
 
 export interface HistoryOptions {
@@ -95,6 +97,7 @@ const rowOf = (t: ThreadRecord): IndexRow => ({
   lastActivity: t.lastActivity,
   app: t.app,
   intents: t.entries.map((e) => e.intent),
+  ...(t.agent ? { agent: t.agent.profileId } : {}),
   searchText: [t.title, ...t.entries.flatMap((e) => [e.line, e.words ?? ''])].join(' ').toLowerCase(),
 });
 

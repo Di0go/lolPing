@@ -51,8 +51,11 @@ const caret = (text: string): string => text.replace(CMD_META, '^$1');
 // nothing, so no variable name can start at the % (Rust's std does the same for .bat arguments).
 const noExpand = (text: string): string => text.replace(/%/g, '%%cd:~,%');
 
+/** `text` for one more cmd.exe parse: its metacharacters and % lose their meaning and the next reader gets `text`. */
+export const forCmd = (text: string): string => noExpand(caret(text));
+
 /** Quotes one argument the way the C runtime splits a command line (backslashes double only before a quote). */
-function quoteArgument(arg: string): string {
+export function quoteArgument(arg: string): string {
   let out = '"';
   let slashes = 0;
   for (const ch of arg) {
@@ -66,15 +69,22 @@ function quoteArgument(arg: string): string {
   return `${out}${'\\'.repeat(slashes * 2)}"`;
 }
 
+const isShim = (file: string): boolean => /\.(cmd|bat)$/i.test(file);
+
+/** The line cmd.exe reads to run `file args` with every argument kept whole (for a shim, through its `%*` too). */
+export function cmdLine(file: string, args: readonly string[]): string {
+  // cmd ends a command at a line break whatever the quoting, so the rest of the line would run as a new command.
+  if ([file, ...args].some((a) => /[\r\n]/.test(a))) throw new Error('A cmd.exe argument can\'t hold a line break');
+  // Carets twice on a shim's arguments: cmd takes one level, and the shim's `%*` is parsed again and takes the other.
+  if (isShim(file)) return [file, ...args.map((a) => caret(quoteArgument(a)))].map(forCmd).join(' ');
+  return [file, ...args].map((a) => forCmd(quoteArgument(a))).join(' ');
+}
+
 /** argv for spawn: a .cmd/.bat becomes cmd.exe /d /s /c "<quoted line>"; anything else is passed as is. */
 export function spawnArgv(file: string, args: readonly string[], platform: Platform):
   { file: string; args: string[]; verbatim: boolean } {
-  if (platform !== 'win' || !/\.(cmd|bat)$/i.test(file)) return { file, args: [...args], verbatim: false };
-  // cmd ends a command at a line break whatever the quoting, so the rest of the line would run as a new command.
-  if ([file, ...args].some((a) => /[\r\n]/.test(a))) throw new Error('A .cmd argument can\'t hold a line break');
-  // Carets twice on arguments: cmd /c takes one level, and the shim's `%*` is parsed again and takes the other.
-  const line = [file, ...args.map((a) => caret(quoteArgument(a)))].map((a) => noExpand(caret(a))).join(' ');
-  return { file: cmdExe(), args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
+  if (platform !== 'win' || !isShim(file)) return { file, args: [...args], verbatim: false };
+  return { file: cmdExe(), args: ['/d', '/s', '/c', `"${cmdLine(file, args)}"`], verbatim: true };
 }
 
 /** `env` with PATH set to `value`. Windows names ignore case: the key it has is replaced, so there are never two. */

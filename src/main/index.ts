@@ -3,7 +3,7 @@ import {
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,9 @@ import { formatRoomCode, parseRoomCode } from '../shared/roomCode';
 import { sameTagRgb, tagWire } from '../shared/roomColors';
 import { overlaySettings, soundLevel, type Settings } from '../shared/settings';
 import type { Spot } from '../shared/teammate/askMachine';
+import { rememberApp } from '../shared/teammate/appRules';
+import type { ThreadRecord } from '../shared/teammate/history';
+import { openInRows, resumableProfile, resumeArgs } from '../shared/teammate/agentProfiles';
 import { wordsContinuesByDefault } from '../shared/teammate/threads';
 import type { HistoryState, MateAction, MateView } from '../shared/teammateIpc';
 import { parseTextInput } from '../shared/textCommands';
@@ -53,9 +56,11 @@ import { BridgeServer, bridgePath } from './mcp/bridgeServer';
 import { ActionRunner } from './teammate/actions';
 import { captureOutput, checkAgent } from './teammate/agents/check';
 import { findExecutable, userPath, withPath } from './teammate/agents/command';
+import { terminalArgv } from './teammate/agents/openInTerminal';
 import { AgentRunner, envValue, isFile as isRegularFile, killProcessTree } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
+import { installedEditors } from './teammate/editors';
 import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
 import { HistoryStore } from './teammate/historyStore';
 import { MateWindows } from './teammate/mateWindows';
@@ -72,6 +77,8 @@ import { Updater } from './updater';
 import { setLinuxAutostart } from './linuxAutostart';
 
 const ACCESSIBILITY_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+/** How many foreground app names the rules card is offered. */
+const RECENT_APPS_MAX = 20;
 const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
 
 // X11 uses root-window pixels. Keep Electron in the same coordinate space on every monitor.
@@ -150,6 +157,40 @@ function runForOutput(cmd: string, args: string[], ms: number): Promise<string> 
     execFile(cmd, args, { timeout: ms, encoding: 'utf8' }, (err, out) => (err ? reject(err) : resolve(out)));
   });
 }
+
+/** What a bridge started by the user's own app needs; the same inputs the bridge server and the agent runner use. */
+function userBridgeInputs(): { execPath: string; bridgeJs: string; pipe: string; dataDir: string } | null {
+  try {
+    const userData = app.getPath('userData');
+    return {
+      execPath: process.execPath, bridgeJs: join(__dirname, 'bridge.js'),
+      pipe: bridgePath(PLATFORM, userData, userInfo().username), dataDir: userData,
+    };
+  } catch {
+    return null; // userInfo() throws when the account has no name
+  }
+}
+
+/** lolPing's environment with the user's PATH (a login shell's on macOS): where an agent or an editor is looked for. */
+async function userEnv(): Promise<NodeJS.ProcessEnv> {
+  return withPath(process.env, await userPath(PLATFORM, runForOutput), PLATFORM);
+}
+
+const listDir = (dir: string): string[] => {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+};
+
+const isDirectory = (p: string): boolean => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
 
 /** macOS: the app, Edit and Window menus, so Cmd+Q, Cmd+W and the clipboard shortcuts work in the settings window. */
 function setMacMenu(): void {
@@ -650,6 +691,8 @@ function start(): void {
   // The teammate: built when its feature is switched on, taken down when it is switched off or the app quits.
   let wordsSpot: Spot | null = null;
   let historyQuery = '';
+  /** Foreground apps of this session's asks, newest first; the rules card offers them as app names. */
+  let recentApps: readonly string[] = [];
   const mateLang = () => resolveLang(settings.language, app.getLocale());
   const mateTag = () => {
     const t = settings.teammate;
@@ -673,7 +716,9 @@ function start(): void {
     const base = { view: 'history' as const, lang: mateLang(), query, threads: [] };
     if (!m.history.available()) return { ...base, available: false, off: 'unavailable' };
     if (!settings.teammate.history.on) return { ...base, available: false, off: 'disabled' };
-    return { ...base, available: true, threads: await m.history.list(query) };
+    // Open in <agent> shows only where the profile still exists and can continue a session.
+    const threads = openInRows(await m.history.list(query), settings.teammate.profiles);
+    return { ...base, available: true, threads };
   };
   const refreshHistory = async (m: Mate): Promise<void> => {
     const state = await historyState(m, historyQuery);
@@ -690,6 +735,25 @@ function start(): void {
     const t = settings.teammate;
     store.update({ teammate: { ...t, history: { ...t.history, paused } } });
   }
+  /** Continues the thread's agent session in a terminal. The profile and command come from settings, not the window. */
+  async function openInAgent(record: ThreadRecord | null): Promise<void> {
+    const session = record?.agent;
+    const profile = session ? resumableProfile(settings.teammate.profiles, session.profileId) : null;
+    const args = profile && session ? resumeArgs(profile, session.session) : null;
+    if (!session || !profile || !args) return;
+    const env = await userEnv();
+    const file = findExecutable(profile.command, {
+      PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
+    }, PLATFORM, isRegularFile);
+    if (file === null || !isDirectory(session.cwd)) {
+      console.warn('[teammate] open in agent: the command or the folder is gone');
+      return;
+    }
+    const t = terminalArgv(PLATFORM, session.cwd, file, args);
+    spawn(t.file, t.args, { detached: true, stdio: 'ignore', env, windowsVerbatimArguments: t.verbatim })
+      .on('error', (err) => console.warn('[teammate] open in agent:', err))
+      .unref();
+  }
   const onHistoryAction = async (m: Mate, a: MateAction): Promise<void> => {
     switch (a.t) {
       case 'open':
@@ -701,6 +765,8 @@ function start(): void {
         else m.controller.continueThread(record);
         return;
       }
+      case 'openInAgent':
+        return openInAgent(await m.history.get(a.id));
       case 'delete':
         await m.history.delete(a.id);
         m.controller.forgetThread(a.id);
@@ -836,6 +902,9 @@ function start(): void {
       usage: (u) => usage.add(u),
       actions,
       cursor: cursorPhys,
+      seenApp: (name) => {
+        recentApps = rememberApp(recentApps, name, RECENT_APPS_MAX);
+      },
       // Not while lolPing is paused, nor once the teammate is going down (its bridge stays up a moment longer).
       enabled: () => enabled && mate !== null,
     });
@@ -1032,16 +1101,24 @@ function start(): void {
         return r.canceled ? null : r.filePaths[0] ?? null;
       },
       agentSnippet: () => {
-        try {
-          const userData = app.getPath('userData');
-          // The same inputs the bridge server and the agent runner use, so the snippet reaches the same pipe.
-          return userConfigSnippet({
-            execPath: process.execPath, bridgeJs: join(__dirname, 'bridge.js'),
-            pipe: bridgePath(PLATFORM, userData, userInfo().username), dataDir: userData,
-          });
-        } catch {
-          return null; // userInfo() throws when the account has no name
-        }
+        const inputs = userBridgeInputs();
+        return inputs === null ? null : userConfigSnippet(inputs);
+      },
+      bridge: () => {
+        const inputs = userBridgeInputs();
+        return inputs === null ? null : bridgeCommand({ ...inputs, ask: null });
+      },
+      recentApps: () => recentApps,
+      editors: async () => {
+        const env = await userEnv();
+        return installedEditors({
+          platform: PLATFORM,
+          env: {
+            PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
+            LOCALAPPDATA: process.env.LOCALAPPDATA, ProgramFiles: process.env.ProgramFiles,
+          },
+          home: app.getPath('home'), exists: isRegularFile, list: listDir,
+        });
       },
       history: async (op: TeammateHistoryOp) => {
         if (op === 'open') {

@@ -2,7 +2,7 @@ import { Button, Combobox, Dropdown, Input, Option, OptionGroup, Switch, Textare
 import {
   Bot24Regular, ClipboardPaste24Regular, Color24Regular, CursorClick24Regular, DataUsage24Regular, DocumentText24Regular, Emoji24Regular,
   Eye24Regular, Globe24Regular, History24Regular, Keyboard24Regular, MusicNote224Regular, Person24Regular,
-  ScanText24Regular, ShieldKeyhole24Regular, Sparkle24Regular, TextEditStyle24Regular, TextField24Regular,
+  PlugConnected24Regular, ScanText24Regular, ShieldKeyhole24Regular, Sparkle24Regular, TextEditStyle24Regular, TextField24Regular,
 } from '@fluentui/react-icons';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
@@ -19,7 +19,9 @@ import { api } from '../api';
 import { useText } from '../text';
 import type { Update } from '../useAppState';
 import { AgentProfileCard } from './AgentProfileCard';
+import { ConnectAppsCard } from './ConnectAppsCard';
 import { DraftInput, Swatches } from './mateFields';
+import { RulesCard } from './RulesCard';
 import { SettingRow, SwitchRow } from './rows';
 import { TriggerPicker } from './TriggerPicker';
 
@@ -453,6 +455,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
               {mate.profiles.map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
             </Dropdown>
           </SettingRow>
+          <RulesCard s={mate} patch={patch} />
         </>
       ) : null}
 
@@ -511,6 +514,9 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
       </div>
       <InstructionsCard />
       <PermissionsCard s={mate} patch={patch} />
+      <SwitchRow icon={<PlugConnected24Regular />} title={m.agentsPing} description={m.agentsPingDesc}
+        checked={mate.agentsCanPing} onChange={(agentsCanPing) => patch({ agentsCanPing })} />
+      <ConnectAppsCard />
 
       <SwitchRow icon={<Emoji24Regular />} title={m.emotes} description={m.emotesDesc}
         checked={mate.emotes} onChange={(emotes) => patch({ emotes })} />

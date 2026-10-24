@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { Platform } from '../../shared/platform';
+import { mcpServersJson } from '../../shared/teammate/connectApps';
 import pkg from '../../../package.json';
 
 /** How an agent starts the bridge: the app's executable as Node, with bridge.js. */
@@ -12,7 +13,7 @@ export function bridgeCommand(o: { execPath: string; bridgeJs: string; pipe: str
 
 /** The `mcpServers` JSON an agent that reads its own MCP file needs, to paste once; no ask, so it works for any run. */
 export function userConfigSnippet(o: { execPath: string; bridgeJs: string; pipe: string; dataDir: string }): string {
-  return JSON.stringify({ mcpServers: { lolping: bridgeCommand({ ...o, ask: null }) } }, null, 2);
+  return mcpServersJson(bridgeCommand({ ...o, ask: null }));
 }
 
 /** Electron's userData folder for lolPing, found without Electron because the bridge runs as plain Node. */

@@ -17,6 +17,7 @@ const SAMPLES: Record<string, unknown> = {
   continue: { t: 'continue', id: 'a1b2-c3' },
   delete: { t: 'delete', id: 'a1b2-c3' },
   search: { t: 'search', query: 'invoice' },
+  openInAgent: { t: 'openInAgent', id: 'a1b2-c3' },
   allow: { t: 'allow', serial: 1 },
   always: { t: 'always', serial: 1 },
   decline: { t: 'decline', serial: 1 },
@@ -27,7 +28,7 @@ const ALLOWED: Record<MateView, string[]> = {
   bubble: ['more', 'dismiss', 'put'],
   card: ['close', 'copy', 'reply', 'deep', 'history', 'link', 'put'],
   words: ['ask', 'cancel'],
-  history: ['open', 'continue', 'delete', 'search'],
+  history: ['open', 'continue', 'delete', 'search', 'openInAgent'],
   consent: ['allow', 'always', 'decline'],
   form: ['cancel', 'fill'],
 };
@@ -112,6 +113,7 @@ describe('parseMateAction', () => {
     expect(parseMateAction({ t: 'copy', text: 5 }, 'card')).toBeNull();
     expect(parseMateAction({ t: 'open', id: '../secrets' }, 'history')).toBeNull();
     expect(parseMateAction({ t: 'delete', id: '' }, 'history')).toBeNull();
+    expect(parseMateAction({ t: 'openInAgent', id: '..\\x' }, 'history')).toBeNull();
     expect(parseMateAction({ t: 'search', query: 'x'.repeat(201) }, 'history')).toBeNull();
   });
 });

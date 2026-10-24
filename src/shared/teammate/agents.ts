@@ -141,31 +141,34 @@ const shellQuote = (v: string): string => `'${v.replace(/'/g, '\'\\\'\'')}'`;
 
 const yamlString = (v: string): string => `'${v.replace(/'/g, '\'\'')}'`;
 
-/** dsh's `--patch` overlay: the three credential plugins headless turns off, then the bridge as a new MCP server. */
-function dshPatch(s: AgentRunSpec): string {
-  const rows = ['credentials', 'authorization', 'deepseek-account'].flatMap((id) => [
-    `- id: ${yamlString(id)}`, '  disabled: false',
-  ]);
-  const args = s.bridge.args.length === 0
+/** The `- insert:` row that adds the bridge to dsh as an MCP server; also what the user adds to dsh's own patch. */
+export function dshInsertRows(bridge: AgentRunSpec['bridge']): string[] {
+  const args = bridge.args.length === 0
     ? ['        args: []']
-    : ['        args:', ...s.bridge.args.map((a) => `          - ${yamlString(a)}`)];
-  const env = Object.entries(s.bridge.env);
+    : ['        args:', ...bridge.args.map((a) => `          - ${yamlString(a)}`)];
+  const env = Object.entries(bridge.env);
   const envRows = env.length === 0
     ? ['        env: {}']
     : ['        env:', ...env.map(([k, v]) => `          ${yamlString(k)}: ${yamlString(v)}`)];
   return [
-    ...rows,
     '- insert:',
     '    - id: \'mcp-lolping\'',
     '      name: \'@deepseek-ai/dsh-mcp-client\'',
     '      config:',
     '        serverName: \'lolping\'',
     '        transport: \'stdio\'',
-    `        command: ${yamlString(s.bridge.command)}`,
+    `        command: ${yamlString(bridge.command)}`,
     ...args,
     ...envRows,
-    '',
-  ].join('\n');
+  ];
+}
+
+/** dsh's `--patch` overlay: the three credential plugins headless turns off, then the bridge as a new MCP server. */
+function dshPatch(s: AgentRunSpec): string {
+  const rows = ['credentials', 'authorization', 'deepseek-account'].flatMap((id) => [
+    `- id: ${yamlString(id)}`, '  disabled: false',
+  ]);
+  return [...rows, ...dshInsertRows(s.bridge), ''].join('\n');
 }
 
 const CLAUDE_TOOLS = [...DISPLAY_TOOLS, 'look', 'read_file'].map((t) => `mcp__lolping__${t}`).join(',');

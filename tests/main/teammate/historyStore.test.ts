@@ -218,6 +218,17 @@ describe('HistoryStore', () => {
     expect((await new HistoryStore(d, fakeCrypto(), () => 1000).get(t.id))?.agent).toEqual(next);
   });
 
+  it('lists which agent profile answered a thread, and nothing for a thread without one', async () => {
+    const store = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000);
+    const agent = { profileId: 'cc', session: 'sess-1', cwd: 'C:\code\lolPing' };
+    const withAgent = await store.append(null, entry('one'), { ...meta, agent });
+    const without = await store.append(null, entry('two'), meta);
+    const list = await store.list();
+    expect(list.find((t) => t.id === withAgent.id)?.agent).toBe('cc');
+    const plain = list.find((t) => t.id === without.id);
+    expect(plain && 'agent' in plain).toBe(false);
+  });
+
   it('drops a stored agent session that is not valid, and keeps the thread', async () => {
     const d = join(root(), 'history');
     const crypto = fakeCrypto();

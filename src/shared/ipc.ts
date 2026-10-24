@@ -310,6 +310,12 @@ export interface SettingsApi {
   pickTeammateFolder(): Promise<string | null>;
   /** The JSON an agent that reads its own MCP file needs to add lolPing; null when it can't be made. */
   getTeammateAgentSnippet(): Promise<{ json: string } | null>;
+  /** The text to paste into the app with this CONNECT_APPS id (its config or command line); null for an unknown app. */
+  getTeammateConnectSnippet(appId: string): Promise<{ text: string } | null>;
+  /** Foreground app names of this session's asks, newest first: the App field of a rule offers them. */
+  getTeammateRecentApps(): Promise<string[]>;
+  /** The editors found on this computer, named as the helper names the foreground app. */
+  getTeammateEditors(): Promise<string[]>;
   setTeammateInstructions(text: string): Promise<SecretResult>;
   /** Your instructions: the user's own text, so this window may read it back. */
   getTeammateInstructions(): Promise<string>;

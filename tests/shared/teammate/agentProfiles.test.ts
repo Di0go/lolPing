@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentNotes, newAgentProfile, timeoutMinutes, timeoutSeconds, withFolder,
+  agentNotes, newAgentProfile, openInRows, resumableProfile, resumeArgs, timeoutMinutes, timeoutSeconds, withFolder,
 } from '../../../src/shared/teammate/agentProfiles';
 import { AGENT_PRESET_IDS, AGENT_PRESETS } from '../../../src/shared/teammate/agents';
-import { MAX_FOLDERS, normalizeTeammate } from '../../../src/shared/teammate/settings';
+import { MAX_FOLDERS, normalizeTeammate, type AgentProfile } from '../../../src/shared/teammate/settings';
 
 const WIN = { platform: 'win', trigger: 'alt', emoteTrigger: 'ctrl' } as const;
 
@@ -83,5 +83,52 @@ describe('agentNotes', () => {
     for (const id of AGENT_PRESET_IDS) {
       expect(agentNotes(id).some((n) => n.kind === 'untested')).toBe(!AGENT_PRESETS[id].checked);
     }
+  });
+});
+
+describe('resumeArgs', () => {
+  const profile = (preset: AgentProfile['preset']): AgentProfile =>
+    newAgentProfile({ id: 'p1', preset, customName: 'Custom command', tagColor: 1 });
+
+  it('continues a session with the preset\'s own flags', () => {
+    expect(resumeArgs(profile('claude'), 'sess-1')).toEqual(['--resume', 'sess-1']);
+    expect(resumeArgs(profile('dsh'), 'sess-1')).toEqual(['tui', '--resume', 'sess-1']);
+  });
+
+  it('has nothing to open for a custom command or an agent that can\'t resume', () => {
+    expect(resumeArgs(profile('custom'), 'sess-1')).toBeNull();
+    expect(resumeArgs(profile('auggie'), 'sess-1')).toBeNull();
+  });
+});
+
+describe('resumableProfile', () => {
+  const agent = (id: string, preset: AgentProfile['preset']): AgentProfile =>
+    newAgentProfile({ id, preset, customName: 'Custom command', tagColor: 1 });
+  const builtin = normalizeTeammate({
+    profiles: [{ id: 'b1', kind: 'builtin', name: 'GPT', provider: 'openai', protocol: 'openai', baseUrl: 'https://x', model: 'm' }],
+  }, WIN).profiles[0];
+
+  it('finds the agent profile a thread was answered by', () => {
+    const claude = agent('c1', 'claude');
+    expect(resumableProfile([builtin, claude], 'c1')).toBe(claude);
+  });
+
+  it('is null when the profile is gone, is not an agent, is custom or cannot resume', () => {
+    const profiles = [builtin, agent('c2', 'custom'), agent('a1', 'auggie')];
+    for (const id of ['missing', 'b1', 'c2', 'a1']) expect(resumableProfile(profiles, id)).toBeNull();
+  });
+});
+
+describe('openInRows', () => {
+  const claude = newAgentProfile({ id: 'c1', preset: 'claude', customName: 'Custom command', tagColor: 1 });
+  const rows = [{ id: 't1', agent: 'c1' }, { id: 't2', agent: 'gone' }, { id: 't3' }];
+
+  it('names the agent profile on a thread only when Open in applies', () => {
+    expect(openInRows(rows, [claude])).toEqual([{ id: 't1', agent: 'Claude Code' }, { id: 't2' }, { id: 't3' }]);
+  });
+
+  it('drops the profile id from threads that can\'t be opened', () => {
+    expect(openInRows(rows, [])).toEqual([{ id: 't1' }, { id: 't2' }, { id: 't3' }]);
+    for (const row of openInRows(rows, [])) expect('agent' in row).toBe(false);
   });
 });

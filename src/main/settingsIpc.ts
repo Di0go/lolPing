@@ -10,6 +10,7 @@ import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
 import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
+import { CONNECT_APPS, connectSnippet, type BridgeCommand } from '../shared/teammate/connectApps';
 import { needsKey } from '../shared/teammate/providers';
 import { isBuiltin, PATH_MAX, type AgentProfile, type BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
@@ -73,6 +74,12 @@ export interface SettingsIpcDeps {
     pickFolder(): Promise<string | null>;
     /** The JSON to paste into an agent's own MCP file; null when the pipe name can't be worked out. */
     agentSnippet(): string | null;
+    /** How an agent started by the user's own app runs the bridge; null when the pipe name can't be worked out. */
+    bridge(): BridgeCommand | null;
+    /** Foreground app names of this session's asks, newest first. */
+    recentApps(): readonly string[];
+    /** The editors found on this computer. */
+    editors(): Promise<string[]>;
   };
 }
 
@@ -285,6 +292,14 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
     const json = d.teammate.agentSnippet();
     return json === null ? null : { json };
   });
+  // The shape comes from the app's own row, never from the window.
+  ipcMain.handle(SETTINGS_CH.teammateConnectSnippet, (_e, id: unknown): { text: string } | null => {
+    const app = typeof id === 'string' ? CONNECT_APPS.find((a) => a.id === id) : undefined;
+    const bridge = app ? d.teammate.bridge() : null;
+    return app && bridge ? { text: connectSnippet(app.shape, bridge, d.platform) } : null;
+  });
+  ipcMain.handle(SETTINGS_CH.teammateRecentApps, (): string[] => [...d.teammate.recentApps()]);
+  ipcMain.handle(SETTINGS_CH.teammateEditors, (): Promise<string[]> => d.teammate.editors().catch(() => []));
 }
 
 function isWebUrl(url: string): boolean {

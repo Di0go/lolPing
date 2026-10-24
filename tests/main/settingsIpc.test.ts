@@ -281,6 +281,7 @@ describe('teammate IPC', () => {
   let clearFails = false;
   let checked: string[];
   let picked: unknown;
+  let bridgeUp = true;
 
   function registerTeammate(): void {
     h.handlers.clear();
@@ -298,6 +299,9 @@ describe('teammate IPC', () => {
         },
         pickFolder: async () => picked,
         agentSnippet: () => '{"mcpServers":{}}',
+        bridge: () => (bridgeUp ? { command: 'lolPing.exe', args: ['bridge.js'], env: { LOLPING_PIPE: 'P' } } : null),
+        recentApps: () => ['Code', 'chrome'],
+        editors: async () => ['Code', 'idea64'],
         history: async (op: string) => {
           historyOps.push(op);
           return op !== 'clear' || !clearFails;
@@ -362,6 +366,24 @@ describe('teammate IPC', () => {
 
   it('gives the window the snippet for an agent that reads its own MCP file', async () => {
     expect(await call(SETTINGS_CH.teammateAgentSnippet)).toEqual({ json: '{"mcpServers":{}}' });
+  });
+
+  it('gives the window a snippet in the shape of the app it asks for, and nothing for an unknown app', async () => {
+    const zed = await call(SETTINGS_CH.teammateConnectSnippet, 'zed');
+    expect(JSON.parse((zed as { text: string }).text)).toEqual({
+      context_servers: { lolping: { command: { path: 'lolPing.exe', args: ['bridge.js'], env: { LOLPING_PIPE: 'P' } } } },
+    });
+    const goose = await call(SETTINGS_CH.teammateConnectSnippet, 'goose');
+    expect(goose).toEqual({ text: "'LOLPING_PIPE=P' 'lolPing.exe' 'bridge.js'" });
+    for (const bad of ['nope', 5, null, { id: 'zed' }]) expect(await call(SETTINGS_CH.teammateConnectSnippet, bad)).toBeNull();
+    bridgeUp = false;
+    expect(await call(SETTINGS_CH.teammateConnectSnippet, 'zed')).toBeNull();
+    bridgeUp = true;
+  });
+
+  it('lists the apps asked from and the editors installed', async () => {
+    expect(await call(SETTINGS_CH.teammateRecentApps)).toEqual(['Code', 'chrome']);
+    expect(await call(SETTINGS_CH.teammateEditors)).toEqual(['Code', 'idea64']);
   });
 
   it('validates teammate payloads', async () => {

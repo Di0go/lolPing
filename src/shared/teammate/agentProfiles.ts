@@ -1,5 +1,5 @@
 import { AGENT_PRESETS, type AgentPresetId } from './agents';
-import { MAX_FOLDERS, PATH_MAX, type AgentProfile } from './settings';
+import { MAX_FOLDERS, PATH_MAX, type AgentProfile, type Profile } from './settings';
 
 const TIMEOUT_DEFAULT_S = 300;
 const TIMEOUT_MIN_MINUTES = 1;
@@ -50,4 +50,26 @@ export function agentNotes(preset: AgentPresetId | 'custom'): AgentNote[] {
   if (p.mcp === 'user') notes.push({ kind: 'addMcp', file: p.userConfig ?? null, bin: p.bin });
   if (preset === 'dsh') notes.push({ kind: 'dsh' });
   return notes;
+}
+
+/** argv that continues `session` in a terminal; null for a custom command and for an agent that can't resume. */
+export function resumeArgs(p: AgentProfile, session: string): string[] | null {
+  if (p.preset === 'custom') return null;
+  const args = AGENT_PRESETS[p.preset].openArgs(session);
+  return args.length === 0 ? null : args;
+}
+
+/** The agent profile that can continue a thread's session; null when it is gone, custom or can't resume. */
+export function resumableProfile(profiles: readonly Profile[], profileId: string): AgentProfile | null {
+  const p = profiles.find((x) => x.id === profileId);
+  return p !== undefined && p.kind === 'agent' && resumeArgs(p, 'x') !== null ? p : null;
+}
+
+/** History rows with `agent` (a profile id) turned into that profile's name, or left out when Open in can't apply. */
+export function openInRows<T extends { agent?: string }>(rows: readonly T[], profiles: readonly Profile[]):
+  (Omit<T, 'agent'> & { agent?: string })[] {
+  return rows.map(({ agent, ...row }) => {
+    const profile = agent === undefined ? null : resumableProfile(profiles, agent);
+    return profile ? { ...row, agent: profile.name } : row;
+  });
 }

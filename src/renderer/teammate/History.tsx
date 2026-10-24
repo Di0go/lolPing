@@ -122,6 +122,11 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
                   <Button size="small" appearance="primary" onClick={() => act({ t: 'continue', id: th.id })}>
                     {ui.continueThread}
                   </Button>
+                  {th.agent !== undefined && (
+                    <Button size="small" onClick={() => act({ t: 'openInAgent', id: th.id })}>
+                      {ui.openInAgent(th.agent)}
+                    </Button>
+                  )}
                   <Button
                     size="small"
                     appearance="subtle"
