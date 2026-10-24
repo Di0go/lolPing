@@ -3,7 +3,8 @@ import { isPingId, type PingId } from '../pings';
 import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from '../roomColors';
 import { sanitizeName } from '../roomProtocol';
 import type { EmoteTriggerKey, NamedTrigger, TriggerKey } from '../settings';
-import { allowed, parsePermissionKey } from './doRules';
+import { AGENT_PRESET_IDS, type AgentPresetId } from './agents';
+import { agentAllowed, allowed, parsePermissionKey } from './doRules';
 import { PROVIDER_IDS, type ProviderId } from './providers';
 
 /** The ask key: a trigger key of its own, or the ping key ('same'). */
@@ -30,8 +31,32 @@ export interface BuiltinProfile {
   model: string;
 }
 
-/** Built-in profiles only for now; agent profiles join this union later. */
-export type Profile = BuiltinProfile;
+export interface AgentProfile {
+  id: string;
+  kind: 'agent';
+  name: string;
+  tagColor: number;
+  tagColorCustom: TagRgb | null;
+  preset: AgentPresetId | 'custom';
+  /** The executable: the preset's bin by default, or a full path. Custom: also its arguments, see customArgs. */
+  command: string;
+  /** Custom only: arguments, one per line; `{prompt}`, `{askDir}`, `{mcpConfig}` are replaced. */
+  customArgs: string[];
+  folder: { kind: 'fixed'; path: string } | { kind: 'editor'; folders: string[] };
+  timeoutS: number;
+}
+
+export type Profile = BuiltinProfile | AgentProfile;
+
+export const isBuiltin = (p: Profile): p is BuiltinProfile => p.kind === 'builtin';
+
+/** Pings from this app (and a window title containing the text, when given) go to this profile. */
+export interface AppRule {
+  app: string;
+  titleContains: string;
+  intents: IntentId[];
+  profile: string;
+}
 
 export interface TeammateSettings {
   askTrigger: AskTrigger;
@@ -46,6 +71,9 @@ export interface TeammateSettings {
   profiles: Profile[];
   defaultProfile: string | null;
   deepProfile: string | null;
+  rules: AppRule[];
+  /** Lets a coding agent ping the user through lolPing's bridge. */
+  agentsCanPing: boolean;
   context: { marks: boolean; systemText: boolean; files: boolean; webPdfs: boolean; clipboardForForms: boolean };
   emotes: boolean;
   receiptSound: boolean;
@@ -70,6 +98,8 @@ export const DEFAULT_TEAMMATE: TeammateSettings = {
   profiles: [],
   defaultProfile: null,
   deepProfile: null,
+  rules: [],
+  agentsCanPing: false,
   context: { marks: true, systemText: true, files: true, webPdfs: false, clipboardForForms: false },
   emotes: true,
   receiptSound: true,
@@ -79,6 +109,14 @@ export const DEFAULT_TEAMMATE: TeammateSettings = {
 };
 
 export const MAX_PROFILES = 20;
+export const MAX_RULES = 50;
+const PATH_MAX = 1024;
+const MAX_FOLDERS = 20;
+const MAX_ARG_LINES = 40;
+const RULE_FIELD_MAX = 200;
+const TIMEOUT_MIN_S = 30;
+const TIMEOUT_MAX_S = 1800;
+const TIMEOUT_DEFAULT_S = 300;
 export const INTENT_LABEL_MAX = 40;
 export const INTENT_INSTRUCTION_MAX = 2000;
 export const TAG_NAME_MAX = 12;
@@ -136,16 +174,67 @@ function intents(raw: unknown): Partial<Record<IntentId, IntentOverride>> {
   return out;
 }
 
-function profile(raw: unknown): Profile | null {
-  if (!isObj(raw) || raw.kind !== 'builtin') return null;
-  const { id, name, provider, protocol, baseUrl, model } = raw;
-  if (typeof id !== 'string' || id === '' || id.length > 64 || typeof name !== 'string' || typeof baseUrl !== 'string'
-    || typeof model !== 'string' || !oneOf(provider, PROVIDER_IDS) || !oneOf(protocol, ['openai', 'anthropic'] as const)) return null;
+function tagOf(raw: Record<string, unknown>): { tagColor: number; tagColorCustom: TagRgb | null } {
   return {
-    id, kind: 'builtin', name: cut(name.trim(), 60), provider, protocol, baseUrl: cut(baseUrl, FIELD_MAX), model: cut(model, 200),
     tagColor: isTagColor(raw.tagColor) ? raw.tagColor : DEFAULT_TEAMMATE.tagColor,
     tagColorCustom: isTagRgb(raw.tagColorCustom) ? readableTagRgb(raw.tagColorCustom) : null,
   };
+}
+
+/** Strings of at most PATH_MAX characters: a longer one isn't a path or an argument to cut, so it goes. */
+const shortStrings = (raw: unknown, max: number, keepEmpty: boolean): string[] =>
+  (Array.isArray(raw) ? raw : [])
+    .filter((s): s is string => typeof s === 'string' && s.length <= PATH_MAX && (keepEmpty || s !== ''))
+    .slice(0, max);
+
+function agentFolder(raw: unknown): AgentProfile['folder'] {
+  if (isObj(raw) && raw.kind === 'fixed' && typeof raw.path === 'string' && raw.path !== '' && raw.path.length <= PATH_MAX) {
+    return { kind: 'fixed', path: raw.path };
+  }
+  return { kind: 'editor', folders: shortStrings(isObj(raw) ? raw.folders : [], MAX_FOLDERS, false) };
+}
+
+function agentProfile(raw: Record<string, unknown>, id: string, name: string): AgentProfile | null {
+  const { preset, command } = raw;
+  if (!oneOf(preset, [...AGENT_PRESET_IDS, 'custom'] as const) || typeof command !== 'string') return null;
+  const exe = command.trim();
+  if (exe === '' || exe.length > PATH_MAX) return null;
+  const timeout = typeof raw.timeoutS === 'number' && Number.isFinite(raw.timeoutS) ? Math.round(raw.timeoutS) : TIMEOUT_DEFAULT_S;
+  return {
+    id, kind: 'agent', name, ...tagOf(raw), preset, command: exe, customArgs: shortStrings(raw.customArgs, MAX_ARG_LINES, true),
+    folder: agentFolder(raw.folder), timeoutS: Math.min(TIMEOUT_MAX_S, Math.max(TIMEOUT_MIN_S, timeout)),
+  };
+}
+
+function profile(raw: unknown): Profile | null {
+  if (!isObj(raw)) return null;
+  const { id, name, provider, protocol, baseUrl, model } = raw;
+  if (typeof id !== 'string' || id === '' || id.length > 64 || typeof name !== 'string') return null;
+  if (raw.kind === 'agent') return agentProfile(raw, id, cut(name.trim(), 60));
+  if (raw.kind !== 'builtin' || typeof baseUrl !== 'string' || typeof model !== 'string' || !oneOf(provider, PROVIDER_IDS)
+    || !oneOf(protocol, ['openai', 'anthropic'] as const)) return null;
+  return {
+    id, kind: 'builtin', name: cut(name.trim(), 60), provider, protocol, baseUrl: cut(baseUrl, FIELD_MAX), model: cut(model, 200),
+    ...tagOf(raw),
+  };
+}
+
+function rules(raw: unknown, known: (id: unknown) => string | null): AppRule[] {
+  const out: AppRule[] = [];
+  if (!Array.isArray(raw)) return out;
+  for (const r of raw) {
+    if (!isObj(r) || typeof r.app !== 'string') continue;
+    const app = cut(r.app.trim(), RULE_FIELD_MAX);
+    const profileId = known(r.profile);
+    if (app === '' || profileId === null) continue;
+    const ids = Array.isArray(r.intents) ? r.intents.filter(isPingId) : [];
+    out.push({
+      app, profile: profileId, intents: [...new Set(ids)],
+      titleContains: typeof r.titleContains === 'string' ? cut(r.titleContains.trim(), RULE_FIELD_MAX) : '',
+    });
+    if (out.length >= MAX_RULES) break;
+  }
+  return out;
 }
 
 function profiles(raw: unknown): Profile[] {
@@ -196,8 +285,9 @@ export function normalizeTeammate(
     ? r.permissions.filter((p): p is string => {
       if (typeof p !== 'string' || p.length > 200) return false;
       const k = parsePermissionKey(p);
-      // allowed() refuses fill, which never gets Always allow.
-      return k !== null && allowed([p], k.profileId, k.action) && known(k.profileId) !== null;
+      if (k === null || known(k.profileId) === null) return false;
+      // allowed() refuses fill, which never gets Always allow; agentAllowed() refuses shell tools.
+      return k.action === 'agent' ? agentAllowed([p], k.profileId, k.tool) : allowed([p], k.profileId, k.action);
     })
     : [];
   return {
@@ -211,6 +301,8 @@ export function normalizeTeammate(
     profiles: list,
     defaultProfile: known(r.defaultProfile),
     deepProfile: known(r.deepProfile),
+    rules: rules(r.rules, known),
+    agentsCanPing: bool(r.agentsCanPing, DEFAULT_TEAMMATE.agentsCanPing),
     context: context(r.context),
     emotes: bool(r.emotes, DEFAULT_TEAMMATE.emotes),
     receiptSound: bool(r.receiptSound, DEFAULT_TEAMMATE.receiptSound),

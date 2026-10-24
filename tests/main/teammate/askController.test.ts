@@ -12,7 +12,7 @@ import type { SystemTextLayer } from '../../../src/shared/teammate/contextProtoc
 import { zoomRect, type Rect } from '../../../src/shared/teammate/coords';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
 import { bubbleMs } from '../../../src/shared/teammate/line';
-import { DEFAULT_TEAMMATE, type BuiltinProfile, type TeammateSettings } from '../../../src/shared/teammate/settings';
+import { DEFAULT_TEAMMATE, type AgentProfile, type BuiltinProfile, type TeammateSettings } from '../../../src/shared/teammate/settings';
 import type { ActionCall, ToolDef } from '../../../src/shared/teammate/tools';
 import type { BubbleState, CardState } from '../../../src/shared/teammateIpc';
 
@@ -482,6 +482,19 @@ describe('AskController', () => {
       expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.noProfile]);
       expect(h.ctl.running).toBe(false);
     }
+  });
+
+  it('treats an agent profile as no profile until agents can answer', async () => {
+    const agent: AgentProfile = {
+      id: 'ag', kind: 'agent', name: 'Claude', tagColor: 1, tagColorCustom: null, preset: 'claude', command: 'claude',
+      customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
+    };
+    const h = harness({ teammate: { profiles: [agent], defaultProfile: 'ag' } });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.adapters).toEqual([]);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.noProfile]);
+    expect(h.ctl.running).toBe(false);
   });
 
   it('fails with a line when nothing is received in 10 s', async () => {

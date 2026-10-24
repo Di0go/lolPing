@@ -244,6 +244,8 @@ const enMateSettings = {
   /** One line of the list: the profile that was trusted and what it may do without asking. */
   permissionLine: (profile: string, action: string) => `${profile}: ${action}`,
   permissionActions: { paste: 'paste', fill: 'fill', event: 'add to calendar', open: 'open a link' },
+  /** A coding agent's tool that is always allowed: the agent profile and the tool's name. */
+  agentPermission: (profile: string, tool: string) => `${profile}: ${tool}`,
   permissionRemove: 'Remove',
   permissionRemoveLabel: (line: string) => `Remove ${line}`,
   usage: 'Usage this month',
@@ -1132,6 +1134,7 @@ const zh: Strings = {
       permissionsEmpty: '还没有总是允许的操作。在确认卡片上选“总是允许”。',
       permissionLine: (profile, action) => `${profile}：${action}`,
       permissionActions: { paste: '粘贴', fill: '填写', event: '添加日程', open: '打开链接' },
+      agentPermission: (profile, tool) => `${profile}：${tool}`,
       permissionRemove: '移除',
       permissionRemoveLabel: (line) => `移除 ${line}`,
       usage: '本月用量',

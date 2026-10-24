@@ -5,12 +5,34 @@ export type PutAction = (typeof PUT_ACTIONS)[number];
 
 export const permissionKey = (profileId: string, action: PutAction): string => `${profileId}:${action}`;
 
-/** The profile and action behind a saved key, or null when the key isn't one permissionKey could have made. */
-export function parsePermissionKey(key: string): { profileId: string; action: PutAction } | null {
+export type AgentAction = `agent:${string}`;
+
+export const agentPermissionKey = (profileId: string, tool: string): string => `${profileId}:agent:${tool}`;
+
+const AGENT_MARK = ':agent:';
+
+/** The profile and action (or agent tool) behind a saved key, or null when the key isn't one a key maker could make. */
+export function parsePermissionKey(
+  key: string,
+): { profileId: string; action: PutAction } | { profileId: string; action: 'agent'; tool: string } | null {
+  const mark = key.lastIndexOf(AGENT_MARK);
+  if (mark > 0 && key.length > mark + AGENT_MARK.length) {
+    return { profileId: key.slice(0, mark), action: 'agent', tool: key.slice(mark + AGENT_MARK.length) };
+  }
   const at = key.lastIndexOf(':');
   const action = key.slice(at + 1);
   const known = PUT_ACTIONS.find((a) => a === action);
   return at > 0 && known ? { profileId: key.slice(0, at), action: known } : null;
+}
+
+/** A tool that runs commands never gets Always allow: Bash, PowerShell, or any name with "shell" or "exec". */
+export function isShellTool(tool: string): boolean {
+  return /^(?:bash|powershell)$/i.test(tool) || /shell|exec/i.test(tool);
+}
+
+/** Whether the user chose Always allow for this agent tool. A shell tool never is. */
+export function agentAllowed(permissions: readonly string[], profileId: string, tool: string): boolean {
+  return !isShellTool(tool) && permissions.includes(agentPermissionKey(profileId, tool));
 }
 
 /** Whether the user chose Always allow for this action. Fill never is: it always shows its preview. */

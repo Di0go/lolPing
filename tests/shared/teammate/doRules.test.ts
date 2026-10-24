@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  agentAllowed,
+  agentPermissionKey,
   allowed,
+  isShellTool,
   formPreview,
   neverFill,
   pastePlan,
@@ -32,6 +35,25 @@ describe('permissions', () => {
 
   it('never allows fill without the preview', () => {
     expect(allowed(['p1:fill'], 'p1', 'fill')).toBe(false);
+  });
+
+  it('keys agent tools by profile and tool', () => {
+    expect(agentPermissionKey('p1', 'Edit')).toBe('p1:agent:Edit');
+    expect(parsePermissionKey('p1:agent:Edit')).toEqual({ profileId: 'p1', action: 'agent', tool: 'Edit' });
+    expect(parsePermissionKey('a:b:agent:Edit')).toEqual({ profileId: 'a:b', action: 'agent', tool: 'Edit' });
+    for (const bad of ['p1:agent:', ':agent:Edit']) expect(parsePermissionKey(bad), bad).toBeNull();
+    expect(agentAllowed(['p1:agent:Edit'], 'p1', 'Edit')).toBe(true);
+    expect(agentAllowed(['p1:agent:Edit'], 'p1', 'Read')).toBe(false);
+    expect(agentAllowed(['p1:agent:Edit'], 'p2', 'Edit')).toBe(false);
+    expect(allowed(['p1:agent:Edit'], 'p1', 'paste')).toBe(false);
+  });
+
+  it('never allows a shell tool always', () => {
+    for (const tool of ['Bash', 'PowerShell', 'run_shell_command', 'exec_command', 'bash', 'ExecuteCommand']) {
+      expect(isShellTool(tool), tool).toBe(true);
+      expect(agentAllowed([agentPermissionKey('p1', tool)], 'p1', tool), tool).toBe(false);
+    }
+    for (const tool of ['Edit', 'Read', 'WebFetch', 'write_file']) expect(isShellTool(tool), tool).toBe(false);
   });
 });
 

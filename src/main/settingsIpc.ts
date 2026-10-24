@@ -11,7 +11,7 @@ import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
 import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
 import { needsKey } from '../shared/teammate/providers';
-import type { BuiltinProfile } from '../shared/teammate/settings';
+import { isBuiltin, type BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
 import { emoteFileFrom, type EmoteLibrary } from './emoteLibrary';
 import type { SettingsStore } from './settingsStore';
@@ -206,7 +206,7 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
 /** Keys go in and never come back out: the window learns only whether a profile has one, and what Check key found. */
 function registerTeammateIpc(d: SettingsIpcDeps): void {
   const profileOf = (id: unknown): BuiltinProfile | null =>
-    typeof id === 'string' ? d.store.get().teammate.profiles.find((p) => p.id === id) ?? null : null;
+    typeof id === 'string' ? d.store.get().teammate.profiles.filter(isBuiltin).find((p) => p.id === id) ?? null : null;
   const stored = async (write: () => Promise<void>): Promise<SecretResult> => {
     try {
       await write();

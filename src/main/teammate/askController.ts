@@ -15,7 +15,7 @@ import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
 import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
-import type { BuiltinProfile, TeammateSettings } from '../../shared/teammate/settings';
+import { isBuiltin, type BuiltinProfile, type TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import {
   applyLimits, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall,
@@ -181,10 +181,11 @@ function failureOf(err: unknown): AskFailure {
   return 'other';
 }
 
-/** `deep` intents go to the deep profile when one is set, everything else to the default one. */
+/** `deep` intents go to the deep profile when one is set, everything else to the default one. An agent profile can't
+ *  answer an ask yet, so it counts as no profile. */
 function route(t: TeammateSettings, deep: boolean): BuiltinProfile | null {
   const id = deep && t.deepProfile ? t.deepProfile : t.defaultProfile;
-  return t.profiles.find((p) => p.id === id) ?? null;
+  return t.profiles.filter(isBuiltin).find((p) => p.id === id) ?? null;
 }
 
 /**
