@@ -23,6 +23,8 @@ export interface AgentResult {
 
 export interface AgentRun {
   readonly done: Promise<AgentResult>;
+  /** The last session id the agent has printed so far: an answer kept before the agent exits keeps it too. */
+  session(): string | null;
   kill(): void;
 }
 
@@ -199,6 +201,7 @@ export class AgentRunner {
           });
         });
       }),
+      session: () => session,
       kill: () => {
         if (over || killed || child.pid === undefined) return;
         killed = true;

@@ -226,6 +226,19 @@ describe('AgentRunner', () => {
     expect(sizeOf(beat)).toBe(size);
   }, SLOW);
 
+  it('gives the latest session id while the agent still runs', async () => {
+    await placeholder('claude');
+    const { runner, children } = spyRunner();
+    const run = await runner.start(profile({ preset: 'claude', command: 'claude' }), spec(), dir, { PATH: dir });
+    expect(run.session()).toBeNull();
+    children[0]?.stdout.write('{"type":"system","subtype":"init","session_id":"s-1"}\n');
+    await until(() => run.session() === 's-1', 'the first session');
+    children[0]?.stdout.write('{"type":"result","is_error":false,"session_id":"s-2"}\n');
+    await until(() => run.session() === 's-2', 'the second session');
+    children[0]?.finish(0);
+    expect((await run.done).session).toBe('s-2');
+  });
+
   it('kills each live run once, and not after it ended', async () => {
     await placeholder('claude');
     const { runner, children, killed } = spyRunner();

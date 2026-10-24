@@ -169,6 +169,8 @@ interface Run {
   cwd: string | null;
   /** The agent session this answer came from, kept with the thread so the next ask in it resumes it. */
   session: NonNullable<ThreadRecord['agent']> | null;
+  /** The agent answering, while it runs: finish() reads its session when the answer is kept before it exits. */
+  agentRun: AgentRun | null;
   shot: Shot | null;
   app: string;
   title: string;
@@ -392,7 +394,7 @@ export class AskController extends EventEmitter {
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
-      profile: null, route: '', agent: null, visitor: null, folder: '', cwd: null, session: null,
+      profile: null, route: '', agent: null, visitor: null, folder: '', cwd: null, session: null, agentRun: null,
       shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
       rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
@@ -644,9 +646,10 @@ export class AskController extends EventEmitter {
       spot: { intent: 'generic', phys: cursor, displayId: display.id }, receipt: point, display,
       intent: intentFor(t, 'generic', lang), words: null, thread: null, autoCard: true, lang,
       tag: this.visitorTag(client), emotes: t.emotes, profile: null, route: '', agent: null, visitor: { point },
-      folder: '', cwd: null, session: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '',
-      said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [], dir: '', screenMarks: [],
-      doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null, info: null,
+      folder: '', cwd: null, session: null, agentRun: null, shot: null, app: '', title: '', window: '', thumb: '',
+      text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
+      dir: '', screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null,
+      info: null,
     };
   }
 
@@ -832,6 +835,7 @@ export class AskController extends EventEmitter {
     }
     // A cancel, a new ask, Stop, a deadline or a failure ends the agent and everything it started.
     if (!this.alive(run)) return agentRun.kill();
+    run.agentRun = agentRun;
     run.abort.signal.addEventListener('abort', () => agentRun.kill(), { once: true });
     // Spec §16: an agent lists the tools about 2 s after it starts.
     this.deadline(run, RECEIVE_MS, () => {
@@ -846,8 +850,14 @@ export class AskController extends EventEmitter {
       return this.fail(run, 'agent', error
         ? words.agent.error(name, error.slice(0, AGENT_ERROR_MAX)) : words.agent.stopped(name));
     }
-    if (isSessionId(result.session)) run.session = { profileId: profile.id, session: result.session, cwd };
+    this.keepSession(run, result.session);
     await this.finish(run);
+  }
+
+  /** The agent's session, for the thread to resume; the first one kept stays (the exit's, else the latest printed). */
+  private keepSession(run: Run, session: string | null): void {
+    if (run.session || !isSessionId(session) || run.profile?.kind !== 'agent' || run.cwd === null) return;
+    run.session = { profileId: run.profile.id, session, cwd: run.cwd };
   }
 
   /** The running ask an agent's bridge names by its token, if it is still going. */
@@ -1119,6 +1129,8 @@ export class AskController extends EventEmitter {
   }
 
   private async finish(run: Run): Promise<void> {
+    // An agent still running when its time ran out has printed its session already.
+    this.keepSession(run, run.agentRun?.session() ?? null);
     if (!run.line && run.text.trim()) this.say(run, run.text);
     // A model that skipped `say` is not asked again, which would cost a whole round: the card's start is the line.
     // The card keeps no copy of it above the answer it came from.

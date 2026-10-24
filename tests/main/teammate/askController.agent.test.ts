@@ -37,6 +37,8 @@ interface Started {
   cwd: string;
   env: NodeJS.ProcessEnv;
   kills: number;
+  /** The session id the agent has printed so far. */
+  session: string | null;
   exit(r: Partial<AgentResult>): void;
 }
 
@@ -90,12 +92,13 @@ function harness(opts: Options = {}) {
         let resolve: (r: AgentResult) => void = () => undefined;
         const done = new Promise<AgentResult>((r) => { resolve = r; });
         const s: Started = {
-          profile, spec, cwd, env, kills: 0,
+          profile, spec, cwd, env, kills: 0, session: null,
           exit: (r) => resolve({ code: 0, session: null, error: null, tail: '', ...r }),
         };
         started.push(s);
         const run: AgentRun = {
           done,
+          session: () => s.session,
           kill: () => {
             s.kills += 1;
             resolve({ code: null, session: null, error: null, tail: '' });
@@ -501,6 +504,20 @@ describe('AskController with an agent', () => {
     expect(h.lines().at(-1)).toBe('Line 3 divides by zero.');
     expect(h.pings.map((p) => p.id)).toEqual(['omw', 'danger']);
     expect(h.appends).toEqual([expect.objectContaining({ line: 'Line 3 divides by zero.', markdown: 'B3 is 0.' })]);
+  });
+
+  it('keeps the session of an agent that outlives its timeout, so the thread resumes it', async () => {
+    const h = harness({ teammate: { profiles: [agent({ timeoutS: 120 })], defaultProfile: 'cc' } });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.ctl.agentTools(h.token());
+    h.started[0].session = 'sess-late';
+    await h.ctl.agentCall(h.token(), 'say', { text: 'Line 3 divides by zero.' });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.started[0].kills).toBe(1);
+    const kept = { profileId: 'cc', session: 'sess-late', cwd: 'C:\\code\\lolPing' };
+    expect(h.appends).toEqual([expect.objectContaining({ agent: kept })]);
+    expect(h.ctl.currentThread()?.agent).toEqual(kept);
   });
 
   it('resumes the thread\'s agent session in the folder it was recorded in', async () => {
