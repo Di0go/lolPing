@@ -61,7 +61,7 @@ const enMateUi = {
   agentRun: (agent: string) => `${agent} wants to run a command`,
   agentOpen: (agent: string, url: string) => `${agent} wants to open ${url}`,
   agentUse: (agent: string, tool: string) => `${agent} wants to use ${tool}`,
-  agentAlwaysAsks: 'Outside the project folder, or a settings file: lolPing always asks.',
+  agentAlwaysAsks: 'In the home folder, outside the project folder, or a settings file: lolPing always asks.',
   /** Under an agent's detail: what it left out. */
   moreLines: (n: number) => (n === 1 ? '+1 more line' : `+${n} more lines`),
   moreEdits: (n: number) => (n === 1 ? '+1 more edit' : `+${n} more edits`),
@@ -1126,7 +1126,7 @@ const zh: Strings = {
       agentRun: (agent: string) => `${agent} 想运行一个命令`,
       agentOpen: (agent: string, url: string) => `${agent} 想打开 ${url}`,
       agentUse: (agent: string, tool: string) => `${agent} 想使用 ${tool}`,
-      agentAlwaysAsks: '在项目文件夹外或是设置文件：lolPing 每次都会问。',
+      agentAlwaysAsks: '在主文件夹里、项目文件夹外或是设置文件：lolPing 每次都会问。',
       moreLines: (n: number) => `还有 ${n} 行`,
       moreEdits: (n: number) => `还有 ${n} 处修改`,
       allowOnce: '允许一次',
