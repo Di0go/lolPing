@@ -8,7 +8,7 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: { index: resolve('src/main/index.ts') },
+        input: { index: resolve('src/main/index.ts'), bridge: resolve('src/main/mcp/bridge.ts') },
         output: { format: 'cjs', entryFileNames: '[name].js' },
       },
     },
