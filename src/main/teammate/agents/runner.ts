@@ -49,13 +49,13 @@ function customArgv(lines: readonly string[], s: AgentRunSpec): string[] {
 }
 
 /** A variable by name; Windows names ignore case, and a copied env keeps whatever case the system used. */
-function envValue(env: NodeJS.ProcessEnv, name: string, platform: Platform): string | undefined {
+export function envValue(env: NodeJS.ProcessEnv, name: string, platform: Platform): string | undefined {
   if (env[name] !== undefined || platform !== 'win') return env[name];
   const key = Object.keys(env).find((k) => k.toUpperCase() === name);
   return key === undefined ? undefined : env[key];
 }
 
-function isFile(p: string): boolean {
+export function isFile(p: string): boolean {
   try {
     return statSync(p).isFile();
   } catch {

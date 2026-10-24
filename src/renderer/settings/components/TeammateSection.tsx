@@ -6,17 +6,20 @@ import {
 } from '@fluentui/react-icons';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
-import { TAG_COLORS } from '../../../shared/roomColors';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
+import { newAgentProfile } from '../../../shared/teammate/agentProfiles';
+import { AGENT_PRESET_IDS, AGENT_PRESETS, type AgentPresetId } from '../../../shared/teammate/agents';
 import { parsePermissionKey } from '../../../shared/teammate/doRules';
 import { needsKey, PROVIDERS, visionGuess, type ProviderId } from '../../../shared/teammate/providers';
 import {
-  INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, isBuiltin, TAG_NAME_MAX, type BuiltinProfile, type IntentOverride,
-  type TeammateSettings,
+  INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, isBuiltin, TAG_NAME_MAX, type AgentProfile, type BuiltinProfile,
+  type IntentOverride, type TeammateSettings,
 } from '../../../shared/teammate/settings';
 import { api } from '../api';
 import { useText } from '../text';
 import type { Update } from '../useAppState';
+import { AgentProfileCard } from './AgentProfileCard';
+import { DraftInput, Swatches } from './mateFields';
 import { SettingRow, SwitchRow } from './rows';
 import { TriggerPicker } from './TriggerPicker';
 
@@ -32,33 +35,6 @@ type Patch = (p: Partial<TeammateSettings>) => void;
 
 /** Short and unique enough for a handful of profiles; the same shape the settings file accepts. */
 const newProfileId = (): string => `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-
-function Swatches({ label, color, onPick }: { label: string; color: number; onPick(i: number): void }) {
-  const t = useText();
-  return (
-    <div className="swatches" role="radiogroup" aria-label={label}>
-      {TAG_COLORS.map((c, i) => (
-        <button key={c} type="button" role="radio" aria-checked={color === i} aria-label={t.roomColorLabel(i + 1)}
-          className={`swatch${color === i ? ' sel' : ''}`} style={{ background: c }} onClick={() => onPick(i)} />
-      ))}
-    </div>
-  );
-}
-
-/** A text field that saves when it loses focus or on Enter, so each keystroke isn't a settings write. */
-function DraftInput({ value, onSave, maxLength, placeholder, width }: {
-  value: string; onSave(v: string): void; maxLength?: number; placeholder?: string; width?: number;
-}) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const save = () => {
-    if (draft !== value) onSave(draft);
-  };
-  return (
-    <Input value={draft} maxLength={maxLength} placeholder={placeholder} style={{ width: width ?? 260 }}
-      onChange={(_, d) => setDraft(d.value)} onBlur={save} onKeyDown={(e) => e.key === 'Enter' && save()} />
-  );
-}
 
 function ProfileCard({ p, onChange, onRemove }: {
   p: BuiltinProfile; onChange(patch: Partial<BuiltinProfile>): void; onRemove(): void;
@@ -369,8 +345,6 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
   const same = mate.askTrigger === 'same';
   const askLabel = triggerLabel(mate.askTrigger === 'same' ? s.trigger : mate.askTrigger, t.lang, api.platform);
   const ownAskKey = ASK_KEYS.find((k) => !sameTrigger(k, s.trigger) && !sameTrigger(k, s.emoteTrigger)) ?? 'win';
-  // Agent profiles get their own cards in a later task; until then only built-in ones are listed.
-  const builtins = mate.profiles.filter(isBuiltin);
   const profileName = (id: string | null) => mate.profiles.find((p) => p.id === id)?.name ?? m.noProfile;
   const [secrets, setSecrets] = useState(true);
   const [screenAccess, setScreenAccess] = useState<boolean | null>(null);
@@ -394,14 +368,20 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
     };
     patch({ profiles: [...mate.profiles, profile], defaultProfile: mate.defaultProfile ?? profile.id });
   };
+  const addAgent = (preset: AgentPresetId | 'custom') => {
+    const profile = newAgentProfile({ id: newProfileId(), preset, customName: m.agentCustom, tagColor: mate.tagColor });
+    patch({ profiles: [...mate.profiles, profile], defaultProfile: mate.defaultProfile ?? profile.id });
+  };
   const changeProfile = (id: string, p: Partial<BuiltinProfile>) =>
     patch({ profiles: mate.profiles.map((x) => (x.id === id && isBuiltin(x) ? { ...x, ...p } : x)) });
+  const changeAgent = (id: string, p: Partial<AgentProfile>) =>
+    patch({ profiles: mate.profiles.map((x) => (x.id === id && x.kind === 'agent' ? { ...x, ...p } : x)) });
   const removeProfile = (id: string) => {
-    void api.setTeammateKey(id, ''); // its key goes with it
+    if (mate.profiles.some((x) => x.id === id && isBuiltin(x))) void api.setTeammateKey(id, ''); // its key goes with it
     const profiles = mate.profiles.filter((x) => x.id !== id);
     patch({
       profiles,
-      defaultProfile: mate.defaultProfile === id ? profiles.find(isBuiltin)?.id ?? null : mate.defaultProfile,
+      defaultProfile: mate.defaultProfile === id ? profiles[0]?.id ?? null : mate.defaultProfile,
       deepProfile: mate.deepProfile === id ? null : mate.deepProfile,
     });
   };
@@ -420,12 +400,17 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
           <span className="icon"><Bot24Regular /></span>
           <div className="lbl">
             {m.profiles}
-            <span className="desc">{builtins.length > 0 ? m.profilesDesc : `${m.profilesDesc} ${m.noProfiles}`}</span>
+            <span className="desc">{mate.profiles.length > 0 ? m.profilesDesc : `${m.profilesDesc} ${m.noProfiles}`}</span>
           </div>
           <Dropdown style={{ minWidth: 190 }} placeholder={m.addProfile} value="" selectedOptions={[]}
             onOptionSelect={(_, d) => {
-              const preset = PROVIDERS.find((p) => p.id === d.optionValue);
-              if (preset) addProfile(preset.id);
+              const agent = AGENT_PRESET_IDS.find((id) => `agent:${id}` === d.optionValue);
+              if (agent) addAgent(agent);
+              else if (d.optionValue === 'agent:custom') addAgent('custom');
+              else {
+                const preset = PROVIDERS.find((p) => p.id === d.optionValue);
+                if (preset) addProfile(preset.id);
+              }
             }}>
             <OptionGroup label={m.providerCloud}>
               {PROVIDERS.filter((p) => p.group === 'cloud').map((p) => (
@@ -437,19 +422,27 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
                 <Option key={p.id} value={p.id}>{p.name}</Option>
               ))}
             </OptionGroup>
+            <OptionGroup label={m.providerAgents}>
+              {AGENT_PRESET_IDS.map((id) => (
+                <Option key={id} value={`agent:${id}`} text={AGENT_PRESETS[id].name}>
+                  {m.agentOption(AGENT_PRESETS[id].name, AGENT_PRESETS[id].checked)}
+                </Option>
+              ))}
+              <Option value="agent:custom" text={m.agentCustom}>{m.agentCustom}</Option>
+            </OptionGroup>
           </Dropdown>
         </div>
       </div>
-      {builtins.map((p) => (
-        <ProfileCard key={p.id} p={p} onChange={(x) => changeProfile(p.id, x)} onRemove={() => removeProfile(p.id)} />
-      ))}
-      {builtins.length > 0 ? (
+      {mate.profiles.map((p) => (p.kind === 'agent'
+        ? <AgentProfileCard key={p.id} p={p} onChange={(x) => changeAgent(p.id, x)} onRemove={() => removeProfile(p.id)} />
+        : <ProfileCard key={p.id} p={p} onChange={(x) => changeProfile(p.id, x)} onRemove={() => removeProfile(p.id)} />))}
+      {mate.profiles.length > 0 ? (
         <>
           <SettingRow icon={<Bot24Regular />} title={m.defaultProfile} description={m.defaultProfileDesc}>
             <Dropdown style={{ minWidth: 190 }} value={profileName(mate.defaultProfile)}
               selectedOptions={mate.defaultProfile ? [mate.defaultProfile] : []}
               onOptionSelect={(_, d) => d.optionValue && patch({ defaultProfile: d.optionValue })}>
-              {builtins.map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+              {mate.profiles.map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
             </Dropdown>
           </SettingRow>
           <SettingRow icon={<Sparkle24Regular />} title={m.deepProfile} description={m.deepProfileDesc}>
@@ -457,7 +450,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
               selectedOptions={[mate.deepProfile ?? '']}
               onOptionSelect={(_, d) => patch({ deepProfile: d.optionValue ? d.optionValue : null })}>
               <Option value="" text={m.useDefault}>{m.useDefault}</Option>
-              {builtins.map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+              {mate.profiles.map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
             </Dropdown>
           </SettingRow>
         </>

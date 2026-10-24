@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bridgeCommand, dataDirFor } from '../../../src/main/mcp/bridgeCommand';
+import { bridgeCommand, dataDirFor, userConfigSnippet } from '../../../src/main/mcp/bridgeCommand';
 
 const ASK = `ask-7.${'0f'.repeat(16)}`;
 
@@ -20,6 +20,20 @@ describe('bridgeCommand', () => {
     const c = bridgeCommand({ ...base, ask: ASK });
     expect(c.env.LOLPING_ASK).toBe(ASK);
     for (const name of Object.keys(c.env)) expect(name).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD/);
+  });
+});
+
+describe('userConfigSnippet', () => {
+  it('is the mcpServers JSON for the bridge, without an ask', () => {
+    const o = { execPath: 'C:\lolPing\lolPing.exe', bridgeJs: 'C:\lolPing\bridge.js', pipe: 'P', dataDir: 'D' };
+    expect(JSON.parse(userConfigSnippet(o))).toEqual({
+      mcpServers: {
+        lolping: {
+          command: o.execPath, args: [o.bridgeJs],
+          env: { ELECTRON_RUN_AS_NODE: '1', LOLPING_PIPE: 'P', LOLPING_DATA: 'D' },
+        },
+      },
+    });
   });
 });
 

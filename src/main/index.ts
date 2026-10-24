@@ -48,11 +48,12 @@ import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
-import { bridgeCommand } from './mcp/bridgeCommand';
+import { bridgeCommand, userConfigSnippet } from './mcp/bridgeCommand';
 import { BridgeServer, bridgePath } from './mcp/bridgeServer';
 import { ActionRunner } from './teammate/actions';
-import { userPath, withPath } from './teammate/agents/command';
-import { AgentRunner, killProcessTree } from './teammate/agents/runner';
+import { captureOutput, checkAgent } from './teammate/agents/check';
+import { findExecutable, userPath, withPath } from './teammate/agents/command';
+import { AgentRunner, envValue, isFile as isRegularFile, killProcessTree } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
 import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
@@ -1014,6 +1015,33 @@ function start(): void {
       screenAccess: () => (IS_MAC ? systemPreferences.getMediaAccessStatus('screen') === 'granted' : null),
       openScreenRecording: () => {
         if (IS_MAC) void shell.openExternal(SCREEN_RECORDING_PANE);
+      },
+      checkAgent: async (p) => {
+        const env = withPath(process.env, await userPath(PLATFORM, runForOutput), PLATFORM);
+        return checkAgent(p, {
+          find: (command) => findExecutable(command, {
+            PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
+          }, PLATFORM, isRegularFile),
+          run: captureOutput({ spawn, platform: PLATFORM, killTree: killProcessTree(PLATFORM), env: () => env }),
+        });
+      },
+      pickFolder: async () => {
+        const w = settingsWindow();
+        const options = { properties: ['openDirectory' as const] };
+        const r = await (w ? dialog.showOpenDialog(w, options) : dialog.showOpenDialog(options));
+        return r.canceled ? null : r.filePaths[0] ?? null;
+      },
+      agentSnippet: () => {
+        try {
+          const userData = app.getPath('userData');
+          // The same inputs the bridge server and the agent runner use, so the snippet reaches the same pipe.
+          return userConfigSnippet({
+            execPath: process.execPath, bridgeJs: join(__dirname, 'bridge.js'),
+            pipe: bridgePath(PLATFORM, userData, userInfo().username), dataDir: userData,
+          });
+        } catch {
+          return null; // userInfo() throws when the account has no name
+        }
       },
       history: async (op: TeammateHistoryOp) => {
         if (op === 'open') {

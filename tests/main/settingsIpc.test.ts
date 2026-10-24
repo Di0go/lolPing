@@ -11,7 +11,7 @@ import { ProviderError } from '../../src/main/teammate/providers/types';
 import { strings } from '../../src/shared/i18n';
 import { SETTINGS_CH } from '../../src/shared/ipc';
 import { MOD } from '../../src/shared/keys';
-import type { BuiltinProfile } from '../../src/shared/teammate/settings';
+import type { AgentProfile, BuiltinProfile } from '../../src/shared/teammate/settings';
 import type { UpdateState } from '../../src/shared/update';
 
 const h = vi.hoisted(() => ({
@@ -279,16 +279,25 @@ describe('teammate IPC', () => {
   let listModels: (key: string) => Promise<string[]>;
   let historyOps: string[];
   let clearFails = false;
+  let checked: string[];
+  let picked: unknown;
 
   function registerTeammate(): void {
     h.handlers.clear();
     historyOps = [];
+    checked = [];
     registerSettingsIpc({
       store, library, text: () => strings('en'), platform: 'win', room: {},
       teammate: {
         secrets: () => secrets,
         adapter: (_p: BuiltinProfile, key: string) => ({ listModels: () => listModels(key) }),
         usage: () => ({ month: '2026-10', input: 10, output: 2 }),
+        checkAgent: async (p: AgentProfile) => {
+          checked.push(p.command);
+          return { ok: true, version: '1.0' };
+        },
+        pickFolder: async () => picked,
+        agentSnippet: () => '{"mcpServers":{}}',
         history: async (op: string) => {
           historyOps.push(op);
           return op !== 'clear' || !clearFails;
@@ -327,6 +336,32 @@ describe('teammate IPC', () => {
     expect(refused).toMatchObject({ ok: false, error: 'auth' });
     seen.push(refused);
     for (const result of seen) expect(JSON.stringify(result) ?? '').not.toContain(KEY);
+  });
+
+  it('checks an agent by the command saved in its profile, never one sent by the window', async () => {
+    const agent: AgentProfile = {
+      id: 'a1', kind: 'agent', name: 'Claude Code', tagColor: 3, tagColorCustom: null, preset: 'claude', command: 'claude',
+      customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
+    };
+    store.update({ teammate: { ...store.get().teammate, profiles: [PROFILE, agent] } });
+    expect(await call(SETTINGS_CH.teammateCheckAgent, 'a1')).toEqual({ ok: true, version: '1.0' });
+    expect(await call(SETTINGS_CH.teammateCheckAgent, { id: 'a1', command: 'calc' })).toMatchObject({ ok: false });
+    expect(await call(SETTINGS_CH.teammateCheckAgent, 'p1')).toMatchObject({ ok: false }); // a provider profile
+    expect(await call(SETTINGS_CH.teammateCheckAgent, 'nope')).toMatchObject({ ok: false });
+    expect(checked).toEqual(['claude']);
+  });
+
+  it('gives the window only a plain folder path from the picker', async () => {
+    picked = 'C:\work\app';
+    expect(await call(SETTINGS_CH.teammatePickFolder)).toBe('C:\work\app');
+    for (const bad of [null, '', 5, { path: 'x' }, 'x'.repeat(1025)]) {
+      picked = bad;
+      expect(await call(SETTINGS_CH.teammatePickFolder)).toBeNull();
+    }
+  });
+
+  it('gives the window the snippet for an agent that reads its own MCP file', async () => {
+    expect(await call(SETTINGS_CH.teammateAgentSnippet)).toEqual({ json: '{"mcpServers":{}}' });
   });
 
   it('validates teammate payloads', async () => {

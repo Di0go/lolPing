@@ -110,8 +110,8 @@ export const DEFAULT_TEAMMATE: TeammateSettings = {
 
 export const MAX_PROFILES = 20;
 export const MAX_RULES = 50;
-const PATH_MAX = 1024;
-const MAX_FOLDERS = 20;
+export const PATH_MAX = 1024;
+export const MAX_FOLDERS = 20;
 const MAX_ARG_LINES = 40;
 const RULE_FIELD_MAX = 200;
 const TIMEOUT_MIN_S = 30;

@@ -226,6 +226,10 @@ export type SecretResult = { ok: boolean; error?: 'unavailable' };
 export type CheckKeyResult =
   | { ok: true; models: string[] }
   | { ok: false; error: 'auth' | 'network' | 'other'; message: string };
+/** Check on an agent profile: what `<command> --version` printed. `detail` is the command, or the first line of stderr. */
+export type CheckAgentResult =
+  | { ok: true; version: string }
+  | { ok: false; reason: 'notFound' | 'timeout' | 'failed'; detail: string };
 /** The tokens the teammate's providers reported this month. */
 export interface UsageMonth {
   /** YYYY-MM */
@@ -300,6 +304,12 @@ export interface SettingsApi {
   setTeammateKey(profileId: string, key: string): Promise<SecretResult>;
   hasTeammateKey(profileId: string): Promise<boolean>;
   checkTeammateKey(profileId: string): Promise<CheckKeyResult>;
+  /** Runs an agent profile's command with --version. The main process looks the profile up; no command comes from here. */
+  checkTeammateAgent(profileId: string): Promise<CheckAgentResult>;
+  /** Shows the system folder picker; the chosen path, or null when it was cancelled. */
+  pickTeammateFolder(): Promise<string | null>;
+  /** The JSON an agent that reads its own MCP file needs to add lolPing; null when it can't be made. */
+  getTeammateAgentSnippet(): Promise<{ json: string } | null>;
   setTeammateInstructions(text: string): Promise<SecretResult>;
   /** Your instructions: the user's own text, so this window may read it back. */
   getTeammateInstructions(): Promise<string>;

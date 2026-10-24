@@ -2,8 +2,8 @@ import { globalShortcut, ipcMain, shell } from 'electron';
 import { isCustomRef, isEmoteFx, isEmoteRefShape, type CustomEmote, type EmoteRef, type ImportResult, type SoundResult } from '../shared/emotes';
 import type { Strings } from '../shared/i18n';
 import {
-  SETTINGS_CH, TEAMMATE_HISTORY_OPS, type About, type AppStatus, type CheckKeyResult, type SecretResult,
-  type SetSettingsResult, type TeammateHistoryOp, type TeammateStatus, type UsageMonth,
+  SETTINGS_CH, TEAMMATE_HISTORY_OPS, type About, type AppStatus, type CheckAgentResult, type CheckKeyResult,
+  type SecretResult, type SetSettingsResult, type TeammateHistoryOp, type TeammateStatus, type UsageMonth,
 } from '../shared/ipc';
 import { hotkeyLabel, hotkeyToAccelerator, type Hotkey } from '../shared/keys';
 import { pingById, type PingId } from '../shared/pings';
@@ -11,7 +11,7 @@ import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
 import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
 import { needsKey } from '../shared/teammate/providers';
-import { isBuiltin, type BuiltinProfile } from '../shared/teammate/settings';
+import { isBuiltin, PATH_MAX, type AgentProfile, type BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
 import { emoteFileFrom, type EmoteLibrary } from './emoteLibrary';
 import type { SettingsStore } from './settingsStore';
@@ -67,6 +67,12 @@ export interface SettingsIpcDeps {
     /** macOS: whether Screen Recording is allowed; null on other systems, which need no permission. */
     screenAccess(): boolean | null;
     openScreenRecording(): void;
+    /** Runs the agent's command with --version. */
+    checkAgent(p: AgentProfile): Promise<CheckAgentResult>;
+    /** The system folder picker over the settings window; null when cancelled. */
+    pickFolder(): Promise<string | null>;
+    /** The JSON to paste into an agent's own MCP file; null when the pipe name can't be worked out. */
+    agentSnippet(): string | null;
   };
 }
 
@@ -207,6 +213,10 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
 function registerTeammateIpc(d: SettingsIpcDeps): void {
   const profileOf = (id: unknown): BuiltinProfile | null =>
     typeof id === 'string' ? d.store.get().teammate.profiles.filter(isBuiltin).find((p) => p.id === id) ?? null : null;
+  const agentOf = (id: unknown): AgentProfile | null => {
+    const found = typeof id === 'string' ? d.store.get().teammate.profiles.find((p) => p.id === id) : undefined;
+    return found?.kind === 'agent' ? found : null;
+  };
   const stored = async (write: () => Promise<void>): Promise<SecretResult> => {
     try {
       await write();
@@ -261,6 +271,20 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
     screenAccess: d.teammate.screenAccess(),
   }));
   ipcMain.handle(SETTINGS_CH.teammateOpenScreen, () => d.teammate.openScreenRecording());
+  // The command is read from the saved profile, never taken from the window.
+  ipcMain.handle(SETTINGS_CH.teammateCheckAgent, async (_e, id: unknown): Promise<CheckAgentResult> => {
+    const profile = agentOf(id);
+    if (!profile) return { ok: false, reason: 'failed', detail: d.text().teammate.settings.checkNoProfile };
+    return d.teammate.checkAgent(profile).catch((): CheckAgentResult => ({ ok: false, reason: 'failed', detail: '' }));
+  });
+  ipcMain.handle(SETTINGS_CH.teammatePickFolder, async (): Promise<string | null> => {
+    const picked: unknown = await d.teammate.pickFolder().catch(() => null);
+    return typeof picked === 'string' && picked !== '' && picked.length <= PATH_MAX ? picked : null;
+  });
+  ipcMain.handle(SETTINGS_CH.teammateAgentSnippet, (): { json: string } | null => {
+    const json = d.teammate.agentSnippet();
+    return json === null ? null : { json };
+  });
 }
 
 function isWebUrl(url: string): boolean {

@@ -10,6 +10,11 @@ export function bridgeCommand(o: { execPath: string; bridgeJs: string; pipe: str
   return { command: o.execPath, args: [o.bridgeJs], env };
 }
 
+/** The `mcpServers` JSON an agent that reads its own MCP file needs, to paste once; no ask, so it works for any run. */
+export function userConfigSnippet(o: { execPath: string; bridgeJs: string; pipe: string; dataDir: string }): string {
+  return JSON.stringify({ mcpServers: { lolping: bridgeCommand({ ...o, ask: null }) } }, null, 2);
+}
+
 /** Electron's userData folder for lolPing, found without Electron because the bridge runs as plain Node. */
 export function dataDirFor(platform: Platform, env: NodeJS.ProcessEnv, home: string): string {
   if (platform === 'win') {

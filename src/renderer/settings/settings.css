@@ -157,6 +157,9 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .mateHead .lbl { flex: 1; }
 .mateHead b { flex: 1; }
 .mateFields { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; align-items: center; margin-top: 12px; }
+.mateStack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.matePath { overflow-wrap: anywhere; }
+.mateNote { margin-top: 8px; }
 .mateRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .mateIntent { display: grid; grid-template-columns: 150px auto 150px 1fr auto; gap: 8px 12px; align-items: start; padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 10px; }
 .mateRead { display: flex; align-items: center; gap: 16px; padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 10px; }
