@@ -77,7 +77,6 @@ function rig(opts: {
     stdout: fromBridge,
     env: opts.env ?? {},
     readToken: opts.token ?? (async () => `${TOKEN}\n`),
-    pipePath: 'fake-pipe',
     connect: () => {
       connects += 1;
       if (opts.app) return opts.app.duplex;
@@ -209,7 +208,7 @@ describe('runBridge', () => {
     const toBridge = new PassThrough();
     const fromBridge = new PassThrough();
     void runBridge({
-      stdin: toBridge, stdout: fromBridge, env: {}, readToken: async () => TOKEN, pipePath: 'p',
+      stdin: toBridge, stdout: fromBridge, env: {}, readToken: async () => TOKEN,
       connect: () => new PassThrough(),
     });
     const replies: string[] = [];

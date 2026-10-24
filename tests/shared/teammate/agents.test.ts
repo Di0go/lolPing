@@ -136,9 +136,9 @@ describe('agents', () => {
     expect(parse('{"type":"assistant","message":{}}')).toEqual({});
     const failed = '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in \\u00b7 Please run /login",'
       + '"session_id":"c-2","terminal_reason":"api_error"}';
-    expect(parse(failed)).toEqual({ session: 'c-2', done: true, error: 'Not logged in \u00b7 Please run /login' });
+    expect(parse(failed)).toEqual({ session: 'c-2', error: 'Not logged in \u00b7 Please run /login' });
     expect(parse('{"type":"result","is_error":false,"result":"ok","session_id":"c-3"}')).toEqual({
-      session: 'c-3', done: true,
+      session: 'c-3',
     });
     expect(parse('')).toEqual({});
   });
@@ -254,9 +254,9 @@ describe('agents', () => {
     expect(AGENT_PRESETS.codex.parse('{"type":"thread.started","thread_id":"t-1"}')).toEqual({ session: 't-1' });
     expect(AGENT_PRESETS.codex.parse('{"type":"error","message":"boom"}')).toEqual({ error: 'boom' });
     expect(AGENT_PRESETS.codex.parse('{"type":"turn.failed","error":{"message":"quota"}}')).toEqual({
-      error: 'quota', done: true,
+      error: 'quota',
     });
-    expect(AGENT_PRESETS.codex.parse('{"type":"turn.completed","usage":{}}')).toEqual({ done: true });
+    expect(AGENT_PRESETS.codex.parse('{"type":"turn.completed","usage":{}}')).toEqual({});
     expect(AGENT_PRESETS.gemini.parse('{"type":"init","session_id":"g-1","model":"m"}')).toEqual({ session: 'g-1' });
     expect(AGENT_PRESETS.gemini.parse('{"type":"message","session_id":"g-2"}')).toEqual({});
     expect(AGENT_PRESETS.qwen.parse('{"type":"system","subtype":"init","session_id":"w-1"}')).toEqual({ session: 'w-1' });

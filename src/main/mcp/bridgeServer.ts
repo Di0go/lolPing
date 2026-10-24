@@ -36,7 +36,6 @@ export interface BridgeServerDeps {
   /** The folder the socket sits in when it must be made private first; see bridgeLocation. */
   privateDir?: string | null;
   handler: BridgeHandler;
-  now: () => number;
   random: (n: number) => Buffer;
   writeToken: (file: string, token: string) => Promise<void>;
 }
@@ -122,7 +121,6 @@ export class BridgeServer {
   private server: net.Server | null = null;
   private token = '';
   private readonly sockets = new Set<net.Socket>();
-  private readonly aborts = new Set<AbortController>();
 
   constructor(private readonly deps: BridgeServerDeps) {}
 
@@ -154,9 +152,13 @@ export class BridgeServer {
   async stop(): Promise<void> {
     const server = this.server;
     this.server = null;
-    for (const a of this.aborts) a.abort();
-    for (const s of this.sockets) s.destroy();
+    // Each connection's close aborts its own pending calls; stop is done once they all have.
+    const closed = [...this.sockets].map((s) => new Promise<void>((resolve) => {
+      s.once('close', () => resolve());
+      s.destroy();
+    }));
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await Promise.all(closed);
   }
 
   private accept(socket: net.Socket): void {
@@ -202,7 +204,6 @@ export class BridgeServer {
       }
       const abort = new AbortController();
       pending.add(abort);
-      this.aborts.add(abort);
       void Promise.resolve().then(() => this.deps.handler.call(s, m.name, m.args, abort.signal))
         .then(
           (r) => {
@@ -216,10 +217,7 @@ export class BridgeServer {
           },
           () => send({ t: 'result', id: m.id, content: FAILED_CALL, isError: true }),
         )
-        .finally(() => {
-          pending.delete(abort);
-          this.aborts.delete(abort);
-        });
+        .finally(() => pending.delete(abort));
     };
 
     socket.on('data', (chunk: string) => {
@@ -238,10 +236,7 @@ export class BridgeServer {
     socket.on('error', () => undefined);
     socket.on('close', () => {
       clearTimeout(helloTimer);
-      for (const a of pending) {
-        a.abort();
-        this.aborts.delete(a);
-      }
+      for (const a of pending) a.abort();
       pending.clear();
       this.sockets.delete(socket);
     });

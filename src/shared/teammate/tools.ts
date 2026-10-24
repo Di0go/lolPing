@@ -266,7 +266,7 @@ export function parseConsent(args: unknown): { tool: string; input: unknown } | 
   return isRecord(args.input) ? { tool: args.tool_name, input: args.input } : null;
 }
 
-const isRecord =(v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 function text(v: unknown, max: number): string | null {

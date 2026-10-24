@@ -47,7 +47,6 @@ export async function runBridge(deps: {
   env: NodeJS.ProcessEnv;
   readToken: () => Promise<string>;
   connect: () => Duplex;
-  pipePath: string;
 }): Promise<void> {
   const server = new Server({ name: 'lolping', version: pkg.version }, { capabilities: { tools: {} } });
   const ask = deps.env.LOLPING_ASK || null;
@@ -170,7 +169,6 @@ function main(): void {
     env,
     readToken: () => readFile(path.join(dataDir, 'mcp-token'), 'utf8'),
     connect: () => net.connect(pipe),
-    pipePath: pipe,
   }).then(() => process.exit(0), () => process.exit(1));
 }
 

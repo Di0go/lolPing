@@ -153,7 +153,7 @@ describe('an agent answering an ask', () => {
     };
     const controller = new AskController(deps);
     const server = new BridgeServer({
-      path: pipe, tokenFile: path.join(dir, 'mcp-token'), handler: bridgeHandler(controller), now: Date.now,
+      path: pipe, tokenFile: path.join(dir, 'mcp-token'), handler: bridgeHandler(controller),
       random: randomBytes, writeToken: (file, token) => writeFile(file, token, { mode: 0o600 }),
     });
     await server.start();

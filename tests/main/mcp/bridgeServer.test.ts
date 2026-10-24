@@ -80,7 +80,6 @@ describe('BridgeServer', () => {
     path: sockPath,
     tokenFile: path.join(dir, 'mcp-token'),
     handler,
-    now: () => 0,
     random: (n) => randomBytes(n),
     writeToken: async (_file, token) => { tokens.push(token); },
   });
@@ -370,7 +369,7 @@ describe('BridgeServer', () => {
     expect(where.privateDir).not.toBeNull();
     sockPath = where.path;
     server = new BridgeServer({
-      path: where.path, privateDir: where.privateDir, tokenFile: path.join(dir, 'mcp-token'), handler, now: () => 0,
+      path: where.path, privateDir: where.privateDir, tokenFile: path.join(dir, 'mcp-token'), handler,
       random: (n) => randomBytes(n), writeToken: async (_file, text) => { tokens.push(text); },
     });
     await server.start();
@@ -532,7 +531,7 @@ describe('ensurePrivateDir', () => {
     await mkdir(dir, { mode: 0o777 });
     await chmod(dir, 0o777);
     const server = new BridgeServer({
-      path: path.join(dir, 'x.sock'), privateDir: dir, tokenFile: path.join(base, 'mcp-token'), now: () => 0,
+      path: path.join(dir, 'x.sock'), privateDir: dir, tokenFile: path.join(base, 'mcp-token'),
       random: (n) => randomBytes(n), writeToken: async () => undefined,
       handler: { hello: () => undefined, list: () => [], call: async () => ({ content: [], isError: false }) },
     });

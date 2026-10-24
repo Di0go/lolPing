@@ -13,7 +13,7 @@ export interface AgentRunSpec {
   resume: string | null;
 }
 
-export interface AgentParsed { session?: string; error?: string; done?: boolean }
+export interface AgentParsed { session?: string; error?: string }
 
 export interface AgentPreset {
   id: AgentPresetId;
@@ -86,11 +86,10 @@ function obj(v: unknown): Json {
 }
 
 /** Builds the result without keys that have no value, so `{}` means "nothing on this line". */
-function parsed(session: string | undefined, error?: string, done?: boolean): AgentParsed {
+function parsed(session: string | undefined, error?: string): AgentParsed {
   return {
     ...(session !== undefined ? { session } : {}),
     ...(error !== undefined ? { error } : {}),
-    ...(done ? { done: true } : {}),
   };
 }
 
@@ -181,7 +180,7 @@ function claudeParse(line: string): AgentParsed {
   if (!o) return {};
   const failed = o.type === 'result' && o.is_error === true;
   const error = failed ? text(o.result) ?? text(o.subtype) ?? 'error' : undefined;
-  return parsed(text(o.session_id), error, o.type === 'result');
+  return parsed(text(o.session_id), error);
 }
 
 function codexParse(line: string): AgentParsed {
@@ -190,8 +189,7 @@ function codexParse(line: string): AgentParsed {
   switch (o.type) {
     case 'thread.started': return parsed(text(o.thread_id));
     case 'error': return parsed(undefined, text(o.message));
-    case 'turn.failed': return parsed(undefined, text(obj(o.error).message) ?? 'error', true);
-    case 'turn.completed': return parsed(undefined, undefined, true);
+    case 'turn.failed': return parsed(undefined, text(obj(o.error).message) ?? 'error');
     default: return {};
   }
 }

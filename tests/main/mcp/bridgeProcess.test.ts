@@ -53,7 +53,7 @@ describe('the bridge as a separate process', () => {
     await mkdir(dataDir, { recursive: true });
     const called: unknown[] = [];
     const server = new BridgeServer({
-      path: listenOn, privateDir, tokenFile: path.join(dataDir, 'mcp-token'), now: Date.now, random: randomBytes,
+      path: listenOn, privateDir, tokenFile: path.join(dataDir, 'mcp-token'), random: randomBytes,
       writeToken: (file, token) => writeFile(file, token, { mode: 0o600 }),
       handler: {
         hello: () => undefined,

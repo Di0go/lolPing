@@ -921,7 +921,7 @@ function start(): void {
     const mcp = (async (): Promise<BridgeServer> => {
       const { path, privateDir } = bridgeLocation(PLATFORM, userData, userInfo().username);
       const server = new BridgeServer({
-        path, privateDir, tokenFile: join(userData, 'mcp-token'), handler: bridgeHandler(controller), now: Date.now,
+        path, privateDir, tokenFile: join(userData, 'mcp-token'), handler: bridgeHandler(controller),
         random: randomBytes, writeToken: writeTokenFile,
       });
       await server.start();
