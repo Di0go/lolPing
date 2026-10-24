@@ -54,15 +54,42 @@ export function agentWhat(tool: string, input: unknown): { kind: 'edit' | 'run' 
 const EDIT_TOOLS = /^(?:edit|write|multiedit|notebookedit)$/i;
 /** The consent card's detail for an agent's tool call is cut here. */
 const AGENT_DETAIL_MAX = 400;
+/** An edit's detail names the file in this many characters, from the end. */
+const AGENT_PATH_MAX = 200;
 /** An edit's detail shows this many lines of the new text. */
 const AGENT_EDIT_LINES = 3;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Cuts at `max` characters and says so: a card must not look whole when it is not. */
 const cutTo = (text: string, max: number): string => {
   const chars = Array.from(text);
-  return chars.length <= max ? text : chars.slice(0, max).join('');
+  return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
 };
+
+// Controls other than a line break or tab, and the marks that flip the direction of text: shown escaped, so the card
+// can't draw something other than what will run.
+const UNSAFE_LAYOUT = /(?![\n\t])\p{Cc}|[\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+const UNSAFE_ALL = /\p{Cc}|[\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+
+/** `text` with unsafe characters as \uXXXX; a line break and tab stay unless `oneLine`. */
+function escapeUnsafe(text: string, oneLine: boolean): string {
+  return text.replace(/\r\n?/g, '\n').replace(oneLine ? UNSAFE_ALL : UNSAFE_LAYOUT, (c) => (
+    `\\u${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`
+  ));
+}
+
+/** A command with its padding squeezed out, so blank lines or spaces can't push the rest of it out of view. */
+const squeeze = (text: string): string => text.replace(/[ \t]{4,}/g, ' ').replace(/(?:[ \t]*\n){3,}/g, '\n\n');
+
+/**
+ * A file or address in the card's question and the history line: escaped, and when it is longer than `max` the end is
+ * kept (the file name) with a "…" in front.
+ */
+export function agentLabel(text: string, max: number): string {
+  const chars = Array.from(escapeUnsafe(text, true));
+  return chars.length <= max ? chars.join('') : `…${chars.slice(chars.length - (max - 1)).join('')}`;
+}
 
 /** The start of the text an edit puts in: Edit, Write, MultiEdit and NotebookEdit each keep it under another name. */
 function newText(input: Record<string, unknown>): string {
@@ -79,10 +106,11 @@ export function describeAgentInput(tool: string, input: unknown): string {
   const { kind, target } = agentWhat(tool, input);
   if (!isRecord(input)) return '';
   let text = '';
-  if (kind === 'run' && typeof input.command === 'string') text = input.command;
-  else if (kind === 'edit') text = [target, newText(input)].filter((s) => s !== '').join('\n');
-  else if (kind === 'open') text = target;
-  else text = JSON.stringify(input);
+  if (kind === 'run' && typeof input.command === 'string') text = squeeze(escapeUnsafe(input.command, false));
+  else if (kind === 'edit') text = [agentLabel(target, AGENT_PATH_MAX), escapeUnsafe(newText(input), false)]
+    .filter((s) => s !== '').join('\n');
+  else if (kind === 'open') text = escapeUnsafe(target, true);
+  else text = escapeUnsafe(JSON.stringify(input), false);
   return cutTo(text, AGENT_DETAIL_MAX);
 }
 

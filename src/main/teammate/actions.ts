@@ -7,8 +7,8 @@ import type { Settings } from '../../shared/settings';
 import { SELECTION_MAX, type PasteResult } from '../../shared/teammate/contextProtocol';
 import type { Rect } from '../../shared/teammate/coords';
 import {
-  agentAllowed, agentPermissionKey, agentWhat, allowed, describeAgentInput, formPreview, isShellTool, neverFill,
-  pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow, type PutAction,
+  agentAllowed, agentLabel, agentPermissionKey, agentWhat, allowed, describeAgentInput, formPreview, isShellTool,
+  neverFill, pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow, type PutAction,
 } from '../../shared/teammate/doRules';
 import { eventIcs, tableHtml, tableTsv } from '../../shared/teammate/grab';
 import type { ActionCall } from '../../shared/teammate/tools';
@@ -411,7 +411,7 @@ export class ActionRunner extends EventEmitter {
   private agentLine(run: RunInfo, tool: string, input: unknown, done: boolean): string {
     const t = this.text(run);
     const { kind, target } = agentWhat(tool, input);
-    const what = firstChars(target, WHAT_MAX);
+    const what = agentLabel(target, WHAT_MAX);
     const name = run.profileName;
     switch (kind) {
       case 'edit': return done ? t.didAgentEdit(name, what) : t.agentEdit(name, what);
