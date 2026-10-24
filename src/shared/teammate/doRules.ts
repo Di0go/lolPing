@@ -54,8 +54,9 @@ export function agentWhat(tool: string, input: unknown): { kind: 'edit' | 'run' 
 const EDIT_TOOLS = /^(?:edit|write|multiedit|notebookedit)$/i;
 /** The consent card's detail for an agent's tool call is cut here. */
 const AGENT_DETAIL_MAX = 400;
-/** An edit's detail names the file in this many characters, from the end. */
-const AGENT_PATH_MAX = 200;
+/** An edit's detail shows a path longer than head + tail characters as its start and end. */
+const AGENT_PATH_HEAD = 80;
+const AGENT_PATH_TAIL = 110;
 /** An edit's detail shows this many lines of the new text. */
 const AGENT_EDIT_LINES = 3;
 
@@ -67,20 +68,24 @@ const cutTo = (text: string, max: number): string => {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
 };
 
-// Controls other than a line break or tab, and the marks that flip the direction of text: shown escaped, so the card
-// can't draw something other than what will run.
-const UNSAFE_LAYOUT = /(?![\n\t])\p{Cc}|[\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
-const UNSAFE_ALL = /\p{Cc}|[\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+// Controls other than a line break or tab, Unicode line and paragraph separators (drawn as line breaks, but a shell
+// reads them as letters), and every format character (zero-width and direction marks): shown escaped, so the card
+// can't draw something other than what will run. A bare CR is one too; only CR LF is a line break.
+const UNSAFE_LAYOUT = /(?![\n\t])\p{Cc}|[\p{Zl}\p{Zp}\p{Cf}]/gu;
+const UNSAFE_ALL = /\p{Cc}|[\p{Zl}\p{Zp}\p{Cf}]/gu;
 
 /** `text` with unsafe characters as \uXXXX; a line break and tab stay unless `oneLine`. */
 function escapeUnsafe(text: string, oneLine: boolean): string {
-  return text.replace(/\r\n?/g, '\n').replace(oneLine ? UNSAFE_ALL : UNSAFE_LAYOUT, (c) => (
-    `\\u${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`
-  ));
+  return text.replace(/\r\n/g, '\n').replace(oneLine ? UNSAFE_ALL : UNSAFE_LAYOUT, (c) => {
+    const hex = (c.codePointAt(0) ?? 0).toString(16).toUpperCase();
+    return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex.padStart(4, '0')}`;
+  });
 }
 
 /** A command with its padding squeezed out, so blank lines or spaces can't push the rest of it out of view. */
-const squeeze = (text: string): string => text.replace(/[ \t]{4,}/g, ' ').replace(/(?:[ \t]*\n){3,}/g, '\n\n');
+const squeeze = (text: string): string => text
+  .replace(/[\t\p{Zs}]{4,}/gu, ' ')
+  .replace(/(?:[\t\p{Zs}]*\n){3,}/gu, '\n\n');
 
 /**
  * A file or address in the card's question and the history line: escaped, and when it is longer than `max` the end is
@@ -91,23 +96,39 @@ export function agentLabel(text: string, max: number): string {
   return chars.length <= max ? chars.join('') : `…${chars.slice(chars.length - (max - 1)).join('')}`;
 }
 
-/** The start of the text an edit puts in: Edit, Write, MultiEdit and NotebookEdit each keep it under another name. */
+/** A path longer than the head and tail together shows both ends: "C:\Users\…\notes.txt". */
+function agentPath(path: string): string {
+  const chars = Array.from(escapeUnsafe(path, true));
+  if (chars.length <= AGENT_PATH_HEAD + AGENT_PATH_TAIL) return chars.join('');
+  return `${chars.slice(0, AGENT_PATH_HEAD).join('')}…${chars.slice(chars.length - AGENT_PATH_TAIL).join('')}`;
+}
+
+/**
+ * The start of the text an edit puts in: Edit, Write, MultiEdit and NotebookEdit each keep it under another name. What
+ * is left out is said: "…" after the first lines, and the number of edits a MultiEdit has besides its first.
+ */
 function newText(input: Record<string, unknown>): string {
-  const first = Array.isArray(input.edits) && isRecord(input.edits[0]) ? input.edits[0].new_string : undefined;
+  const edits = Array.isArray(input.edits) ? input.edits : [];
+  const first = isRecord(edits[0]) ? edits[0].new_string : undefined;
   const text = [input.new_string, input.content, input.new_source, first].find((v) => typeof v === 'string');
-  return typeof text === 'string' ? text.split(/\r\n|\r|\n/).slice(0, AGENT_EDIT_LINES).join('\n') : '';
+  const lines = typeof text === 'string' ? text.replace(/\r\n/g, '\n').split('\n') : [];
+  const shown = lines.slice(0, AGENT_EDIT_LINES);
+  if (lines.length > AGENT_EDIT_LINES) shown.push('…');
+  if (edits.length > 1) shown.push(`+${edits.length - 1} more edit${edits.length === 2 ? '' : 's'}`);
+  return shown.join('\n');
 }
 
 /**
  * What the consent card shows for an agent's tool call: a command, a file and the first lines of an edit, an address,
- * or the input as compact JSON. At most 400 characters; paths are shown as given.
+ * or the input as compact JSON. At most 400 characters, and whatever is left out is marked with "…" (or "+N more
+ * edits"). A path shows its start and end, and control, line-separator and invisible characters are escaped.
  */
 export function describeAgentInput(tool: string, input: unknown): string {
   const { kind, target } = agentWhat(tool, input);
   if (!isRecord(input)) return '';
   let text = '';
   if (kind === 'run' && typeof input.command === 'string') text = squeeze(escapeUnsafe(input.command, false));
-  else if (kind === 'edit') text = [agentLabel(target, AGENT_PATH_MAX), escapeUnsafe(newText(input), false)]
+  else if (kind === 'edit') text = [agentPath(target), escapeUnsafe(newText(input), false)]
     .filter((s) => s !== '').join('\n');
   else if (kind === 'open') text = escapeUnsafe(target, true);
   else text = escapeUnsafe(JSON.stringify(input), false);
