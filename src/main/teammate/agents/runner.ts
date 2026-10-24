@@ -114,7 +114,13 @@ function lineReader(onLine: (line: string) => void): { push(chunk: string): void
   };
 }
 
-const firstLine = (text: string): string | null => text.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? null;
+// Node's own warnings ("(node:123) DeprecationWarning: …" and the "(Use `node --trace-…`" line under it) say
+// nothing about why the agent failed.
+const NODE_WARNING = /^\(node:\d+\)|^\(Use `node --trace-/;
+
+/** stderr's first line that isn't empty or one of Node's warnings. */
+const firstLine = (text: string): string | null => text.split('\n').map((l) => l.trim())
+  .find((l) => l !== '' && !NODE_WARNING.test(l)) ?? null;
 
 /** Starts coding agents headless, reads their output, and stops them with everything they started. */
 export class AgentRunner {

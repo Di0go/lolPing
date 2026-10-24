@@ -252,6 +252,31 @@ describe('AgentRunner', () => {
     expect((await run.done).session).toBe('s-2');
   });
 
+  it('skips the warnings Node prints when it takes the error from stderr', async () => {
+    await placeholder('claude');
+    const { runner, children } = spyRunner();
+    const run = await runner.start(profile({ preset: 'claude', command: 'claude' }), spec(), dir, { PATH: dir });
+    children[0]?.stderr.write([
+      '(node:12345) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.',
+      '(Use `node --trace-deprecation ...` to show where the warning was created)',
+      '(node:12345) ExperimentalWarning: SQLite is an experimental feature',
+      '(Use `node --trace-warnings ...` to show where the warning was created)',
+      'Error: Invalid API key',
+      '',
+    ].join('\n'));
+    children[0]?.finish(1);
+    expect((await run.done).error).toBe('Error: Invalid API key');
+  });
+
+  it('gives no error when stderr holds only warnings from Node', async () => {
+    await placeholder('claude');
+    const { runner, children } = spyRunner();
+    const run = await runner.start(profile({ preset: 'claude', command: 'claude' }), spec(), dir, { PATH: dir });
+    children[0]?.stderr.write('(node:1) Warning: something \n(Use `node --trace-warnings ...` to show where)\n');
+    children[0]?.finish(0);
+    expect((await run.done).error).toBeNull();
+  });
+
   it('kills each live run once, and not after it ended', async () => {
     await placeholder('claude');
     const { runner, children, killed } = spyRunner();
