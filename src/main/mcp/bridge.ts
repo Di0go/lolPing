@@ -6,13 +6,14 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { Duplex, Readable, Writable } from 'node:stream';
-import { platformOf, type Platform } from '../../shared/platform';
+import { platformOf } from '../../shared/platform';
 import {
   BRIDGE_LINE_MAX, BRIDGE_VERSION, encodeLine, parseFromApp,
   type BridgeContent, type FromBridgeApp, type ToBridgeApp,
 } from '../../shared/teammate/bridgeProtocol';
 import { toolDefs, type ToolDef } from '../../shared/teammate/tools';
 import pkg from '../../../package.json';
+import { dataDirFor } from './bridgeCommand';
 import { bridgePath } from './bridgeServer';
 
 const CLIENT_NAME_MAX = 64;
@@ -156,23 +157,6 @@ export async function runBridge(deps: {
   deps.stdin.once('end', () => void server.close());
   await server.connect(new StdioServerTransport(deps.stdin, deps.stdout));
   return closed;
-}
-
-/** How an agent starts the bridge: the app's executable as Node, with bridge.js. */
-export function bridgeCommand(o: { execPath: string; bridgeJs: string; pipe: string; dataDir: string; ask: string | null }):
-  { command: string; args: string[]; env: Record<string, string> } {
-  const env: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1', LOLPING_PIPE: o.pipe, LOLPING_DATA: o.dataDir };
-  if (o.ask !== null) env.LOLPING_ASK = o.ask;
-  return { command: o.execPath, args: [o.bridgeJs], env };
-}
-
-/** Electron's userData folder for lolPing, found without Electron because the bridge runs as plain Node. */
-export function dataDirFor(platform: Platform, env: NodeJS.ProcessEnv, home: string): string {
-  if (platform === 'win') {
-    return path.win32.join(env.APPDATA || path.win32.join(home, 'AppData', 'Roaming'), pkg.productName);
-  }
-  if (platform === 'mac') return path.posix.join(home, 'Library', 'Application Support', pkg.productName);
-  return path.posix.join(env.XDG_CONFIG_HOME || path.posix.join(home, '.config'), pkg.productName);
 }
 
 function main(): void {
