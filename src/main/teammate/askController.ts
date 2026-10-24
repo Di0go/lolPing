@@ -224,6 +224,9 @@ const toolsFor = (run: Run, ctx: AskContext): ToolDef[] => toolDefs({
   kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0, selection: (ctx.system?.selection ?? '') !== '',
 });
 
+/** An agent's answer is what it drew, whatever its exit code says. */
+const drew = (run: Run): boolean => run.line !== '' || run.markdown.length > 0 || run.marks.length > 0;
+
 /** A path's last part, whichever separator it uses: a profile's folders may be written either way. */
 const baseName = (p: string): string => p.split(/[\\/]/).filter((s) => s !== '').pop() ?? p;
 
@@ -654,7 +657,12 @@ export class AskController extends EventEmitter {
     // The profile's own time limit replaces the built-in client's.
     for (const d of run.deadlines) clearTimeout(d);
     run.deadlines = [];
-    this.deadline(run, profile.timeoutS * 1000, () => this.fail(run, 'timeout'));
+    // An agent that answered and works on (editing files, or a child holding its output open) keeps its answer:
+    // finish() stops it, as fail() would.
+    this.deadline(run, profile.timeoutS * 1000, () => {
+      if (!drew(run)) return this.fail(run, 'timeout');
+      this.finish(run).catch((err: unknown) => console.warn('[teammate] ask failed:', err));
+    });
     const token = `${run.machine.id}.${randomBytes(ASK_SECRET_BYTES).toString('hex')}`;
     const bridge = agents?.bridge.command(token) ?? null;
     if (!agents || !bridge) return this.fail(run, 'agentStart', words.agent.noBridge);
@@ -705,7 +713,7 @@ export class AskController extends EventEmitter {
 
     const result = await agentRun.done;
     if (!this.alive(run)) return;
-    if (!run.line && run.markdown.length === 0 && run.marks.length === 0) {
+    if (!drew(run)) {
       const name = profile.preset === 'custom' ? profile.name : AGENT_PRESETS[profile.preset].name;
       const error = result.error?.trim() ?? '';
       return this.fail(run, 'agent', error

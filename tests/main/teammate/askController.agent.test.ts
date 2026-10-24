@@ -401,6 +401,24 @@ describe('AskController with an agent', () => {
     expect(h.started[0].kills).toBe(1);
   });
 
+  it('keeps an agent\'s answer when it outlives its timeout', async () => {
+    const h = harness({ teammate: { profiles: [agent({ timeoutS: 120 })], defaultProfile: 'cc' } });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.ctl.agentTools(h.token());
+    await h.ctl.agentCall(h.token(), 'say', { text: 'Line 3 divides by zero.' });
+    await h.ctl.agentCall(h.token(), 'ping', { type: 'danger', x: 600, y: 400 });
+    await h.ctl.agentCall(h.token(), 'answer', { markdown: 'B3 is 0.' });
+    // It goes on working (editing files, say) past its time.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.ctl.running).toBe(false);
+    expect(h.started[0].kills).toBe(1);
+    expect(h.lines()).not.toContain(t.ask.failed.timeout);
+    expect(h.lines().at(-1)).toBe('Line 3 divides by zero.');
+    expect(h.pings.map((p) => p.id)).toEqual(['omw', 'danger']);
+    expect(h.appends).toEqual([expect.objectContaining({ line: 'Line 3 divides by zero.', markdown: 'B3 is 0.' })]);
+  });
+
   it('resumes the thread\'s agent session in the folder it was recorded in', async () => {
     const thread = (profileId: string): ThreadRecord => ({
       id: 'th1', title: 'Earlier', started: 0, lastActivity: 0, app: 'Code.exe', windowTitle: '', profile: 'My Claude',
