@@ -5,7 +5,7 @@ import {
   bubbleButtons, cardButtons, consentKey, copyText, footerText, formKey, PUT_ARM_MS, PutGuard, putLabel,
 } from '../../src/renderer/teammate/cardText';
 
-const footer = { profile: 'Default', model: 'gpt-x', tokens: 1234, used: ['screen', 'file'] };
+const footer = { profile: 'Default', model: 'gpt-x', route: '', tokens: 1234, used: ['screen', 'file'] };
 
 describe('cardText', () => {
   it('copies the latest answer without its line, so a written reply pastes as it is', () => {
@@ -28,7 +28,10 @@ describe('cardText', () => {
   it('joins the footer with each language’s own separators', () => {
     expect(footerText(footer, strings('en').teammate.ui)).toBe('Default · gpt-x · 1,234 tokens · Used: screen, file');
     expect(footerText(footer, strings('zh-CN').teammate.ui)).toBe('Default · gpt-x · 1,234 个词元 · 用到：screen、file');
-    expect(footerText({ profile: '', model: 'm', tokens: null, used: [] }, strings('en').teammate.ui)).toBe('m');
+    expect(footerText({ profile: '', model: 'm', route: '', tokens: null, used: [] }, strings('en').teammate.ui))
+      .toBe('m');
+    expect(footerText({ ...footer, route: 'Rule: Code' }, strings('en').teammate.ui))
+      .toBe('Default · gpt-x · Rule: Code · 1,234 tokens · Used: screen, file');
   });
 
   it('names the put button after the action it carries out, and shows none without one', () => {

@@ -12,11 +12,12 @@ export function copyText(entries: CardState['entries']): string {
   return (last ? last.markdown || last.line || '' : '').slice(0, MATE_COPY_MAX);
 }
 
-/** "profile · model · tokens · Used: a, b", with the language's own separators. */
+/** "profile · model · why · tokens · Used: a, b", with the language's own separators. */
 export function footerText(footer: CardState['footer'], ui: Strings['teammate']['ui']): string {
   return [
     footer.profile,
     footer.model,
+    footer.route,
     footer.tokens !== null ? ui.tokens(footer.tokens) : '',
     footer.used.length ? `${ui.used}${ui.labelSep}${footer.used.join(ui.listSep)}` : '',
   ].filter(Boolean).join(ui.sep);

@@ -15,6 +15,7 @@ import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
 import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
+import { route, type RouteReason } from '../../shared/teammate/router';
 import { isBuiltin, type BuiltinProfile, type TeammateSettings } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import {
@@ -110,6 +111,8 @@ interface Run {
   tag: PingTag;
   emotes: boolean;
   profile: BuiltinProfile | null;
+  /** Why the profile was chosen, in words, for the card footer. */
+  route: string;
   shot: Shot | null;
   app: string;
   title: string;
@@ -181,11 +184,15 @@ function failureOf(err: unknown): AskFailure {
   return 'other';
 }
 
-/** `deep` intents go to the deep profile when one is set, everything else to the default one. An agent profile can't
- *  answer an ask yet, so it counts as no profile. */
-function route(t: TeammateSettings, deep: boolean): BuiltinProfile | null {
-  const id = deep && t.deepProfile ? t.deepProfile : t.defaultProfile;
-  return t.profiles.filter(isBuiltin).find((p) => p.id === id) ?? null;
+/** The routing reason as the card footer words it. */
+function routeLabel(reason: RouteReason, t: TeammateSettings, lang: Lang): string {
+  const words = strings(lang).teammate.ask.route;
+  switch (reason.kind) {
+    case 'rule': return words.rule(t.rules[reason.index]?.app ?? '');
+    case 'deep': return words.deep;
+    case 'doIt': return words.doIt;
+    case 'default': return words.default;
+  }
 }
 
 /**
@@ -274,8 +281,8 @@ export class AskController extends EventEmitter {
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
-      profile: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '', rest: '',
-      markdown: [], tokens: null,
+      profile: null, route: '', shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
+      rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null,
@@ -313,7 +320,7 @@ export class AskController extends EventEmitter {
     this.deps.windows.showCard(at, {
       view: 'card', lang, tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, title: record.title,
       entries: this.threadEntries(record, lang, t.tagName), streaming: false,
-      footer: { profile: record.profile, model: '', tokens: null, used: [] }, put: null,
+      footer: { profile: record.profile, model: '', route: '', tokens: null, used: [] }, put: null,
     });
     this.cardShown = true;
     this.viewed = record;
@@ -428,22 +435,25 @@ export class AskController extends EventEmitter {
   private async answer(run: Run): Promise<void> {
     const { deps } = this;
     const t = deps.settings().teammate;
-    const profile = route(t, run.intent.def.deep);
-    const stored = profile && deps.secrets.available() ? deps.secrets.key(profile.id) : null;
-    const key = stored ?? (profile && !needsKey(profile) ? '' : null);
-    if (!profile || key === null) return this.fail(run, 'noProfile');
-    if (!run.display) return this.fail(run, 'capture');
-    run.profile = profile;
-    run.machine.startGathering();
-    // The total time runs from here, so a capture, helper or file read that hangs can't hold the ask up.
-    this.deadline(run, TOTAL_MS, () => this.fail(run, 'timeout'));
     const signal = run.abort.signal;
-
+    // The total time runs from the first helper call, so a capture, helper or file read that hangs can't hold it up.
+    this.deadline(run, TOTAL_MS, () => this.fail(run, 'timeout'));
     const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '', window: '' }));
     if (!this.alive(run)) return;
     run.app = fg.app;
     run.title = fg.title;
     run.window = fg.window;
+    const routed = route(t, { intent: run.spot.intent, deep: run.intent.def.deep, app: run.app, title: run.title });
+    // An agent profile can't answer an ask yet, so it counts as no profile.
+    const profile = routed && isBuiltin(routed.profile) ? routed.profile : null;
+    const stored = profile && deps.secrets.available() ? deps.secrets.key(profile.id) : null;
+    const key = stored ?? (profile && !needsKey(profile) ? '' : null);
+    if (!profile || key === null) return this.fail(run, 'noProfile');
+    if (!run.display) return this.fail(run, 'capture');
+    run.profile = profile;
+    run.route = routed ? routeLabel(routed.reason, t, run.lang) : '';
+    run.machine.startGathering();
+
     // The context comes first: the boxes around the spot decide what the capture shows.
     await this.files.makeDir(run.dir);
     const allin = run.intent.def.id === 'allin';
@@ -927,7 +937,7 @@ export class AskController extends EventEmitter {
       view: 'card', lang: run.lang, tag: run.tag, entries, streaming,
       title: run.thread?.title ?? (run.line || run.intent.label).slice(0, TITLE_MAX),
       footer: {
-        profile: run.profile?.name ?? '', model: run.profile?.model ?? '', tokens: run.tokens,
+        profile: run.profile?.name ?? '', model: run.profile?.model ?? '', route: run.route, tokens: run.tokens,
         used: [
           t.ask.usedScreen,
           ...run.used.map((u) => usedLabel(u, run.lang)),

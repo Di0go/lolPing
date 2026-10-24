@@ -115,6 +115,8 @@ interface MateAskText {
   /** The sections of file `name` the answer used, `from` to `to`: numbers, or sheet names. */
   usedFile: (name: string, unit: FileUnit, from: string, to: string) => string;
   contextSkipped: string;
+  /** Why the card's profile was chosen: an app rule (named by its app), the deep profile, Do it, or the default. */
+  route: { rule: (app: string) => string; deep: string; doIt: string; default: string };
 }
 
 const enMateAsk: MateAskText = {
@@ -142,6 +144,12 @@ const enMateAsk: MateAskText = {
     return `${name} ${word} ${range}`;
   },
   contextSkipped: 'some context was skipped',
+  route: {
+    rule: (app) => `Rule: ${app}`,
+    deep: 'Deep profile',
+    doIt: 'Do it goes to the first agent',
+    default: 'Default',
+  },
 };
 
 /** Settings → Teammate. */
@@ -1035,6 +1043,12 @@ const zh: Strings = {
         return `${name} ${where[unit]}`;
       },
       contextSkipped: '部分上下文已跳过',
+      route: {
+        rule: (app) => `规则：${app}`,
+        deep: '“全局”配置',
+        doIt: '“帮我做”交给第一个代理',
+        default: '默认配置',
+      },
     },
     settings: {
       profiles: '配置',

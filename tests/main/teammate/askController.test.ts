@@ -631,8 +631,49 @@ describe('AskController', () => {
     expect(card?.entries.at(-1)).toEqual({
       kind: 'answer', label: 'AI', line: 'A plan with two risks.', markdown: '## Risks\n- cost',
     });
-    expect(card?.footer).toEqual({ profile: 'deep', model: 'deep-model', tokens: 120, used: [t.ask.usedScreen] });
+    expect(card?.footer).toEqual({
+      profile: 'deep', model: 'deep-model', route: t.ask.route.deep, tokens: 120, used: [t.ask.usedScreen],
+    });
     expect(h.requests[0].model).toBe('deep-model');
+  });
+
+  it('asks the profile an app rule names', async () => {
+    const h = harness({
+      teammate: {
+        profiles: [profile('fast'), profile('code')], defaultProfile: 'fast',
+        rules: [{ app: 'Notepad.exe', titleContains: 'notes', intents: ['danger'], profile: 'code' }],
+      },
+      steps: [answers([call('say', { text: 'A typo.' })]), answers([call('say', { text: 'Fine.' })])],
+    });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.adapters).toEqual(['code']);
+    expect(h.requests[0].model).toBe('code-model');
+
+    // The rule names Danger only: another intent in the same window goes the default way.
+    h.ctl.ask(spot('push'));
+    await flush();
+    expect(h.adapters).toEqual(['code', 'fast']);
+  });
+
+  it('shows why the profile was chosen in the card footer', async () => {
+    const answer = () => answers([call('say', { text: 'A plan.' }), call('answer', { markdown: '## Risks' })]);
+    const h = harness({
+      teammate: {
+        profiles: [profile('fast'), profile('deep'), profile('code')], defaultProfile: 'fast', deepProfile: 'deep',
+        rules: [{ app: 'notepad.exe', titleContains: '', intents: ['danger'], profile: 'code' }],
+      },
+      steps: [answer(), answer(), answer()],
+    });
+    const routes = async (intent: Spot['intent']) => {
+      h.ctl.ask(spot(intent));
+      await flush();
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      return h.cards().at(-1)?.footer.route;
+    };
+    expect(await routes('danger')).toBe('Rule: notepad.exe');
+    expect(await routes('allin')).toBe('Deep profile');
+    expect(await routes('push')).toBe('Default');
   });
 
   it('clears everything on pause', async () => {
