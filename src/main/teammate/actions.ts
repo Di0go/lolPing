@@ -7,14 +7,15 @@ import type { Settings } from '../../shared/settings';
 import { SELECTION_MAX, type PasteResult } from '../../shared/teammate/contextProtocol';
 import type { Rect } from '../../shared/teammate/coords';
 import {
-  agentAllowed, agentLabel, agentPermissionKey, agentWhat, allowed, describeAgentInput, formPreview, isShellTool,
-  neverFill, pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow, type PutAction,
+  agentAllowed, agentLabel, agentPermissionKey, agentWhat, allowed, describeAgentInput, formPreview, isEditTool,
+  isShellTool, neverFill, pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow, type PutAction,
 } from '../../shared/teammate/doRules';
 import { eventIcs, tableHtml, tableTsv } from '../../shared/teammate/grab';
 import type { ActionCall } from '../../shared/teammate/tools';
 import type { ConsentAction, FormAction, PutState } from '../../shared/teammateIpc';
 import type { OverlayManager } from '../overlayManager';
 import type { ContextClient } from './contextClient';
+import { alwaysAllowsEdit } from './editScope';
 import type { MateWindows } from './mateWindows';
 
 type Point = { x: number; y: number };
@@ -62,6 +63,8 @@ export interface RunInfo {
   /** The selection at the ask: what a replace pastes over. */
   selection: string;
   fields: FormField[];
+  /** The folder an agent runs in: Always allow covers its edits only there. Null for a built-in profile. */
+  cwd: string | null;
 }
 
 export interface ActionDeps {
@@ -79,8 +82,10 @@ export interface ActionDeps {
   windows: Pick<MateWindows,
     'showConsent' | 'hideConsent' | 'showForm' | 'hideForm' | 'cardHadFocus' | 'hideCard' | 'hideBubble' | 'hideNow'>;
   overlay: Pick<OverlayManager, 'toast' | 'spawnMate' | 'toLocal' | 'glow'>;
-  /** Which OS the toasts are worded for (the undo key). */
+  /** Which OS the toasts are worded for (the undo key), and whose paths an agent's edits name. */
   platform: Platform;
+  /** The user's home folder, whose dot files Always allow never covers. */
+  home: () => string;
   /** The local time minus UTC in minutes on a date, for event files. */
   zoneOffset: (d: Date) => number;
   now: () => number;
@@ -214,7 +219,7 @@ export class ActionRunner extends EventEmitter {
   askAgent(run: RunInfo, req: { tool: string; input: unknown }, signal: AbortSignal): Promise<'allow' | 'deny'> {
     if (signal.aborted) return Promise.resolve('deny');
     this.begin(run);
-    if (this.agentOk(run, req.tool)) {
+    if (this.agentOk(run, req.tool, req.input)) {
       this.describeAgent(run, req.tool, req.input);
       return Promise.resolve('allow');
     }
@@ -332,7 +337,7 @@ export class ActionRunner extends EventEmitter {
     if (item.kind === 'form') return this.showPreview(item);
     if (item.kind === 'agent') {
       // Checked now, not when the call came: Always allow on one card covers the next one waiting.
-      if (!this.agentOk(item.run, item.tool)) return this.showAgent(item);
+      if (!this.agentOk(item.run, item.tool, item.input)) return this.showAgent(item);
       this.describeAgent(item.run, item.tool, item.input);
       item.settle('allow');
       return this.pump();
@@ -396,6 +401,7 @@ export class ActionRunner extends EventEmitter {
       view: 'consent', lang: run.lang, tag: run.tag, action: 'agent', tool,
       text: this.agentLine(run, tool, input, false), detail: describeAgentInput(tool, input),
       always: !isShellTool(tool), seconds: CONSENT_MS / 1000,
+      ...(isEditTool(tool) && !this.editCovered(run, tool, input) ? { alwaysAsks: true } : {}),
     });
     const stop = this.deps.timer(CONSENT_MS, () => {
       if (this.shown?.item !== item) return;
@@ -434,8 +440,15 @@ export class ActionRunner extends EventEmitter {
     if (was) this.pump();
   }
 
-  private agentOk(run: RunInfo, tool: string): boolean {
-    return agentAllowed(this.deps.settings().teammate.permissions, run.profileId, tool);
+  private agentOk(run: RunInfo, tool: string, input: unknown): boolean {
+    if (!agentAllowed(this.deps.settings().teammate.permissions, run.profileId, tool)) return false;
+    return !isEditTool(tool) || this.editCovered(run, tool, input);
+  }
+
+  /** An edit outside the run's folder, or of a settings file, asks even with Always allow saved (ruling R26). */
+  private editCovered(run: RunInfo, tool: string, input: unknown): boolean {
+    const { kind, target } = agentWhat(tool, input);
+    return kind === 'edit' && alwaysAllowsEdit(target, run.cwd, this.deps.home(), this.deps.platform);
   }
 
   private showPreview(item: Extract<Waiting, { kind: 'form' }>): void {

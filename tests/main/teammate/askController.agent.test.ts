@@ -351,7 +351,8 @@ describe('AskController with an agent', () => {
     expect(JSON.parse(textOf(r))).toEqual({ behavior: 'allow', updatedInput: input });
     expect(h.prompts).toHaveLength(1);
     expect(h.prompts[0].req).toEqual({ tool: 'Edit', input });
-    expect(h.prompts[0].run).toMatchObject({ profileId: 'cc', profileName: 'My Claude' });
+    // The runner gets the folder the agent runs in, which Always allow on an edit is checked against.
+    expect(h.prompts[0].run).toMatchObject({ profileId: 'cc', profileName: 'My Claude', cwd: 'C:\\code\\lolPing' });
   });
 
   it('answers deny when the user declines', async () => {

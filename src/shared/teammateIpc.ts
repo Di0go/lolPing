@@ -92,6 +92,8 @@ export interface ConsentState {
   detail: string;
   /** Offer Always allow. */
   always: boolean;
+  /** An agent's edit outside its folder or of a settings file: the card says lolPing asks each time. */
+  alwaysAsks?: boolean;
   /** The countdown bar's total length; ending it is the caller's job, the page only draws it. */
   seconds: number;
   /** Which side of the spot the card is on, so it slides in from there. Set by the window; the right when absent. */

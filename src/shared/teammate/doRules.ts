@@ -52,6 +52,9 @@ export function agentWhat(tool: string, input: unknown): { kind: 'edit' | 'run' 
 }
 
 const EDIT_TOOLS = /^(?:edit|write|multiedit|notebookedit)$/i;
+
+/** Claude Code's tools that write a file: Edit, Write, MultiEdit, NotebookEdit. */
+export const isEditTool = (tool: string): boolean => EDIT_TOOLS.test(tool);
 /** The consent card's detail for an agent's tool call is cut here. */
 const AGENT_DETAIL_MAX = 400;
 /** An edit's detail shows a path longer than head + tail characters as its start and end. */

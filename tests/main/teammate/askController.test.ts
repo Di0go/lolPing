@@ -1271,6 +1271,7 @@ describe('AskController', () => {
           id: '42.7.1', kind: 'text', label: 'Reply', group: '', value: '', secure: false, required: false, options: [],
           box,
         }],
+        cwd: null,
       }]);
       // A new ask, or a pause, drops whatever is still waiting for consent.
       const before = h.runnerCancels();

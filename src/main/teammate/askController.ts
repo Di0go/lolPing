@@ -164,8 +164,9 @@ interface Run {
   agent: { token: string; tools: ToolDef[] } | null;
   /** An agent's unprompted call, which isn't an ask: where its marks go (physical px). */
   visitor: { point: Point } | null;
-  /** The folder the agent ran in, as the card footer names it. */
+  /** The folder the agent ran in, as the card footer names it, and its path; null for a built-in profile. */
   folder: string;
+  cwd: string | null;
   /** The agent session this answer came from, kept with the thread so the next ask in it resumes it. */
   session: NonNullable<ThreadRecord['agent']> | null;
   shot: Shot | null;
@@ -391,7 +392,7 @@ export class AskController extends EventEmitter {
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
-      profile: null, route: '', agent: null, visitor: null, folder: '', session: null,
+      profile: null, route: '', agent: null, visitor: null, folder: '', cwd: null, session: null,
       shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
       rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
@@ -643,8 +644,8 @@ export class AskController extends EventEmitter {
       spot: { intent: 'generic', phys: cursor, displayId: display.id }, receipt: point, display,
       intent: intentFor(t, 'generic', lang), words: null, thread: null, autoCard: true, lang,
       tag: this.visitorTag(client), emotes: t.emotes, profile: null, route: '', agent: null, visitor: { point },
-      folder: '', session: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
-      rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [], dir: '', screenMarks: [],
+      folder: '', cwd: null, session: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '',
+      said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [], dir: '', screenMarks: [],
       doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null, info: null,
     };
   }
@@ -801,6 +802,7 @@ export class AskController extends EventEmitter {
     const resume = run.thread?.agent?.profileId === profile.id ? run.thread.agent : null;
     const folder = agentFolder(profile, { app: run.app, title: run.title }, agents, run.lang);
     const cwd = resume?.cwd ?? folder.path;
+    run.cwd = cwd;
     run.folder = resume ? words.folder(baseName(resume.cwd)) : folder.label;
     const images = { overview: baseName(cap.overviewPath), zooms: cap.zooms.map((z) => baseName(z.path)) };
     await this.files.write(join(run.dir, 'ask.md'), agentAsk(ctx, images));
@@ -1020,7 +1022,7 @@ export class AskController extends EventEmitter {
       at: this.deps.overlay.toDip(run.spot.phys) ?? this.deps.overlay.primaryDip(),
       box: run.box,
       focus: focus ? { kind: focus.kind, label: focus.label, value: focus.value, secure: focus.secure } : null,
-      selection: run.system?.selection ?? '', fields: run.fields,
+      selection: run.system?.selection ?? '', fields: run.fields, cwd: run.cwd,
     };
     return run.info;
   }

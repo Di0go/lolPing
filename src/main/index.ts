@@ -860,6 +860,7 @@ function start(): void {
       },
       overlay: overlays,
       platform: PLATFORM,
+      home: () => app.getPath('home'),
       zoneOffset: (d) => -d.getTimezoneOffset(),
       now: Date.now,
       timer: (ms, fn) => {

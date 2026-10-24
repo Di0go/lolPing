@@ -14,11 +14,13 @@ const t = strings('en').teammate.ui;
 const TAG = { name: 'AI', color: 3, rgb: null };
 const ASK_WINDOW = '263544';
 const REPLY_BOX = { x: 900, y: 780, w: 400, h: 40 };
+const CWD = 'C:\\code\\app';
+const HOME = 'C:\\Users\\me';
 
 const info = (over: Partial<RunInfo> = {}): RunInfo => ({
   id: 'ask1', profileId: 'fast', profileName: 'Fast', tag: TAG, app: 'Chrome', window: ASK_WINDOW, lang: 'en',
   spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box: REPLY_BOX,
-  focus: { kind: 'field', label: 'Reply', value: '', secure: false }, selection: '', fields: [], ...over,
+  focus: { kind: 'field', label: 'Reply', value: '', secure: false }, selection: '', fields: [], cwd: CWD, ...over,
 });
 
 const paste = (text = 'Friday works.', mode: 'insert' | 'replace' = 'insert'): ActionCall => (
@@ -143,6 +145,7 @@ function harness(opts: Options = {}) {
       glow: (boxes, tag) => log.push(['glow', { boxes, tag }]),
     },
     platform: opts.platform ?? 'win',
+    home: () => HOME,
     zoneOffset: () => 0,
     now: () => clock,
     timer: (ms, fn) => {
@@ -986,6 +989,48 @@ describe('ActionRunner for an agent', () => {
     await flush();
     expect(next.answer()).toBe('allow');
     expect(h.of('consent')).toHaveLength(1);
+  });
+
+  it('lets Always allow cover an edit only inside the run\'s folder and outside its settings folders', async () => {
+    const h = harness({ permissions: ['cc:agent:Edit', 'cc:agent:Write'] });
+    const inside = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    expect(inside.answer()).toBe('allow');
+    expect(h.of('consent')).toEqual([]);
+    const asked: string[] = [];
+    for (const [tool, file, cwd] of [
+      ['Write', '.claude\\settings.local.json', CWD],
+      ['Edit', '..\\outside.txt', CWD],
+      ['Write', '~/.zshrc', HOME],
+      ['Edit', 'src\\app.ts', null],
+    ] as const) {
+      const ask = agentAsk(h, tool, { file_path: file, new_string: 'x', content: 'x' }, { cwd });
+      await flush();
+      const card = (h.of('consent') as ConsentState[]).at(-1);
+      expect(card?.always, file).toBe(true);
+      expect(card?.alwaysAsks, file).toBe(true);
+      asked.push(file);
+      h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+      await flush();
+      expect(ask.answer(), file).toBe('allow');
+    }
+    expect(h.of('consent')).toHaveLength(asked.length);
+  });
+
+  it('says on an edit card that lolPing always asks when the file is outside the folder or a settings file', async () => {
+    const h = harness();
+    agentAsk(h, 'Edit', EDIT);
+    await flush();
+    h.runner.onAction('consent', { t: 'always', serial: h.card() });
+    agentAsk(h, 'Edit', { ...EDIT, file_path: '.git\\hooks\\pre-commit' });
+    await flush();
+    const cards = h.of('consent') as ConsentState[];
+    expect(cards.map((c) => c.alwaysAsks)).toEqual([undefined, true]);
+    h.runner.onAction('consent', { t: 'decline', serial: h.card() });
+    // A Bash card says nothing of it: it never offers Always allow.
+    agentAsk(h, 'Bash', { command: 'ls' });
+    await flush();
+    expect((h.of('consent') as ConsentState[]).at(-1)?.alwaysAsks).toBeUndefined();
   });
 
   it('never offers Always allow for a shell command', async () => {

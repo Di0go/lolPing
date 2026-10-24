@@ -32,6 +32,8 @@ const useStyles = makeStyles({
     whiteSpace: 'pre-wrap',
     overflowWrap: 'anywhere',
   },
+  /** Said outside the detail box, so it shows however long the detail is. */
+  note: { color: tokens.colorNeutralForeground2 },
   buttons: { display: 'flex', flexWrap: 'wrap', columnGap: '6px', rowGap: '6px' },
   /** The time left to decide, along the card's bottom edge. */
   bar: {
@@ -79,6 +81,7 @@ export function Consent({ s, t, act, leaving }: {
         </div>
         <Text className={st.text}>{s.text}</Text>
         {s.detail && <Caption1 className={st.detail}>{s.detail}</Caption1>}
+        {s.alwaysAsks && <Caption1 className={st.note}>{t.agentAlwaysAsks}</Caption1>}
         <div className={st.buttons}>
           <Button size="small" appearance="primary" onClick={() => send({ t: 'allow', serial })}>{t.allowOnce}</Button>
           {s.always && <Button size="small" onClick={() => send({ t: 'always', serial })}>{t.alwaysAllow}</Button>}
