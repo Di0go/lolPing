@@ -48,7 +48,8 @@ const CLAUDE_ARGV = [
   '--add-dir', ASK_DIR,
   '--allowedTools',
   'mcp__lolping__say,mcp__lolping__ping,mcp__lolping__emote,mcp__lolping__answer,mcp__lolping__look,'
-    + 'mcp__lolping__read_file',
+    + 'mcp__lolping__read_file,mcp__lolping__copy,mcp__lolping__paste,mcp__lolping__fill,mcp__lolping__event,'
+    + 'mcp__lolping__open',
   '--permission-prompt-tool', 'mcp__lolping__consent', '--output-format', 'stream-json', '--verbose',
 ];
 

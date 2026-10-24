@@ -171,7 +171,10 @@ function dshPatch(s: AgentRunSpec): string {
   return [...rows, ...dshInsertRows(s.bridge), ''].join('\n');
 }
 
-const CLAUDE_TOOLS = [...DISPLAY_TOOLS, 'look', 'read_file'].map((t) => `mcp__lolping__${t}`).join(',');
+// lolPing's own actions ask the user in lolPing (a copy only fills the clipboard), so Claude Code's card would be a
+// second one. Never consent: that is the prompt itself.
+const CLAUDE_TOOLS = [...DISPLAY_TOOLS, 'look', 'read_file', 'copy', 'paste', 'fill', 'event', 'open']
+  .map((t) => `mcp__lolping__${t}`).join(',');
 
 function claudeParse(line: string): AgentParsed {
   const o = jsonLine(line);
