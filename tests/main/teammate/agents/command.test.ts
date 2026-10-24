@@ -142,12 +142,36 @@ describe('userPath', () => {
 
   it('asks the login shell for PATH on macOS once per process', async () => {
     const userPath = await fresh();
-    const run = vi.fn(async () => 'Last login: today\n/opt/homebrew/bin:/usr/bin');
+    const run = vi.fn(async () => '\n__LPPATH__/opt/homebrew/bin:/usr/bin__LPPATH__');
     expect(await userPath('mac', run)).toBe('/opt/homebrew/bin:/usr/bin');
     expect(await userPath('mac', run)).toBe('/opt/homebrew/bin:/usr/bin');
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith(process.env.SHELL || '/bin/zsh', ['-ilc', 'printf %s "$PATH"'], 3000);
+    const [shell, args, ms] = run.mock.calls[0] as unknown as [string, string[], number];
+    expect(shell).toBe(process.env.SHELL || '/bin/zsh');
+    expect(args.slice(0, 1)).toEqual(['-ilc']);
+    expect(args[1]).toContain('__LPPATH__%s__LPPATH__');
+    expect(args[1]).toContain('"$PATH"');
+    expect(ms).toBe(3000);
   });
+
+  it('takes only what sits between the markers when the shell prints a greeting or a prompt around it', async () => {
+    const userPath = await fresh();
+    const noise = 'Last login: today\n\u001b[1m\u001b[7m%\u001b[27m\u001b[1m\u001b[0m\n';
+    const out = `${noise}\n__LPPATH__/opt/homebrew/bin:/Users/x/.npm/bin:/usr/bin__LPPATH__\u001b[0m\nbye\n`;
+    expect(await userPath('mac', async () => out)).toBe('/opt/homebrew/bin:/Users/x/.npm/bin:/usr/bin');
+  });
+
+  it('keeps a PATH with spaces whole', async () => {
+    const userPath = await fresh();
+    expect(await userPath('mac', async () => '\n__LPPATH__/Users/a b/bin:/usr/bin__LPPATH__'))
+      .toBe('/Users/a b/bin:/usr/bin');
+  });
+
+  it.each(['', 'no markers here\n/usr/bin', '\n__LPPATH____LPPATH__', '__LPPATH__/only/the/start'])(
+    'falls back to its own PATH when the output has no usable value: %j', async (out) => {
+      const userPath = await fresh();
+      expect(await userPath('mac', async () => out)).toBe(process.env.PATH ?? '');
+    });
 
   it('falls back to its own PATH when the shell fails', async () => {
     const userPath = await fresh();

@@ -95,15 +95,24 @@ export function withPath(env: NodeJS.ProcessEnv, value: string, platform: Platfo
 
 let shellPath: Promise<string> | null = null;
 
-/** macOS: PATH from `$SHELL -ilc 'printf %s "$PATH"'` (3 s limit), cached; elsewhere process.env.PATH. */
+// A login shell's startup files may print a greeting or escape codes; the markers say where PATH is.
+const PATH_MARK = '__LPPATH__';
+const PATH_SCRIPT = `printf '${PATH_MARK}%s${PATH_MARK}' "$PATH"`;
+const markedPath = (out: string): string | null => {
+  const start = out.indexOf(PATH_MARK);
+  const end = start === -1 ? -1 : out.indexOf(PATH_MARK, start + PATH_MARK.length);
+  const value = end === -1 ? '' : out.slice(start + PATH_MARK.length, end).trim();
+  return value === '' ? null : value;
+};
+
+/** macOS: PATH from `$SHELL -ilc` (3 s limit), cached; elsewhere process.env.PATH. */
 export function userPath(platform: Platform, run: (cmd: string, args: string[], ms: number) => Promise<string>):
   Promise<string> {
   const own = process.env.PATH ?? '';
   if (platform !== 'mac') return Promise.resolve(own);
   // Apps started from Finder get launchd's short PATH, without Homebrew or npm's folders.
-  shellPath ??= run(process.env.SHELL || '/bin/zsh', ['-ilc', 'printf %s "$PATH"'], SHELL_PATH_MS).then(
-    // An interactive shell may print a greeting first; PATH is the last line.
-    (out) => out.split('\n').pop()?.trim() || own,
+  shellPath ??= run(process.env.SHELL || '/bin/zsh', ['-ilc', PATH_SCRIPT], SHELL_PATH_MS).then(
+    (out) => markedPath(out) ?? own,
     () => own,
   );
   return shellPath;

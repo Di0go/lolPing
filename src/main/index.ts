@@ -52,12 +52,12 @@ import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
 import { bridgeCommand, userConfigSnippet } from './mcp/bridgeCommand';
-import { BridgeServer, bridgePath } from './mcp/bridgeServer';
+import { BridgeServer, bridgePath, writeTokenFile } from './mcp/bridgeServer';
 import { ActionRunner } from './teammate/actions';
 import { captureOutput, checkAgent } from './teammate/agents/check';
 import { findExecutable, userPath, withPath } from './teammate/agents/command';
 import { launchTerminal } from './teammate/agents/openInTerminal';
-import { AgentRunner, envValue, isFile as isRegularFile, killProcessTree } from './teammate/agents/runner';
+import { AgentRunner, envValue, isExecutable, killProcessTree } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
 import { installedEditors } from './teammate/editors';
@@ -750,7 +750,7 @@ function start(): void {
     const env = await userEnv();
     const file = findExecutable(profile.command, {
       PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
-    }, PLATFORM, isRegularFile);
+    }, PLATFORM, isExecutable);
     const opened = file !== null && isDirectory(session.cwd)
       && await launchTerminal({ spawn, platform: PLATFORM, cwd: session.cwd, file, args, env });
     if (!opened) historyOpenFailed = profile.name;
@@ -921,7 +921,7 @@ function start(): void {
       const path = bridgePath(PLATFORM, userData, userInfo().username);
       const server = new BridgeServer({
         path, tokenFile: join(userData, 'mcp-token'), handler: bridgeHandler(controller), now: Date.now,
-        random: randomBytes, writeToken: (file, token) => writeFile(file, token, { mode: 0o600 }),
+        random: randomBytes, writeToken: writeTokenFile,
       });
       await server.start();
       pipe = path;
@@ -1098,7 +1098,7 @@ function start(): void {
         return checkAgent(p, {
           find: (command) => findExecutable(command, {
             PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
-          }, PLATFORM, isRegularFile),
+          }, PLATFORM, isExecutable),
           run: captureOutput({ spawn, platform: PLATFORM, killTree: killProcessTree(PLATFORM), env: () => env }),
         });
       },
@@ -1125,7 +1125,7 @@ function start(): void {
             PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
             LOCALAPPDATA: process.env.LOCALAPPDATA, ProgramFiles: process.env.ProgramFiles,
           },
-          home: app.getPath('home'), exists: isRegularFile, list: listDir,
+          home: app.getPath('home'), exists: isExecutable, list: listDir,
         });
       },
       history: async (op: TeammateHistoryOp) => {

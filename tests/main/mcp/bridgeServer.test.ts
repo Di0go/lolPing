@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BridgeServer, bridgePath, type BridgeHandler, type BridgeSession } from '../../../src/main/mcp/bridgeServer';
+import {
+  BridgeServer, bridgePath, writeTokenFile, type BridgeHandler, type BridgeSession,
+} from '../../../src/main/mcp/bridgeServer';
 import {
   BRIDGE_LINE_MAX, BRIDGE_VERSION, encodeLine, parseFromApp,
   type BridgeContent, type FromBridgeApp, type ToBridgeApp,
@@ -12,6 +14,7 @@ import {
 import type { ToolDef } from '../../../src/shared/teammate/tools';
 
 const isWin = process.platform === 'win32';
+const SOCKET_PATH_MAX = 103;
 const ASK = `ask-7.${'0f'.repeat(16)}`;
 const TOOLS: ToolDef[] = [{ name: 'look', description: 'Look at the screen.', parameters: { type: 'object' } }];
 
@@ -102,6 +105,11 @@ describe('BridgeServer', () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(path.join(os.tmpdir(), 'lolping-bridge-'));
+    // macOS allows 103 bytes in a socket path, and its temp folder is already long.
+    if (!isWin && Buffer.byteLength(path.join(dir, 'mcp.sock')) > SOCKET_PATH_MAX) {
+      await rm(dir, { recursive: true, force: true });
+      dir = await mkdtemp(path.join('/tmp', 'lp-'));
+    }
     sockPath = isWin ? `\\\\.\\pipe\\lolping-test-${randomBytes(8).toString('hex')}` : path.join(dir, 'mcp.sock');
     tokens = [];
     hellos = [];
@@ -305,5 +313,78 @@ describe('BridgeServer', () => {
     expect(bridgePath('mac', '/Users/a/Library/Application Support/lolPing', 'alice'))
       .toBe(path.join('/Users/a/Library/Application Support/lolPing', 'mcp.sock'));
     expect(bridgePath('linux', '/home/a/.config/lolPing', 'alice')).toBe(path.join('/home/a/.config/lolPing', 'mcp.sock'));
+  });
+
+  it.skipIf(isWin)('writes the token file private to the user even over a file left with another mode', async () => {
+    const tokenFile = path.join(dir, 'mcp-token');
+    await writeFile(tokenFile, 'old', { mode: 0o644 });
+    await chmod(tokenFile, 0o644);
+    await writeTokenFile(tokenFile, 'new');
+    expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
+    expect(await readFile(tokenFile, 'utf8')).toBe('new');
+  });
+
+  it.skipIf(isWin)('listens on the short fallback socket when userData is too deep for a socket path', async () => {
+    await server.stop();
+    const deep = path.join(dir, 'd'.repeat(120), 'lolPing');
+    const fallback = bridgePath('mac', deep, 'alice');
+    expect(fallback).not.toContain('d'.repeat(120));
+    expect(Buffer.byteLength(fallback)).toBeLessThanOrEqual(SOCKET_PATH_MAX);
+    sockPath = fallback;
+    server = make();
+    await server.start();
+    try {
+      expect((await stat(fallback)).mode & 0o777).toBe(0o600);
+      const c = await connect();
+      c.send(hello(token()));
+      c.send({ t: 'list', id: 1 });
+      expect(await c.line(0)).toEqual({ t: 'tools', id: 1, tools: TOOLS });
+    } finally {
+      for (const c of clients) c.socket.destroy();
+      await server.stop();
+      await rm(fallback, { force: true });
+    }
+  });
+});
+
+describe('bridgePath for a long userData folder', () => {
+  const TMP = path.join('/var/folders/zz/abc', 'T');
+  /** A userData folder whose socket path `<it>/mcp.sock` is exactly `bytes` long. */
+  const userDataFor = (bytes: number): string => `/${'a'.repeat(bytes - '/mcp.sock'.length - 1)}`;
+
+  it('keeps mcp.sock in userData up to 103 bytes on macOS', () => {
+    const userData = userDataFor(103);
+    expect(bridgePath('mac', userData, 'alice', TMP)).toBe(path.join(userData, 'mcp.sock'));
+  });
+
+  it('falls back to a socket in the temp folder at 104 bytes on macOS', () => {
+    const userData = userDataFor(104);
+    const p = bridgePath('mac', userData, 'alice', TMP);
+    expect(p).toMatch(/lolping-[0-9a-f]{16}\.sock$/);
+    expect(path.dirname(p)).toBe(TMP);
+  });
+
+  it('counts bytes, not characters', () => {
+    const userData = `/Users/${'é'.repeat(50)}/Library/Application Support/lolPing`;
+    expect(userData.length + '/mcp.sock'.length).toBeLessThan(104);
+    expect(path.dirname(bridgePath('mac', userData, 'x', TMP))).toBe(TMP);
+  });
+
+  it('allows 107 bytes on Linux', () => {
+    expect(bridgePath('linux', userDataFor(107), 'alice', TMP)).toBe(path.join(userDataFor(107), 'mcp.sock'));
+    expect(path.dirname(bridgePath('linux', userDataFor(108), 'alice', TMP))).toBe(TMP);
+  });
+
+  it('gives the same fallback to both sides and another one to another folder', () => {
+    const a = `/${'a'.repeat(150)}`;
+    const b = `/${'b'.repeat(150)}`;
+    expect(bridgePath('mac', a, 'alice', TMP)).toBe(bridgePath('mac', a, 'alice', TMP));
+    expect(bridgePath('mac', a, 'alice', TMP)).not.toBe(bridgePath('mac', b, 'alice', TMP));
+    expect(bridgePath('mac', a, 'alice', TMP)).not.toBe(bridgePath('mac', a, 'bob', TMP));
+  });
+
+  it('leaves the Windows pipe alone however long the folder is', () => {
+    const p = bridgePath('win', `C:\\${'a'.repeat(200)}`, 'alice', TMP);
+    expect(p).toMatch(/^\\\\\.\\pipe\\lolping-[0-9a-f]{16}$/);
   });
 });

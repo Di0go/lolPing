@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { chmod, rm } from 'node:fs/promises';
+import { chmod, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { platformOf, type Platform } from '../../shared/platform';
 import {
@@ -13,6 +14,8 @@ import type { ToolDef } from '../../shared/teammate/tools';
 const HELLO_DEADLINE_MS = 2000;
 const TOKEN_BYTES = 32;
 const PIPE_NAME_HEX = 16;
+// sun_path holds 104 bytes on macOS and 108 on Linux, one of them for the closing NUL.
+const SOCKET_PATH_MAX: Record<'mac' | 'linux', number> = { mac: 103, linux: 107 };
 const FAILED_CALL: BridgeContent[] = [{ text: 'lolPing failed to run that.' }];
 
 export interface BridgeSession { ask: string | null; client: { name: string; version: string } }
@@ -36,13 +39,26 @@ export interface BridgeServerDeps {
   writeToken: (file: string, token: string) => Promise<void>;
 }
 
-/** Where the bridge finds the app: a per-user pipe on Windows, a socket in the user's own data folder elsewhere. */
-export function bridgePath(platform: Platform, userData: string, username: string): string {
+/**
+ * Where the bridge finds the app: a per-user pipe on Windows, a socket in the user's own data folder elsewhere. When
+ * that path is too long for a socket, a short one in the temp folder; both sides work it out from the same inputs.
+ */
+export function bridgePath(platform: Platform, userData: string, username: string, tmp: string = tmpdir()): string {
   if (platform === 'win') {
     const id = createHash('sha256').update(username).digest('hex').slice(0, PIPE_NAME_HEX);
     return `\\\\.\\pipe\\lolping-${id}`;
   }
-  return path.join(userData, 'mcp.sock');
+  const inUserData = path.join(userData, 'mcp.sock');
+  if (Buffer.byteLength(inUserData) <= SOCKET_PATH_MAX[platform]) return inUserData;
+  const id = createHash('sha256').update(JSON.stringify([username, userData])).digest('hex').slice(0, PIPE_NAME_HEX);
+  return path.join(tmp, `lolping-${id}.sock`);
+}
+
+/** Writes the token so only the user can read it, even over a file an older run left with another mode. */
+export async function writeTokenFile(file: string, token: string): Promise<void> {
+  await writeFile(file, token, { mode: 0o600 });
+  // A write's mode only counts when it creates the file. Windows has no such mode to set.
+  if (platformOf(process.platform) !== 'win') await chmod(file, 0o600);
 }
 
 const sameToken = (given: string, expected: string): boolean => {

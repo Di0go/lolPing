@@ -1,12 +1,12 @@
 import { spawn, type SpawnOptions } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AgentRunner, AgentStartError, killProcessTree } from '../../../../src/main/teammate/agents/runner';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AgentRunner, AgentStartError, isExecutable, killProcessTree } from '../../../../src/main/teammate/agents/runner';
 import { platformOf } from '../../../../src/shared/platform';
 import { AGENT_PRESET_IDS, AGENT_PRESETS, agentPrompt, type AgentRunSpec } from '../../../../src/shared/teammate/agents';
 import type { AgentProfile } from '../../../../src/shared/teammate/settings';
@@ -135,7 +135,7 @@ function spyRunner(fails = false) {
 /** An empty file where the runner looks for `bin`; the spy never runs it. */
 async function placeholder(bin: string): Promise<string> {
   const file = path.join(dir, win ? `${bin}.exe` : bin);
-  await writeFile(file, '');
+  await writeFile(file, '', { mode: 0o755 });
   return file;
 }
 
@@ -274,5 +274,88 @@ describe('AgentRunner', () => {
     expect(JSON.parse(written[0]?.[1] ?? '')).toEqual({
       mcpServers: { lolping: { type: 'stdio', command: s.bridge.command, args: s.bridge.args, env: s.bridge.env } },
     });
+  });
+});
+
+describe('AgentRunner when stopping a run fails', () => {
+  it('still stops the other runs when killing one throws', async () => {
+    await placeholder('claude');
+    const fake = fakeSpawn();
+    const killed: number[] = [];
+    const runner = new AgentRunner({
+      spawn: fake.spawn, platform,
+      killTree: (pid) => {
+        killed.push(pid);
+        if (pid === 4000) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      },
+      writeFile: async () => undefined,
+    });
+    const p = profile({ preset: 'claude', command: 'claude' });
+    await runner.start(p, spec(), dir, { PATH: dir });
+    await runner.start(p, spec(), dir, { PATH: dir });
+    await runner.start(p, spec(), dir, { PATH: dir });
+    expect(() => runner.killAll()).not.toThrow();
+    expect(killed).toEqual([4000, 4001, 4002]);
+  });
+});
+
+describe('isExecutable', () => {
+  it('is false for a folder and for a path that is not there', async () => {
+    expect(isExecutable(dir)).toBe(false);
+    expect(isExecutable(path.join(dir, 'missing'))).toBe(false);
+  });
+
+  it('is true for a file that can be run', async () => {
+    const file = path.join(dir, win ? 'tool.exe' : 'tool');
+    await writeFile(file, '', { mode: 0o755 });
+    expect(isExecutable(file)).toBe(true);
+  });
+
+  it.runIf(!win)('is false for a file without the execute bit, such as a README on PATH', async () => {
+    const file = path.join(dir, 'claude');
+    await writeFile(file, '#!/bin/sh\n', { mode: 0o644 });
+    await chmod(file, 0o644);
+    expect(isExecutable(file)).toBe(false);
+    await chmod(file, 0o755);
+    expect(isExecutable(file)).toBe(true);
+  });
+});
+
+describe('killProcessTree on macOS and Linux', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const signals = (kill: ReturnType<typeof vi.spyOn>): unknown[] => kill.mock.calls.map((c: unknown[]) => c.slice(0, 2));
+
+  it.each(['mac', 'linux'] as const)('signals the whole process group on %s, then kills what is left', (name) => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    killProcessTree(name)(4321);
+    expect(signals(kill)).toEqual([[-4321, 'SIGTERM']]);
+    vi.advanceTimersByTime(2000);
+    expect(signals(kill)).toEqual([[-4321, 'SIGTERM'], [-4321, 0], [-4321, 'SIGKILL']]);
+  });
+
+  it('does not send SIGKILL once the group is gone', () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, sig) => {
+      if (sig === 0) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+      return true;
+    });
+    killProcessTree('mac')(4321);
+    vi.advanceTimersByTime(2000);
+    expect(signals(kill)).toEqual([[-4321, 'SIGTERM'], [-4321, 0]]);
+  });
+
+  it('does not throw when the group is not ours to signal', () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    });
+    expect(() => killProcessTree('mac')(4321)).not.toThrow();
+    expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+    expect(kill).toHaveBeenCalled();
   });
 });

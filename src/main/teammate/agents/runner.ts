@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { accessSync, constants, statSync } from 'node:fs';
 import type { Platform } from '../../../shared/platform';
 import { AGENT_PRESETS, type AgentParsed, type AgentRunSpec } from '../../../shared/teammate/agents';
 import type { AgentProfile } from '../../../shared/teammate/settings';
@@ -55,9 +55,12 @@ export function envValue(env: NodeJS.ProcessEnv, name: string, platform: Platfor
   return key === undefined ? undefined : env[key];
 }
 
-export function isFile(p: string): boolean {
+/** A file that can be run: on macOS and Linux it needs the execute bit, so a script or README on PATH isn't taken. */
+export function isExecutable(p: string): boolean {
   try {
-    return statSync(p).isFile();
+    if (!statSync(p).isFile()) return false;
+    if (process.platform !== 'win32') accessSync(p, constants.X_OK);
+    return true;
   } catch {
     return false;
   }
@@ -106,7 +109,7 @@ export class AgentRunner {
     const preset = p.preset === 'custom' ? null : AGENT_PRESETS[p.preset];
     const file = findExecutable(p.command, {
       PATH: envValue(env, 'PATH', platform) ?? '', PATHEXT: envValue(env, 'PATHEXT', platform),
-    }, platform, isFile);
+    }, platform, isExecutable);
     if (file === null) throw new AgentStartError('notFound', `Couldn't find ${p.command}`);
 
     // A custom command gets Claude's mcpServers file, the shape most agents read.
@@ -138,7 +141,13 @@ export class AgentRunner {
   }
 
   killAll(): void {
-    for (const run of this.live) run.kill();
+    for (const run of this.live) {
+      try {
+        run.kill();
+      } catch {
+        // One run that can't be signalled must not leave the others running.
+      }
+    }
   }
 
   private watch(child: ChildProcess, parse: (line: string) => AgentParsed): AgentRun {
@@ -209,7 +218,11 @@ export function killProcessTree(platform: Platform): (pid: number) => void {
     }
   };
   return (pid) => {
-    if (!signal(pid, 'SIGTERM')) return;
+    try {
+      if (!signal(pid, 'SIGTERM')) return;
+    } catch {
+      return; // EPERM: the group isn't ours to signal, and there is nothing else to try
+    }
     setTimeout(() => {
       try {
         if (signal(pid, 0)) signal(pid, 'SIGKILL');
