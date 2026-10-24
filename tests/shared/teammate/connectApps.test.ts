@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { strings } from '../../../src/shared/i18n';
 import type { Platform } from '../../../src/shared/platform';
 import { AGENT_PRESETS } from '../../../src/shared/teammate/agents';
 import {
@@ -35,6 +36,23 @@ describe('CONNECT_APPS', () => {
       'claudeCodeLine', 'context_servers', 'dshPatch', 'gooseLine', 'mcpServers', 'servers', 'toml',
     ]);
     expect(CONNECT_APPS.map((a) => a.id)).toEqual([...new Set(CONNECT_APPS.map((a) => a.id))]);
+  });
+
+  it('names every app in both languages, with the words between product names in Chinese', () => {
+    const en = strings('en').teammate.settings;
+    const zh = strings('zh-CN').teammate.settings;
+    for (const a of CONNECT_APPS) {
+      expect(en.connectName[a.id], a.id).not.toBe('');
+      expect(zh.connectName[a.id], a.id).not.toBe('');
+    }
+    expect(en.connectName.codex).toBe('Codex app and Codex CLI');
+    expect(zh.connectName.codex).toBe('Codex 应用和 Codex CLI');
+    expect(zh.connectName['claude-code']).toBe('Claude Code（在 lolPing 之外）');
+    for (const name of Object.values(zh.connectName)) {
+      expect(name).not.toMatch(/ and |\(|outside|desktop|IDEs|agent mode/);
+    }
+    expect(en.connectPage.claudeCode).toBe('claude mcp add lolping -- <command>');
+    expect(zh.connectPage.claudeCode).toBe('claude mcp add lolping -- <命令>');
   });
 
   it('names where to add lolPing on every platform', () => {

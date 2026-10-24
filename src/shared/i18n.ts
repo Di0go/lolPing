@@ -3,6 +3,7 @@ import type { PingId } from './pings';
 import type { Platform } from './platform';
 import type { MemberPath } from './room';
 import type { AskFailure } from './teammate/askMachine';
+import type { ConnectAppId } from './teammate/connectApps';
 
 export type Lang = 'en' | 'zh-CN';
 /** The language setting: 'auto' follows the system display language. */
@@ -191,6 +192,26 @@ const enMateAsk: MateAskText = {
   },
 };
 
+/** The apps Connect an app lists: product names as they are, the words between them in the language. */
+const enConnectName: Record<ConnectAppId, string> = {
+  'claude-desktop': 'Claude Desktop',
+  codex: 'Codex app and Codex CLI',
+  cursor: 'Cursor and Cursor CLI',
+  vscode: 'VS Code (Copilot agent mode)',
+  windsurf: 'Windsurf / Devin Desktop',
+  antigravity: 'Antigravity',
+  zed: 'Zed',
+  kiro: 'Kiro IDE and Kiro CLI',
+  trae: 'Trae, Qoder, CodeBuddy',
+  jetbrains: 'JetBrains IDEs (AI Assistant, Junie)',
+  cline: 'Cline, Roo Code, Kilo Code, Continue',
+  dsh: 'DeepSeek Harness desktop',
+  goose: 'Goose desktop',
+  cherry: 'Cherry Studio, LM Studio',
+  gemini: 'Gemini CLI, Qwen Code',
+  'claude-code': 'Claude Code (outside lolPing)',
+};
+
 /** Settings → Teammate. */
 const enMateSettings = {
   profiles: 'Profiles',
@@ -295,7 +316,9 @@ const enMateSettings = {
     extension: 'The extension’s MCP settings',
     goose: 'Extensions → Add custom extension (command line)',
     cherryLm: 'Their MCP settings (mcp.json in LM Studio)',
+    claudeCode: 'claude mcp add lolping -- <command>',
   },
+  connectName: enConnectName,
   connectEnvLabel: 'Environment variables:',
   connectCopy: 'Copy',
   connectCopied: 'Copied',
@@ -1290,6 +1313,25 @@ const zh: Strings = {
         extension: '扩展自己的 MCP 设置',
         goose: '扩展 → 添加自定义扩展（命令行）',
         cherryLm: '它们的 MCP 设置（LM Studio 里是 mcp.json）',
+        claudeCode: 'claude mcp add lolping -- <命令>',
+      },
+      connectName: {
+        'claude-desktop': 'Claude Desktop',
+        codex: 'Codex 应用和 Codex CLI',
+        cursor: 'Cursor 和 Cursor CLI',
+        vscode: 'VS Code（Copilot 代理模式）',
+        windsurf: 'Windsurf / Devin Desktop',
+        antigravity: 'Antigravity',
+        zed: 'Zed',
+        kiro: 'Kiro IDE 和 Kiro CLI',
+        trae: 'Trae、Qoder、CodeBuddy',
+        jetbrains: 'JetBrains IDE（AI Assistant、Junie）',
+        cline: 'Cline、Roo Code、Kilo Code、Continue',
+        dsh: 'DeepSeek Harness 桌面版',
+        goose: 'Goose 桌面版',
+        cherry: 'Cherry Studio、LM Studio',
+        gemini: 'Gemini CLI、Qwen Code',
+        'claude-code': 'Claude Code（在 lolPing 之外）',
       },
       connectEnvLabel: '环境变量：',
       connectCopy: '复制',

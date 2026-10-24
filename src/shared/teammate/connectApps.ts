@@ -12,10 +12,16 @@ export interface BridgeCommand {
 export type ConnectShape =
   | 'mcpServers' | 'servers' | 'context_servers' | 'toml' | 'dshPatch' | 'gooseLine' | 'claudeCodeLine';
 
-/** Where an app has no file to name: the settings page the settings window describes in words. */
-export type ConnectPage = 'vscode' | 'antigravity' | 'theirSettings' | 'jetbrains' | 'extension' | 'goose' | 'cherryLm';
+/** Where an app has no file to name: the settings page, or the command, the settings window describes in words. */
+export type ConnectPage =
+  | 'vscode' | 'antigravity' | 'theirSettings' | 'jetbrains' | 'extension' | 'goose' | 'cherryLm' | 'claudeCode';
 
-export type ConnectApp = { id: string; name: string; shape: ConnectShape } & (
+/** The apps by id; the settings window names each in its language (i18n `connectName`), product names as they are. */
+export type ConnectAppId =
+  | 'claude-desktop' | 'codex' | 'cursor' | 'vscode' | 'windsurf' | 'antigravity' | 'zed' | 'kiro' | 'trae' | 'jetbrains'
+  | 'cline' | 'dsh' | 'goose' | 'cherry' | 'gemini' | 'claude-code';
+
+export type ConnectApp = { id: ConnectAppId; shape: ConnectShape } & (
   | { file: Record<Platform, string>; page?: undefined }
   | { page: ConnectPage; file?: undefined }
 );
@@ -25,43 +31,34 @@ const everywhere = (path: string): Record<Platform, string> => ({ win: path, mac
 /** The apps lolPing can't start itself, in the order the settings page lists them. lolPing never edits their files. */
 export const CONNECT_APPS: readonly ConnectApp[] = [
   {
-    id: 'claude-desktop', name: 'Claude Desktop', shape: 'mcpServers',
+    id: 'claude-desktop', shape: 'mcpServers',
     file: {
       win: '%APPDATA%\\Claude\\claude_desktop_config.json',
       mac: '~/Library/Application Support/Claude/claude_desktop_config.json',
       linux: '~/.config/Claude/claude_desktop_config.json',
     },
   },
-  { id: 'codex', name: 'Codex app and Codex CLI', shape: 'toml', file: everywhere('~/.codex/config.toml') },
-  { id: 'cursor', name: 'Cursor and Cursor CLI', shape: 'mcpServers', file: everywhere('~/.cursor/mcp.json') },
-  { id: 'vscode', name: 'VS Code (Copilot agent mode)', shape: 'servers', page: 'vscode' },
+  { id: 'codex', shape: 'toml', file: everywhere('~/.codex/config.toml') },
+  { id: 'cursor', shape: 'mcpServers', file: everywhere('~/.cursor/mcp.json') },
+  { id: 'vscode', shape: 'servers', page: 'vscode' },
   {
-    id: 'windsurf', name: 'Windsurf / Devin Desktop', shape: 'mcpServers',
+    id: 'windsurf', shape: 'mcpServers',
     file: {
       win: '%APPDATA%\\devin\\mcp_config.json', mac: '~/.config/devin/mcp_config.json',
       linux: '~/.config/devin/mcp_config.json',
     },
   },
-  { id: 'antigravity', name: 'Antigravity', shape: 'mcpServers', page: 'antigravity' },
-  { id: 'zed', name: 'Zed', shape: 'context_servers', file: everywhere('~/.config/zed/settings.json') },
-  { id: 'kiro', name: 'Kiro IDE and Kiro CLI', shape: 'mcpServers', file: everywhere('~/.kiro/settings/mcp.json') },
-  { id: 'trae', name: 'Trae, Qoder, CodeBuddy', shape: 'mcpServers', page: 'theirSettings' },
-  { id: 'jetbrains', name: 'JetBrains IDEs (AI Assistant, Junie)', shape: 'mcpServers', page: 'jetbrains' },
-  { id: 'cline', name: 'Cline, Roo Code, Kilo Code, Continue', shape: 'mcpServers', page: 'extension' },
-  {
-    id: 'dsh', name: 'DeepSeek Harness desktop', shape: 'dshPatch',
-    file: everywhere('~/.dsh/profiles/desktop/cordis.patch.yml'),
-  },
-  { id: 'goose', name: 'Goose desktop', shape: 'gooseLine', page: 'goose' },
-  { id: 'cherry', name: 'Cherry Studio, LM Studio', shape: 'mcpServers', page: 'cherryLm' },
-  {
-    id: 'gemini', name: 'Gemini CLI, Qwen Code', shape: 'mcpServers',
-    file: everywhere('~/.gemini/settings.json, ~/.qwen/settings.json'),
-  },
-  {
-    id: 'claude-code', name: 'Claude Code (outside lolPing)', shape: 'claudeCodeLine',
-    file: everywhere('claude mcp add lolping -- <command>'),
-  },
+  { id: 'antigravity', shape: 'mcpServers', page: 'antigravity' },
+  { id: 'zed', shape: 'context_servers', file: everywhere('~/.config/zed/settings.json') },
+  { id: 'kiro', shape: 'mcpServers', file: everywhere('~/.kiro/settings/mcp.json') },
+  { id: 'trae', shape: 'mcpServers', page: 'theirSettings' },
+  { id: 'jetbrains', shape: 'mcpServers', page: 'jetbrains' },
+  { id: 'cline', shape: 'mcpServers', page: 'extension' },
+  { id: 'dsh', shape: 'dshPatch', file: everywhere('~/.dsh/profiles/desktop/cordis.patch.yml') },
+  { id: 'goose', shape: 'gooseLine', page: 'goose' },
+  { id: 'cherry', shape: 'mcpServers', page: 'cherryLm' },
+  { id: 'gemini', shape: 'mcpServers', file: everywhere('~/.gemini/settings.json, ~/.qwen/settings.json') },
+  { id: 'claude-code', shape: 'claudeCodeLine', page: 'claudeCode' },
 ];
 
 /** The `mcpServers` JSON most MCP clients read; also what an agent profile's Copy snippet gives. */

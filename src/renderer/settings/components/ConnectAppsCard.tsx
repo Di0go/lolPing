@@ -38,11 +38,11 @@ export function ConnectAppsCard() {
         <div key={a.id} className="mateRead">
           <span className="icon" />
           <div className="lbl">
-            {a.name}
+            {m.connectName[a.id]}
             <span className="desc matePath">{a.file ? a.file[api.platform] : m.connectPage[a.page]}</span>
             {failed === a.id ? <span className="weImportError">{m.connectFailed}</span> : null}
           </div>
-          <Button size="small" aria-label={m.connectCopyLabel(a.name)} onClick={() => void copy(a.id)}>
+          <Button size="small" aria-label={m.connectCopyLabel(m.connectName[a.id])} onClick={() => void copy(a.id)}>
             {copied === a.id ? m.connectCopied : m.connectCopy}
           </Button>
         </div>
