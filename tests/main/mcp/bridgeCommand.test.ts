@@ -25,7 +25,7 @@ describe('bridgeCommand', () => {
 
 describe('userConfigSnippet', () => {
   it('is the mcpServers JSON for the bridge, without an ask', () => {
-    const o = { execPath: 'C:\lolPing\lolPing.exe', bridgeJs: 'C:\lolPing\bridge.js', pipe: 'P', dataDir: 'D' };
+    const o = { execPath: 'C:\\lolPing\\lolPing.exe', bridgeJs: 'C:\\lolPing\\bridge.js', pipe: 'P', dataDir: 'D' };
     expect(JSON.parse(userConfigSnippet(o))).toEqual({
       mcpServers: {
         lolping: {

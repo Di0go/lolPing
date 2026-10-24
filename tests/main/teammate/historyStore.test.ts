@@ -220,7 +220,7 @@ describe('HistoryStore', () => {
 
   it('lists which agent profile answered a thread, and nothing for a thread without one', async () => {
     const store = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000);
-    const agent = { profileId: 'cc', session: 'sess-1', cwd: 'C:\code\lolPing' };
+    const agent = { profileId: 'cc', session: 'sess-1', cwd: 'C:\\code\\lolPing' };
     const withAgent = await store.append(null, entry('one'), { ...meta, agent });
     const without = await store.append(null, entry('two'), meta);
     const list = await store.list();

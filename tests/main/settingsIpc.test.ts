@@ -356,8 +356,8 @@ describe('teammate IPC', () => {
   });
 
   it('gives the window only a plain folder path from the picker', async () => {
-    picked = 'C:\work\app';
-    expect(await call(SETTINGS_CH.teammatePickFolder)).toBe('C:\work\app');
+    picked = 'C:\\work\\app';
+    expect(await call(SETTINGS_CH.teammatePickFolder)).toBe('C:\\work\\app');
     for (const bad of [null, '', 5, { path: 'x' }, 'x'.repeat(1025)]) {
       picked = bad;
       expect(await call(SETTINGS_CH.teammatePickFolder)).toBeNull();
