@@ -4,13 +4,21 @@ import { AskController, bridgeHandler, type AskDeps } from '../../../src/main/te
 import type { PingTag } from '../../../src/shared/ipc';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
 import { EMOTE_CATALOG } from '../../../src/shared/emoteCatalog';
-import { DEFAULT_TEAMMATE, type AgentProfile, type TeammateSettings } from '../../../src/shared/teammate/settings';
+import { zoomRect } from '../../../src/shared/teammate/coords';
+import {
+  DEFAULT_TEAMMATE, type AgentProfile, type BuiltinProfile, type TeammateSettings,
+} from '../../../src/shared/teammate/settings';
 import type { BubbleState, CardState } from '../../../src/shared/teammateIpc';
 
 const DISPLAY = { x: 0, y: 0, w: 3200, h: 2000 };
 const CURSOR = { x: 1000, y: 800 };
 const OFF_TEXT = 'The user hasn\'t let agents ping them. They can turn on Let agents ping me in lolPing\'s '
   + 'Teammate settings.';
+
+const fast: BuiltinProfile = {
+  id: 'fast', kind: 'builtin', name: 'fast', tagColor: 3, tagColorCustom: null, provider: 'openai', protocol: 'openai',
+  baseUrl: 'https://api.example.com/v1', model: 'fast-model',
+};
 
 const claude = (over: Partial<AgentProfile> = {}): AgentProfile => ({
   id: 'cc', kind: 'agent', name: 'My Claude', tagColor: 1, tagColorCustom: null, preset: 'claude', command: 'claude',
@@ -31,6 +39,8 @@ function harness(opts: Options = {}) {
   const bubbleAt: Array<{ x: number; y: number }> = [];
   const cardAt: Array<{ x: number; y: number }> = [];
   const fades: number[] = [];
+  const hides = { bubble: 0, card: 0, clear: 0 };
+  let enabled = true;
   const appends: unknown[] = [];
   let time = 1_000_000;
   const actions = Object.assign(new EventEmitter(), {
@@ -43,18 +53,23 @@ function harness(opts: Options = {}) {
   };
   const deps: AskDeps = {
     settings: () => settings,
+    enabled: () => enabled,
     lang: () => 'en',
-    secrets: { available: () => true, key: () => null, instructions: () => '' },
+    secrets: { available: () => true, key: () => 'sk-test', instructions: () => '' },
     context: {
       foreground: () => (opts.holdAsk
         ? new Promise(() => undefined)
         : Promise.resolve({ app: '', title: '', window: '' })),
-      capture: async () => {
-        throw new Error('a visitor never captures');
-      },
-      read: async () => {
-        throw new Error('a visitor never reads');
-      },
+      // Only the user's own ask, which the tests that need an answer on screen start, reads the screen.
+      capture: async (req) => ({
+        overviewPath: `${req.dir}/overview.jpg`,
+        overview: { w: 1600, h: 1000 },
+        zooms: req.spots.map((p, i) => ({ path: `${req.dir}/zoom-${i}.jpg`, rect: zoomRect(req.display, p) })),
+      }),
+      read: async (req) => ({
+        status: { marks: 'off', text: 'off', file: 'off', boxes: 'off', fields: 'off' },
+        fields: null, marks: null, text: null, file: null, boxes: req.boxes ? req.spots.map(() => []) : null,
+      }),
     },
     readers: {
       readFile: async () => '',
@@ -68,14 +83,19 @@ function harness(opts: Options = {}) {
         throw new Error('no PDFs in tests');
       },
     },
-    adapter: () => {
-      throw new Error('a visitor never makes a provider adapter');
-    },
+    adapter: () => ({
+      turn: async (_req, handlers) => {
+        handlers.accepted();
+        const say = { id: '1', name: 'say', args: JSON.stringify({ text: 'Mine.' }) };
+        return { text: '', calls: [say, { id: '2', name: 'answer', args: JSON.stringify({ markdown: '# Mine' }) }] };
+      },
+      listModels: async () => [],
+    }),
     overlay: {
       spawnMate: (p) => void pings.push(p),
       spawnMateEmote: (p) => void emotes.push(p),
       mateSaid: () => undefined,
-      clearMate: () => undefined,
+      clearMate: () => void (hides.clear += 1),
       fadeMate: () => void fades.push(time),
       setMateTicket: () => undefined,
       setCaptureExcluded: () => undefined,
@@ -90,14 +110,14 @@ function harness(opts: Options = {}) {
         bubbles.push(s);
       },
       updateBubble: (s) => void bubbles.push(s),
-      hideBubble: () => undefined,
+      hideBubble: () => void (hides.bubble += 1),
       hideNow: () => undefined,
       showCard: (at, s) => {
         cardAt.push(at);
         cards.push(s);
       },
       updateCard: (s) => void cards.push(s),
-      hideCard: () => undefined,
+      hideCard: () => void (hides.card += 1),
       placeOf: () => null,
       setCaptureExcluded: () => undefined,
     },
@@ -124,7 +144,8 @@ function harness(opts: Options = {}) {
   };
   const ctl = new AskController(deps);
   return {
-    ctl, actions, settings, pings, emotes, bubbles, cards, bubbleAt, cardAt, fades, appends,
+    ctl, actions, settings, pings, emotes, bubbles, cards, bubbleAt, cardAt, fades, appends, hides,
+    setEnabled: (on: boolean) => void (enabled = on),
     advance: (ms: number) => {
       time += ms;
       return vi.advanceTimersByTimeAsync(ms);
@@ -304,5 +325,89 @@ describe('AskController visitors', () => {
     expect((await handler.call(session, 'ping', ping, signal)).isError).toBe(false);
     expect(h.pings).toHaveLength(1);
     expect(handler.list({ ...session, ask: 'ask-1.00000000000000000000000000000000' })).toEqual([]);
+  });
+
+  it('refuses while lolPing is paused, before it looks at the switch', async () => {
+    const h = harness({ teammate: { agentsCanPing: false } });
+    h.setEnabled(false);
+    const r = await h.ctl.visitorCall({ name: 'x' }, 'ping', ping);
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe('lolPing is paused.');
+    h.settings.teammate.agentsCanPing = true;
+    await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'hi' });
+    expect(h.pings).toEqual([]);
+    expect(h.bubbles).toEqual([]);
+    h.setEnabled(true);
+    expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(false);
+  });
+
+  it('clears an agent\'s ping, bubble, card and delayed ping when lolPing pauses', async () => {
+    const h = harness();
+    await h.ctl.visitorCall({ name: 'x' }, 'ping', ping);
+    await h.ctl.visitorCall({ name: 'x' }, 'ping', { type: 'assist' }); // waits for the gap after the first
+    await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'hi' });
+    await h.ctl.visitorCall({ name: 'x' }, 'answer', { markdown: 'more' });
+    expect(h.pings).toHaveLength(1);
+    const before = { ...h.hides };
+    h.ctl.cancel('pause');
+    expect(h.hides.clear).toBe(before.clear + 1);
+    expect(h.hides.bubble).toBeGreaterThan(before.bubble);
+    expect(h.hides.card).toBeGreaterThan(before.card);
+    await h.advance(2000);
+    expect(h.pings).toHaveLength(1);
+  });
+
+  it('refuses while the user\'s own answer is on screen and leaves it as it is', async () => {
+    const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
+    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.ctl.running).toBe(false);
+    expect(h.bubbles.at(-1)?.line).toBe('Mine.');
+    const shownBubbles = h.bubbles.length;
+    const say = await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'Agent here.' });
+    expect(text(say)).toBe('lolPing is busy; try again in a moment.');
+    expect(h.bubbles).toHaveLength(shownBubbles);
+
+    // Its card is up, and the user may be typing in it.
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    const shownCards = h.cards.length;
+    const answer = await h.ctl.visitorCall({ name: 'x' }, 'answer', { markdown: 'Agent answer.' });
+    expect(answer.isError).toBe(true);
+    expect(text(answer)).toBe('lolPing is busy; try again in a moment.');
+    expect(h.cards).toHaveLength(shownCards);
+  });
+
+  it('draws again once the user\'s answer has gone', async () => {
+    const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
+    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(true);
+    h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+    expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(false);
+  });
+
+  it('refuses while a History card is open or the answer has a button to press', async () => {
+    const h = harness();
+    h.ctl.showThread({
+      id: 't', title: 'Old', app: '', windowTitle: '', profile: '', started: 0, lastActivity: 0, entries: [],
+    }, { x: 10, y: 10 });
+    expect(text(await h.ctl.visitorCall({ name: 'x' }, 'answer', { markdown: 'a' }))).toBe(
+      'lolPing is busy; try again in a moment.',
+    );
+    expect(h.cards).toHaveLength(1);
+    h.ctl.onTeammateAction('card', { t: 'close' });
+    expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(false);
+
+    h.actions.emit('put', { kind: 'paste', label: 'Paste' });
+    expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(true);
+  });
+
+  it('does not leave an agent\'s card showing as still streaming when a second line arrives', async () => {
+    const h = harness();
+    await h.ctl.visitorCall({ name: 'x' }, 'answer', { markdown: 'one' });
+    expect(h.cards).toHaveLength(1);
+    await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'two' });
+    expect(h.cards.length).toBeGreaterThan(1);
+    for (const card of h.cards) expect(card.streaming).toBe(false);
   });
 });

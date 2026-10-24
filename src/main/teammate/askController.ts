@@ -51,6 +51,8 @@ type Timer = ReturnType<typeof setTimeout>;
 
 export interface AskDeps {
   settings: () => Settings;
+  /** False while lolPing is paused or the teammate is going down: agents' unprompted calls draw nothing then. */
+  enabled: () => boolean;
   lang: () => Lang;
   secrets: Pick<SecretStore, 'key' | 'instructions' | 'available'>;
   context: Pick<ContextClient, 'capture' | 'foreground' | 'read'>;
@@ -126,6 +128,7 @@ const ASK_OVER: BridgeContent[] = [{ text: 'That ask is over.' }];
 const AGENTS_OFF: BridgeContent[] = [{
   text: 'The user hasn\'t let agents ping them. They can turn on Let agents ping me in lolPing\'s Teammate settings.',
 }];
+const PAUSED: BridgeContent[] = [{ text: 'lolPing is paused.' }];
 const BUSY: BridgeContent[] = [{ text: 'lolPing is busy; try again in a moment.' }];
 const TOO_MANY: BridgeContent[] = [{ text: 'Too many pings.' }];
 /** Unprompted calls a second from one client, and from all of them (under this key). */
@@ -570,8 +573,9 @@ export class AskController extends EventEmitter {
   async visitorCall(
     client: { name: string }, name: string, args: unknown,
   ): Promise<{ content: BridgeContent[]; isError: boolean }> {
+    if (!this.deps.enabled()) return { content: PAUSED, isError: true };
     if (!this.deps.settings().teammate.agentsCanPing) return { content: AGENTS_OFF, isError: true };
-    if (this.run !== null || this.asking) return { content: BUSY, isError: true };
+    if (this.busy()) return { content: BUSY, isError: true };
     if (!this.visitorRate.allow(client.name, VISITOR_RATE) || !this.visitorRate.allow(ALL_VISITORS, VISITOR_RATE_ALL)) {
       return { content: TOO_MANY, isError: true };
     }
@@ -601,6 +605,12 @@ export class AskController extends EventEmitter {
     if (a.t === 'deep') return this.ask({ intent: 'allin', phys, displayId: display.id });
     this.thread = this.viewed;
     this.ask({ intent: 'generic', phys, displayId: display.id }, { text: a.text, newThread: false });
+  }
+
+  /** An ask runs, a consent card waits, or the user's own answer or History card is on screen: an agent waits. */
+  private busy(): boolean {
+    const mine = this.shown !== null && !this.shown.visitor && (this.bubbleShown || this.cardShown);
+    return this.run !== null || this.asking || mine || this.viewed !== null || this.put !== null;
   }
 
   /** The profile of the agent's preset wins its name and colour; any other client is named as it names itself. */
@@ -1082,7 +1092,7 @@ export class AskController extends EventEmitter {
     run.rest = rest;
     run.said = rest ? text.trim() : line;
     this.deps.overlay.mateSaid();
-    if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, true));
+    if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, this.alive(run)));
     else this.showLine(run, line);
   }
 

@@ -68,6 +68,7 @@ describe('an agent answering an ask', () => {
     });
     const deps: AskDeps = {
       settings: () => settings,
+      enabled: () => true,
       lang: () => 'en',
       secrets: { available: () => true, key: () => null, instructions: () => '' },
       context: {

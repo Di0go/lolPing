@@ -117,6 +117,7 @@ function harness(opts: Options = {}) {
 
   const deps: AskDeps = {
     settings: () => settings,
+    enabled: () => true,
     lang: () => 'en',
     secrets: { available: () => true, key: () => null, instructions: () => '' },
     context: {

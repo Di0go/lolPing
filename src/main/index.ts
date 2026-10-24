@@ -835,6 +835,8 @@ function start(): void {
       usage: (u) => usage.add(u),
       actions,
       cursor: cursorPhys,
+      // Not while lolPing is paused, nor once the teammate is going down (its bridge stays up a moment longer).
+      enabled: () => enabled && mate !== null,
     });
     // The pipe may be taken, possibly by another user's process: then nothing of an agent's goes through it.
     const mcp = (async (): Promise<BridgeServer> => {
