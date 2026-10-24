@@ -42,6 +42,19 @@ export interface AgentPreset {
   openArgs(session: string): string[];
 }
 
+/** Text in an MCP client's own name (what it sends in `initialize`) and the preset it marks. */
+const CLIENT_MARKS: ReadonlyArray<readonly [string, AgentPresetId]> = [
+  ['claude-code', 'claude'], ['dsh-mcp-client', 'dsh'], ['codex', 'codex'], ['gemini', 'gemini'], ['qwen', 'qwen'],
+  ['copilot', 'copilot'], ['cursor', 'cursor'], ['opencode', 'opencode'], ['kimi', 'kimi'], ['auggie', 'auggie'],
+  ['goose', 'goose'], ['droid', 'droid'], ['factory', 'droid'], ['qoder', 'qoder'], ['kiro', 'kiro'],
+];
+
+/** The preset an MCP client belongs to, or null for an app that isn't one of them. */
+export function presetForClient(name: string): AgentPresetId | null {
+  const n = name.toLowerCase();
+  return CLIENT_MARKS.find(([mark]) => n.includes(mark))?.[1] ?? null;
+}
+
 /** The tools lolPing offers an agent without asking: the display tools. */
 export const DISPLAY_TOOLS = ['say', 'ping', 'emote', 'answer'] as const;
 

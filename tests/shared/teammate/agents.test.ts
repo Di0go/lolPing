@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AGENT_PRESET_IDS, AGENT_PRESETS, agentPrompt, DISPLAY_TOOLS, type AgentPresetId, type AgentRunSpec,
+  AGENT_PRESET_IDS, AGENT_PRESETS, agentPrompt, DISPLAY_TOOLS, presetForClient, type AgentPresetId, type AgentRunSpec,
 } from '../../../src/shared/teammate/agents';
 
 const ASK_DIR = 'C:\\a b&c';
@@ -315,5 +315,22 @@ describe('agents', () => {
       const names = [...Object.keys(AGENT_PRESETS[id].env(s)), ...Object.keys(s.bridge.env)];
       for (const name of names) expect(name, id).not.toMatch(/KEY|PASSWORD|SECRET|TOKEN/i);
     }
+  });
+});
+
+describe('presetForClient', () => {
+  it('names the preset each MCP client belongs to', () => {
+    const clients: Array<[string, AgentPresetId]> = [
+      ['claude-code', 'claude'], ['dsh-mcp-client', 'dsh'], ['codex-mcp-client', 'codex'], ['codex', 'codex'],
+      ['gemini-cli-mcp-client', 'gemini'], ['qwen-code', 'qwen'], ['GitHub Copilot CLI', 'copilot'],
+      ['cursor-vscode', 'cursor'], ['opencode', 'opencode'], ['kimi-code', 'kimi'], ['auggie', 'auggie'],
+      ['goose', 'goose'], ['droid', 'droid'], ['factory-cli', 'droid'], ['qodercli', 'qoder'], ['kiro-cli', 'kiro'],
+    ];
+    for (const [client, preset] of clients) expect(presetForClient(client), client).toBe(preset);
+  });
+
+  it('knows no preset for an app it has not heard of', () => {
+    expect(presetForClient('my-notes-app')).toBeNull();
+    expect(presetForClient('')).toBeNull();
   });
 });

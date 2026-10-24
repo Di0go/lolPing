@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
 import type { Platform } from '../../shared/platform';
+import { sanitizeName } from '../../shared/roomProtocol';
 import type { Settings } from '../../shared/settings';
-import { AGENT_PRESETS, agentPrompt, type AgentRunSpec } from '../../shared/teammate/agents';
+import { AGENT_PRESETS, agentPrompt, presetForClient, type AgentRunSpec } from '../../shared/teammate/agents';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
 import type { BridgeContent } from '../../shared/teammate/bridgeProtocol';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
@@ -21,16 +22,17 @@ import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
 import { route, type RouteReason } from '../../shared/teammate/router';
 import {
-  isBuiltin, type AgentProfile, type BuiltinProfile, type Profile, type TeammateSettings,
+  TAG_NAME_MAX, isBuiltin, type AgentProfile, type BuiltinProfile, type Profile, type TeammateSettings,
 } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import {
-  CONSENT_TOOL, applyLimits, parseConsent, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall,
-  type ToolDef,
+  CONSENT_TOOL, applyLimits, parseConsent, parseToolCall, toolDefs, visitorToolDefs, type ActionCall, type Target,
+  type ToolCall, type ToolDef,
 } from '../../shared/teammate/tools';
 import type { BubbleState, CardState, MateAction, MateView, PutState } from '../../shared/teammateIpc';
 import type { BridgeHandler } from '../mcp/bridgeServer';
 import type { OverlayManager } from '../overlayManager';
+import { RateLimiter } from '../rateLimiter';
 import type { ActionRunner, RunInfo } from './actions';
 import { AgentStartError, type AgentRun, type AgentRunner } from './agents/runner';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
@@ -121,7 +123,15 @@ const ANSWER_NUDGE = 'Every ask ends with `say` (the one-line answer) and `answe
 /** Results that tell an agent its call did nothing. */
 const REFUSED = new Set<Part[]>([NOT_AVAILABLE, INVALID, OVER_LIMIT]);
 const ASK_OVER: BridgeContent[] = [{ text: 'That ask is over.' }];
-const UNPROMPTED: BridgeContent[] = [{ text: 'lolPing isn\'t taking unprompted calls yet.' }];
+const AGENTS_OFF: BridgeContent[] = [{
+  text: 'The user hasn\'t let agents ping them. They can turn on Let agents ping me in lolPing\'s Teammate settings.',
+}];
+const BUSY: BridgeContent[] = [{ text: 'lolPing is busy; try again in a moment.' }];
+const TOO_MANY: BridgeContent[] = [{ text: 'Too many pings.' }];
+/** Unprompted calls a second from one client, and from all of them (under this key). */
+const VISITOR_RATE = 5;
+const VISITOR_RATE_ALL = 10;
+const ALL_VISITORS = '*';
 /** An agent's error goes on the line cut to this many characters. */
 const AGENT_ERROR_MAX = 200;
 const ASK_SECRET_BYTES = 16;
@@ -147,6 +157,8 @@ interface Run {
   route: string;
   /** An agent's ask: the token its bridge calls carry and the tools it is offered. */
   agent: { token: string; tools: ToolDef[] } | null;
+  /** An agent's unprompted call, which isn't an ask: where its marks go (physical px). */
+  visitor: { point: Point } | null;
   /** The folder the agent ran in, as the card footer names it. */
   folder: string;
   /** The agent session this answer came from, kept with the thread so the next ask in it resumes it. */
@@ -258,15 +270,17 @@ const bridgeContent = (p: Part): BridgeContent => ('text' in p
   : { image: { mime: p.image.mime, data: p.image.data.toString('base64') } });
 
 /**
- * The ask side of lolPing's bridge: an agent started for an ask lists and calls that ask's tools. A connection's hello
- * isn't a receipt, since dsh opens a probe connection first.
+ * lolPing's end of the bridge: an agent started for an ask lists and calls that ask's tools, and any other client is
+ * an agent pinging the user unprompted. A connection's hello isn't a receipt, since dsh opens a probe connection first.
  */
-export function bridgeHandler(c: Pick<AskController, 'agentTools' | 'agentCall'>): BridgeHandler {
+export function bridgeHandler(
+  c: Pick<AskController, 'agentTools' | 'agentCall' | 'visitorTools' | 'visitorCall'>,
+): BridgeHandler {
   return {
     hello: () => undefined,
-    list: (s) => (s.ask === null ? [] : c.agentTools(s.ask) ?? []),
+    list: (s) => (s.ask === null ? c.visitorTools() : c.agentTools(s.ask) ?? []),
     call: async (s, name, args) => (s.ask === null
-      ? { content: UNPROMPTED, isError: true }
+      ? c.visitorCall(s.client, name, args)
       : c.agentCall(s.ask, name, args)),
   };
 }
@@ -318,9 +332,11 @@ export class AskController extends EventEmitter {
   private hiddenForPut: Run | null = null;
   /** A consent card or form preview waits for the user: the bubble under it keeps its line and button till it goes. */
   private asking = false;
+  private readonly visitorRate: RateLimiter;
 
   constructor(private readonly deps: AskDeps) {
     super();
+    this.visitorRate = new RateLimiter(deps.now);
     this.files = deps.files ?? {
       read: (p) => readFile(p),
       write: (p, text) => writeFile(p, text, 'utf8'),
@@ -339,7 +355,8 @@ export class AskController extends EventEmitter {
   }
 
   ask(spot: Spot, words?: { text: string; newThread: boolean }): void {
-    const prev = this.shown;
+    // An agent's unprompted marks aren't the teammate's: asking on one doesn't continue a thread.
+    const prev = this.shown?.visitor ? null : this.shown;
     const settings = this.deps.settings();
     const t = settings.teammate;
     const lang = this.deps.lang();
@@ -369,7 +386,7 @@ export class AskController extends EventEmitter {
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
-      profile: null, route: '', agent: null, folder: '', session: null,
+      profile: null, route: '', agent: null, visitor: null, folder: '', session: null,
       shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
       rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
@@ -541,6 +558,41 @@ export class AskController extends EventEmitter {
     return { content: [{ text: JSON.stringify(reply) }], isError: false };
   }
 
+  /** What an agent may call without an ask, when the user lets agents ping them. */
+  visitorTools(): ToolDef[] {
+    return visitorToolDefs(this.deps.settings().teammate.emotes);
+  }
+
+  /**
+   * An unprompted call from an agent the user runs elsewhere (no ask token): drawn at the cursor like the teammate's
+   * marks, with the agent's name tag. Nothing of it goes into history or a thread.
+   */
+  async visitorCall(
+    client: { name: string }, name: string, args: unknown,
+  ): Promise<{ content: BridgeContent[]; isError: boolean }> {
+    if (!this.deps.settings().teammate.agentsCanPing) return { content: AGENTS_OFF, isError: true };
+    if (this.run !== null || this.asking) return { content: BUSY, isError: true };
+    if (!this.visitorRate.allow(client.name, VISITOR_RATE) || !this.visitorRate.allow(ALL_VISITORS, VISITOR_RATE_ALL)) {
+      return { content: TOO_MANY, isError: true };
+    }
+    const cursor = this.deps.cursor?.();
+    const display = cursor ? this.deps.overlay.displayAt(cursor) : null;
+    if (!cursor || !display) return { content: NOT_AVAILABLE.map(bridgeContent), isError: true };
+    const run = this.visitorRun(client.name, cursor, display);
+    // lolPing picks the place; a position the agent sends anyway is ignored (the parser wants one).
+    const given = typeof args === 'object' && args !== null && !Array.isArray(args) ? { ...args, x: 0, y: 0 } : args;
+    const raw: RawCall = { id: 'visitor', name, args: JSON.stringify(given ?? {}) };
+    const step = await this.play(run, [raw], new Set(this.visitorTools().map((d) => d.name)), false);
+    const content = step.results[0]?.content ?? DONE;
+    const refused = REFUSED.has(content);
+    if (!refused) {
+      this.shown = run;
+      this.answeredAt = this.deps.now();
+      this.scheduleFade();
+    }
+    return { content: content.map(bridgeContent), isError: refused };
+  }
+
   /** A thread opened from History has no spot of its own: its reply asks at the cursor. */
   private askFromViewed(a: Extract<MateAction, { t: 'reply' | 'deep' }>): void {
     const phys = this.deps.cursor?.();
@@ -549,6 +601,35 @@ export class AskController extends EventEmitter {
     if (a.t === 'deep') return this.ask({ intent: 'allin', phys, displayId: display.id });
     this.thread = this.viewed;
     this.ask({ intent: 'generic', phys, displayId: display.id }, { text: a.text, newThread: false });
+  }
+
+  /** The profile of the agent's preset wins its name and colour; any other client is named as it names itself. */
+  private visitorTag(client: string): PingTag {
+    const t = this.deps.settings().teammate;
+    const preset = presetForClient(client);
+    const profile = preset ? t.profiles.find((p) => p.kind === 'agent' && p.preset === preset) : undefined;
+    if (profile) {
+      return { name: profile.name.slice(0, TAG_NAME_MAX), color: profile.tagColor, rgb: profile.tagColorCustom };
+    }
+    const name = preset ? AGENT_PRESETS[preset].name : client;
+    return { name: sanitizeName(name.slice(0, 256), 'Agent', TAG_NAME_MAX), color: t.tagColor, rgb: t.tagColorCustom };
+  }
+
+  /** A run to draw one unprompted call with. It never counts as running: its bubble goes with its time. */
+  private visitorRun(client: string, cursor: Point, display: { id: number; rect: Rect }): Run {
+    const t = this.deps.settings().teammate;
+    const lang = this.deps.lang();
+    const point = receiptPoint(cursor, display.rect);
+    return {
+      machine: new AskMachine(this.deps.now, { receiveMs: RECEIVE_MS, totalMs: TOTAL_MS }),
+      abort: new AbortController(), deadlines: [], ended: true,
+      spot: { intent: 'generic', phys: cursor, displayId: display.id }, receipt: point, display,
+      intent: intentFor(t, 'generic', lang), words: null, thread: null, autoCard: true, lang,
+      tag: this.visitorTag(client), emotes: t.emotes, profile: null, route: '', agent: null, visitor: { point },
+      folder: '', session: null, shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
+      rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [], dir: '', screenMarks: [],
+      doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null, info: null,
+    };
   }
 
   private alive(run: Run): boolean {
@@ -947,6 +1028,7 @@ export class AskController extends EventEmitter {
   }
 
   private target(run: Run, at: Target): Point | null {
+    if (run.visitor) return run.visitor.point;
     // The model numbers the user's spots from 1; a pixel point snaps onto the control or text line under it.
     return run.shot ? resolveTarget(at, { spots: [run.spot.phys], marks: run.screenMarks, shot: run.shot }) : null;
   }
@@ -1147,7 +1229,7 @@ export class AskController extends EventEmitter {
       view: 'bubble', lang: run.lang, tag: run.tag, line, thread: run.thread?.title ?? null, thinking: false,
       // An answer's line always offers More, if only for the card's reply box; a failure's line doesn't.
       more: run.rest !== '' || run.markdown.length > 0 || (line !== '' && run.machine.failure === null),
-      put: this.put,
+      put: run.visitor ? null : this.put,
     };
   }
 
@@ -1164,21 +1246,23 @@ export class AskController extends EventEmitter {
   private cardState(run: Run, streaming: boolean): CardState {
     const t = strings(run.lang).teammate;
     const entries = run.thread ? this.threadEntries(run.thread, run.lang, run.tag.name) : [];
-    entries.push(...entryPair(run.intent.label, run.words, run.said, run.markdown.join('\n\n'), run.tag.name));
+    const pair = entryPair(run.intent.label, run.words, run.said, run.markdown.join('\n\n'), run.tag.name);
+    // An agent's card has no ask above its answer: nobody asked.
+    entries.push(...(run.visitor ? pair.slice(1) : pair));
     return {
       view: 'card', lang: run.lang, tag: run.tag, entries, streaming,
-      title: run.thread?.title ?? (run.line || run.intent.label).slice(0, TITLE_MAX),
+      title: run.thread?.title ?? (run.line || (run.visitor ? run.tag.name : run.intent.label)).slice(0, TITLE_MAX),
       footer: {
         profile: run.profile?.name ?? '', model: run.profile?.kind === 'builtin' ? run.profile.model : '',
         route: run.route, tokens: run.tokens,
-        used: [
+        used: run.visitor ? [] : [
           t.ask.usedScreen,
           ...run.used.map((u) => usedLabel(u, run.lang)),
           ...(run.skipped ? [t.ask.contextSkipped] : []),
           ...(run.folder ? [run.folder] : []),
         ],
       },
-      put: this.put,
+      put: run.visitor ? null : this.put,
     };
   }
 

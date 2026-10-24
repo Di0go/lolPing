@@ -1,5 +1,6 @@
 import type { PingId } from '../pings';
 import { EMOTE_CATALOG } from '../emoteCatalog';
+import { DISPLAY_TOOLS } from './agents';
 import { TABLE_MAX, eventIcs, normalizeTable, type EventFields } from './grab';
 import type { IntentKind } from './intents';
 
@@ -226,6 +227,19 @@ export function toolDefs(opts: {
     parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
   });
   return defs;
+}
+
+/** What an agent that pings the user unprompted may call: lolPing places its marks at the cursor, so no position. */
+export function visitorToolDefs(emotes: boolean): ToolDef[] {
+  const shown = new Set<string>(DISPLAY_TOOLS);
+  return toolDefs({ emotes, spots: 0, file: false, look: false, kind: 'answer', form: false, selection: false })
+    .filter((d) => shown.has(d.name))
+    .map((d) => {
+      const { properties, ...rest } = d.parameters;
+      if (!isRecord(properties)) return d;
+      const { x: _x, y: _y, spot: _spot, ...kept } = properties;
+      return { ...d, parameters: { ...rest, properties: kept } };
+    });
 }
 
 /** Claude Code's `--permission-prompt-tool`: it asks here before it edits or runs anything. */

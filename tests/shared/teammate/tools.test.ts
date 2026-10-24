@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CONSENT_TOOL, applyLimits, parseConsent, parseToolCall, toolDefs, type ToolCall,
+  CONSENT_TOOL, applyLimits, parseConsent, parseToolCall, toolDefs, visitorToolDefs, type ToolCall,
 } from '../../../src/shared/teammate/tools';
 import { EMOTE_CATALOG } from '../../../src/shared/emoteCatalog';
 
@@ -309,5 +309,32 @@ describe('consent tool', () => {
     expect(parseConsent(null)).toBeNull();
     expect(parseConsent('Edit')).toBeNull();
     expect(parseConsent({ tool_name: 'x'.repeat(64), input: {} })?.tool).toBe('x'.repeat(64));
+  });
+});
+
+describe('visitorToolDefs', () => {
+  const props = (name: string, emotes = true): string[] => {
+    const def = visitorToolDefs(emotes).find((d) => d.name === name);
+    return Object.keys((def?.parameters.properties ?? {}) as Record<string, unknown>);
+  };
+
+  it('offers only say, ping, emote and answer', () => {
+    expect(visitorToolDefs(true).map((d) => d.name)).toEqual(['say', 'ping', 'emote', 'answer']);
+  });
+
+  it('leaves out the emote when emotes are off', () => {
+    expect(visitorToolDefs(false).map((d) => d.name)).toEqual(['say', 'ping', 'answer']);
+  });
+
+  it('has no position on a ping or an emote, since lolPing places them at the cursor', () => {
+    expect(props('ping')).toEqual(['type', 'label', 'order']);
+    expect(props('emote')).toEqual(['slug']);
+  });
+
+  it('describes the tools as the asks do', () => {
+    const asks = toolDefs({ ...OFF, spots: 0, emotes: true });
+    for (const def of visitorToolDefs(true)) {
+      expect(def.description).toBe(asks.find((d) => d.name === def.name)?.description);
+    }
   });
 });
