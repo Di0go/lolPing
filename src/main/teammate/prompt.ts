@@ -311,20 +311,43 @@ function contextSections(ctx: AskContext): string[] {
   return out.length > 0 ? [DATA_LINE, ...out] : [];
 }
 
-export function firstTurn(ctx: AskContext): Turn {
-  const text = [
+/** The ask itself, with `screen` saying what the images are. */
+function askText(ctx: AskContext, screen: (string | null)[]): string {
+  return [
     `Ask: ${TASKS[ctx.intent.def.id].name}`,
     ctx.words ? `The user's words: ${ctx.words}` : null,
     `App: ${ctx.app}`,
     `Window title: ${ctx.title}`,
-    ...screenLines(ctx),
+    ...screen,
     ...contextSections(ctx).flatMap((block) => ['', block]),
   ].filter((l): l is string => l !== null).join('\n');
-  const parts: Part[] = [{ text }];
+}
+
+export function firstTurn(ctx: AskContext): Turn {
+  const parts: Part[] = [{ text: askText(ctx, screenLines(ctx)) }];
   parts.push({ image: { mime: 'image/jpeg', data: ctx.overviewJpeg } });
   for (const z of ctx.zoomJpegs) parts.push({ image: { mime: 'image/jpeg', data: z } });
   if (ctx.thread && ctx.thread.entries.length > 0) {
     parts.push({ text: 'Earlier in this thread, newest first:' }, ...threadParts(ctx.thread));
   }
   return { role: 'user', parts };
+}
+
+/**
+ * The ask for an agent as Markdown: the system rules, then the context; images named by file (overview.jpg,
+ * zoom-1.jpg), which sit next to it in the ask's folder.
+ */
+export function agentAsk(ctx: AskContext, images: { overview: string; zooms: string[] }): string {
+  const { overview } = ctx.shot;
+  const screen = [
+    `The overview image is ${images.overview}, ${overview.w} x ${overview.h} pixels.`,
+    ...ctx.spots.map((p, i) => `${spotNumber(i)} is at x=${p.x}, y=${p.y} in the overview.`),
+    ...images.zooms.map((z, i) => `${z} is a sharper crop of the part of the window around ${spotNumber(i)}.`),
+  ];
+  // A resumed session remembers the thread; any other gets the earlier answers, as text.
+  const earlier = ctx.thread && ctx.thread.entries.length > 0
+    ? ['', '## Earlier in this thread, newest first', '',
+      ...threadParts(ctx.thread).flatMap((p) => ('text' in p ? [p.text] : []))]
+    : [];
+  return ['# lolPing ask', '', systemPrompt(ctx), '', '## The ask', '', askText(ctx, screen), ...earlier, ''].join('\n');
 }

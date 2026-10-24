@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isPingId, type PingId } from '../../shared/pings';
-import { prune, type ThreadRecord } from '../../shared/teammate/history';
+import { isSessionId, prune, type ThreadRecord } from '../../shared/teammate/history';
 import { renameWithRetry } from '../settingsStore';
 import type { Crypto } from './secrets';
 
 type Entry = ThreadRecord['entries'][number];
+type AgentSession = NonNullable<ThreadRecord['agent']>;
 export type PruneRule = { keepDays: number | null; maxThreads: number };
 export interface ThreadSummary {
   id: string;
@@ -42,6 +43,15 @@ function parseEntry(raw: unknown): Entry | null {
   return Array.isArray(x.done) ? { ...e, done: x.done as string[] } : e;
 }
 
+/** Threads written before agents have none; a malformed one is dropped, as the session can't be resumed. */
+function parseAgent(raw: unknown): AgentSession | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const a = raw as Record<string, unknown>;
+  if (!isString(a.profileId) || a.profileId === '' || a.profileId.length > 64) return null;
+  if (!isSessionId(a.session) || !isString(a.cwd) || a.cwd === '' || a.cwd.length > 1024) return null;
+  return { profileId: a.profileId, session: a.session, cwd: a.cwd };
+}
+
 /** Validates decrypted text from disk; anything malformed is rejected rather than trusted. */
 function parseThread(text: string): ThreadRecord | null {
   try {
@@ -57,6 +67,7 @@ function parseThread(text: string): ThreadRecord | null {
       if (!entry) return null;
       entries.push(entry);
     }
+    const agent = parseAgent(r.agent);
     return {
       id: r.id,
       title: r.title,
@@ -65,6 +76,7 @@ function parseThread(text: string): ThreadRecord | null {
       app: r.app,
       windowTitle: r.windowTitle,
       profile: r.profile,
+      ...(agent ? { agent } : {}),
       entries,
     };
   } catch {
@@ -131,10 +143,11 @@ export class HistoryStore {
     });
   }
 
+  /** `meta.agent`, the agent session of this answer, replaces the thread's. */
   append(
     threadId: string | null,
     entry: Entry,
-    meta: { title: string; app: string; windowTitle: string; profile: string },
+    meta: { title: string; app: string; windowTitle: string; profile: string; agent?: AgentSession },
   ): Promise<ThreadRecord> {
     // Read, build and write in one queued job so overlapping appends to a thread can't drop each other's entry.
     return this.enqueue(async () => {
@@ -142,7 +155,10 @@ export class HistoryStore {
       const existing = writable && threadId !== null ? await this.read(threadId) : null;
       const at = this.now();
       const record: ThreadRecord = existing
-        ? { ...existing, lastActivity: at, entries: [...existing.entries, entry] }
+        ? {
+            ...existing, lastActivity: at, entries: [...existing.entries, entry],
+            ...(meta.agent ? { agent: meta.agent } : {}),
+          }
         : { id: randomUUID(), ...meta, started: at, lastActivity: at, entries: [entry] };
       if (!writable) return record;
       await this.write(record);

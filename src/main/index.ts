@@ -1,6 +1,7 @@
 import {
   app, clipboard, ClipboardItem, dialog, Menu, nativeImage, powerMonitor, safeStorage, screen, shell, systemPreferences,
 } from 'electron';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
@@ -47,8 +48,12 @@ import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
+import { bridgeCommand } from './mcp/bridgeCommand';
+import { BridgeServer, bridgePath } from './mcp/bridgeServer';
 import { ActionRunner } from './teammate/actions';
-import { AskController } from './teammate/askController';
+import { userPath, withPath } from './teammate/agents/command';
+import { AgentRunner, killProcessTree } from './teammate/agents/runner';
+import { AskController, bridgeHandler } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
 import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
 import { HistoryStore } from './teammate/historyStore';
@@ -133,6 +138,16 @@ interface Mate {
   windows: MateWindows;
   actions: ActionRunner;
   controller: AskController;
+  agents: AgentRunner;
+  /** lolPing's end of the MCP bridge once it listens; null when it couldn't, and then agent asks ask for a restart. */
+  mcp: Promise<BridgeServer | null>;
+}
+
+/** Runs `cmd` and gives its stdout, for the login shell's PATH on macOS. */
+function runForOutput(cmd: string, args: string[], ms: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: ms, encoding: 'utf8' }, (err, out) => (err ? reject(err) : resolve(out)));
+  });
 }
 
 /** macOS: the app, Edit and Window menus, so Cmd+Q, Cmd+W and the clipboard shortcuts work in the settings window. */
@@ -777,7 +792,29 @@ function start(): void {
         return () => clearTimeout(timer);
       },
     });
+    const agents = new AgentRunner({
+      spawn, platform: PLATFORM, killTree: killProcessTree(PLATFORM),
+      writeFile: (file, text) => writeFile(file, text, 'utf8'),
+    });
+    const userData = app.getPath('userData');
+    /** The bridge's pipe once lolPing listens on it; agents run only then. */
+    let pipe: string | null = null;
     const controller = new AskController({
+      agents: {
+        runner: agents,
+        bridge: {
+          command: (ask) => {
+            const at = pipe;
+            // index.js and bridge.js are built side by side into out/main.
+            return at === null ? null : bridgeCommand({
+              execPath: process.execPath, bridgeJs: join(__dirname, 'bridge.js'), pipe: at, dataDir: userData, ask,
+            });
+          },
+        },
+        env: async () => withPath(process.env, await userPath(PLATFORM, runForOutput), PLATFORM),
+        home: () => app.getPath('home'),
+        platform: PLATFORM,
+      },
       settings: () => settings,
       lang: mateLang,
       secrets,
@@ -799,10 +836,24 @@ function start(): void {
       actions,
       cursor: cursorPhys,
     });
+    // The pipe may be taken, possibly by another user's process: then nothing of an agent's goes through it.
+    const mcp = (async (): Promise<BridgeServer> => {
+      const path = bridgePath(PLATFORM, userData, userInfo().username);
+      const server = new BridgeServer({
+        path, tokenFile: join(userData, 'mcp-token'), handler: bridgeHandler(controller), now: Date.now,
+        random: randomBytes, writeToken: (file, token) => writeFile(file, token, { mode: 0o600 }),
+      });
+      await server.start();
+      pipe = path;
+      return server;
+    })().catch((err: unknown) => {
+      console.warn('[teammate] could not open the agent connection:', err);
+      return null;
+    });
     controller.on('state', pushMateTray);
     windows.on('action', onMateAction);
     windows.on('dragged', (view: MateView) => controller.onDragged(view));
-    return { secrets, history, usage, context, windows, actions, controller };
+    return { secrets, history, usage, context, windows, actions, controller, agents, mcp };
   };
   /** Takes the teammate down; settles once its context helper has exited and its usage is on disk. */
   const stopMate = (): Promise<unknown> => {
@@ -811,6 +862,7 @@ function start(): void {
     closeWords();
     mate = null;
     m.controller.cancel('user');
+    m.agents.killAll(); // also on quitting: no agent, nor anything it started, outlives lolPing
     m.controller.removeAllListeners();
     m.actions.removeAllListeners();
     m.windows.removeAllListeners();
@@ -819,7 +871,9 @@ function start(): void {
     // list() waits for the history queue, so no write of the old store is still running when a new one starts.
     // Once context-helper is gone nothing can still write a capture, so the folder is emptied after it.
     const captures = m.context.stop().finally(() => rm(mateTempDir(), { recursive: true, force: true }));
-    return Promise.allSettled([captures, m.usage.flush(), m.history.list()]);
+    // A new teammate listens on the same pipe, so it starts only once this one has let go of it.
+    const bridged = m.mcp.then((server) => server?.stop());
+    return Promise.allSettled([captures, m.usage.flush(), m.history.list(), bridged]);
   };
   /** A teammate going down: a new one starts only after it, so two stores never write the same files. */
   let mateStopping: Promise<unknown> | null = null;

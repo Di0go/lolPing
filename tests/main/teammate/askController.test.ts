@@ -72,6 +72,8 @@ interface HarnessOptions {
   /** Wires an action runner that records the calls it is given and says it did `done`. */
   recordActions?: boolean;
   done?: string[];
+  /** The helper never says which window is in front. */
+  foregroundHangs?: boolean;
 }
 
 interface Screen {
@@ -140,7 +142,9 @@ function harness(opts: HarnessOptions = {}) {
       instructions: () => '',
     },
     context: {
-      foreground: async () => ({ app: 'notepad.exe', title: 'notes.txt', window: '263544' }),
+      foreground: async () => (opts.foregroundHangs
+        ? new Promise<never>(() => undefined)
+        : { app: 'notepad.exe', title: 'notes.txt', window: '263544' }),
       capture: async (req, signal) => {
         captures += 1;
         log.push(['capture', req.spots]);
@@ -265,6 +269,7 @@ function harness(opts: HarnessOptions = {}) {
     ...(opts.recordActions ? { actions: runner } : {}),
     files: {
       read: async (p) => Buffer.from(p),
+      write: async (p) => void disk.add(p),
       makeDir: async (d) => void disk.add(d),
       removeDir: async (d) => {
         for (const f of [...disk]) if (f === d || f.startsWith(`${d}/`)) disk.delete(f);
@@ -484,7 +489,7 @@ describe('AskController', () => {
     }
   });
 
-  it('treats an agent profile as no profile until agents can answer', async () => {
+  it('asks for a restart when an agent profile is routed but agents can\'t run', async () => {
     const agent: AgentProfile = {
       id: 'ag', kind: 'agent', name: 'Claude', tagColor: 1, tagColorCustom: null, preset: 'claude', command: 'claude',
       customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
@@ -493,7 +498,7 @@ describe('AskController', () => {
     h.ctl.ask(spot('danger'));
     await flush();
     expect(h.adapters).toEqual([]);
-    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.noProfile]);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.agent.noBridge]);
     expect(h.ctl.running).toBe(false);
   });
 
@@ -511,6 +516,18 @@ describe('AskController', () => {
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.notReceived]);
     expect(h.ctl.running).toBe(false);
     expect(h.appends).toEqual([]);
+  });
+
+  it('times out when the helper never says which window is in front', async () => {
+    const h = harness({ foregroundHangs: true });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(h.ctl.running).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.ctl.running).toBe(false);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.timeout]);
+    expect(h.adapters).toEqual([]);
   });
 
   it('answers look with a new capture and continues', async () => {

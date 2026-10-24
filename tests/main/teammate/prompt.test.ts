@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TASKS, firstTurn, systemPrompt, type AskContext } from '../../../src/main/teammate/prompt';
+import { TASKS, agentAsk, firstTurn, systemPrompt, type AskContext } from '../../../src/main/teammate/prompt';
 import { ALL_PINGS, type PingId } from '../../../src/shared/pings';
 import { intentFor } from '../../../src/shared/teammate/intents';
 import { MATE_PINGS } from '../../../src/shared/teammate/tools';
@@ -382,5 +382,30 @@ describe('teammate prompt action briefs', () => {
     expect(s).toContain('lolPing asks the user first');
     expect(s).not.toContain('asks the user before each one');
     expect(s).toMatch(/when they are offered/);
+  });
+});
+
+describe('agentAsk', () => {
+  const images = { overview: 'overview-r1.jpg', zooms: ['zoom-r1-1.jpg'] };
+
+  it('carries the rules and the ask, and names the images by their files', () => {
+    const system = { selection: '', spotTexts: ['x = 1 / 0'], focus: null, address: '' };
+    const md = agentAsk(ctx({ words: 'why red?', system }), images);
+    expect(md.startsWith('# lolPing ask\n')).toBe(true);
+    expect(md).toContain(systemPrompt(ctx()));
+    expect(md).toContain("The user's words: why red?");
+    expect(md).toContain('The overview image is overview-r1.jpg, 1600 x 900 pixels.');
+    expect(md).toContain('spot 1 is at x=800, y=450 in the overview.');
+    expect(md).toContain('zoom-r1-1.jpg is a sharper crop of the part of the window around spot 1.');
+    expect(md).toContain('Text at spot 1:\nx = 1 / 0');
+    expect(md.indexOf('## The ask')).toBeGreaterThan(md.indexOf('Ping vocabulary'));
+  });
+
+  it('gives the earlier answers of the thread as text only', () => {
+    const md = agentAsk(ctx({ thread: thread([entry(1, 'It was a typo.')]) }), images);
+    expect(md).toContain('## Earlier in this thread, newest first');
+    expect(md).toContain('you said "It was a typo."');
+    expect(md).not.toContain(jpeg(9).toString('base64'));
+    expect(agentAsk(ctx(), images)).not.toContain('Earlier in this thread');
   });
 });

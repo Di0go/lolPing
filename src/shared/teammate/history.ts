@@ -9,6 +9,8 @@ export interface ThreadRecord {
   app: string;
   windowTitle: string;
   profile: string;
+  /** The agent session the thread's answers came from, and the folder it ran in: dsh resumes only there. */
+  agent?: { profileId: string; session: string; cwd: string };
   entries: {
     at: number;
     intent: PingId;
@@ -23,6 +25,9 @@ export interface ThreadRecord {
 }
 
 const DAY_MS = 86_400_000;
+
+/** A session id an agent printed, safe to pass back to it on a command line. */
+export const isSessionId = (v: unknown): v is string => typeof v === 'string' && /^[\w.:-]{1,200}$/.test(v);
 
 /** Ids to delete: threads older than keepDays (null keeps any age), then the oldest beyond maxThreads. */
 export function prune(

@@ -117,6 +117,18 @@ interface MateAskText {
   contextSkipped: string;
   /** Why the card's profile was chosen: an app rule (named by its app), the deep profile, Do it, or the default. */
   route: { rule: (app: string) => string; deep: string; doIt: string; default: string };
+  /** The folder an agent ran in, by name: the one the editor title named, the list's first, or the home folder. */
+  folder: (name: string) => string;
+  folderFirst: (name: string) => string;
+  folderHome: string;
+  /** An agent's failure line: its command not found or not started, no bridge, or the agent's own error. */
+  agent: {
+    notFound: (command: string) => string;
+    noStart: (command: string) => string;
+    noBridge: string;
+    error: (name: string, line: string) => string;
+    stopped: (name: string) => string;
+  };
 }
 
 const enMateAsk: MateAskText = {
@@ -130,6 +142,8 @@ const enMateAsk: MateAskText = {
     images: 'This model can’t see images. Choose a model with vision.',
     tools: 'This model can’t use tools. Choose another model.',
     capture: 'I couldn’t capture the screen.',
+    agentStart: 'Couldn’t start the agent.',
+    agent: 'The agent stopped without answering.',
     other: 'Something went wrong with that answer.',
   },
   usedScreen: 'screen',
@@ -149,6 +163,16 @@ const enMateAsk: MateAskText = {
     deep: 'Deep profile',
     doIt: 'Do it goes to the first agent',
     default: 'Default',
+  },
+  folder: (name) => `Folder: ${name}`,
+  folderFirst: (name) => `Folder: ${name} (first in the list)`,
+  folderHome: 'Folder: home',
+  agent: {
+    notFound: (command) => `Couldn’t start ${command}: not found`,
+    noStart: (command) => `Couldn’t start ${command}`,
+    noBridge: 'lolPing couldn’t open its agent connection. Restart lolPing.',
+    error: (name, line) => `${name}: ${line}`,
+    stopped: (name) => `${name} stopped without answering.`,
   },
 };
 
@@ -1028,6 +1052,8 @@ const zh: Strings = {
         images: '这个模型看不了图片。请选择支持视觉的模型。',
         tools: '这个模型不能使用工具。请换一个模型。',
         capture: '没能截取屏幕。',
+        agentStart: '无法启动代理。',
+        agent: '代理没有回答就停止了。',
         other: '这次回答出了问题。',
       },
       usedScreen: '屏幕',
@@ -1048,6 +1074,16 @@ const zh: Strings = {
         deep: '“全局”配置',
         doIt: '“帮我做”交给第一个代理',
         default: '默认配置',
+      },
+      folder: (name) => `文件夹：${name}`,
+      folderFirst: (name) => `文件夹：${name}（列表第一个）`,
+      folderHome: '文件夹：主文件夹',
+      agent: {
+        notFound: (command) => `无法启动 ${command}：找不到`,
+        noStart: (command) => `无法启动 ${command}`,
+        noBridge: 'lolPing 无法打开代理连接，请重启 lolPing。',
+        error: (name, line) => `${name}: ${line}`,
+        stopped: (name) => `${name} 没有回答就停止了。`,
       },
     },
     settings: {

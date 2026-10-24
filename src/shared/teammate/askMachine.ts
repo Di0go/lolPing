@@ -2,8 +2,10 @@ import type { PingId } from '../pings';
 
 export type AskPhase = 'collecting' | 'gathering' | 'sent' | 'received' | 'answering' | 'done' | 'cancelled' | 'failed';
 
+/** `agentStart`: an agent couldn't be started; `agent`: it stopped without answering. */
 export type AskFailure =
-  | 'notReceived' | 'timeout' | 'auth' | 'rate' | 'network' | 'images' | 'tools' | 'capture' | 'noProfile' | 'other';
+  | 'notReceived' | 'timeout' | 'auth' | 'rate' | 'network' | 'images' | 'tools' | 'capture' | 'noProfile' | 'agentStart'
+  | 'agent' | 'other';
 
 export interface Spot {
   intent: PingId;

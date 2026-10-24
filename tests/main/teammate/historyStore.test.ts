@@ -205,4 +205,28 @@ describe('HistoryStore', () => {
     writeFileSync(join(d, t.id + '.thread'), crypto.encryptString(JSON.stringify(bad)));
     expect(await new HistoryStore(d, crypto, () => 1000).list()).toEqual([]);
   });
+
+  it('keeps the agent session with the thread, and a later answer\'s session replaces it', async () => {
+    const d = join(root(), 'history');
+    const store = new HistoryStore(d, fakeCrypto(), () => 1000);
+    const agent = { profileId: 'cc', session: 'sess-1', cwd: 'C:\\code\\lolPing' };
+    const t = await store.append(null, entry('one'), { ...meta, agent });
+    await store.append(t.id, entry('two'), meta);
+    expect((await new HistoryStore(d, fakeCrypto(), () => 1000).get(t.id))?.agent).toEqual(agent);
+    const next = { ...agent, session: 'sess-2', cwd: 'D:\\other' };
+    await store.append(t.id, entry('three'), { ...meta, agent: next });
+    expect((await new HistoryStore(d, fakeCrypto(), () => 1000).get(t.id))?.agent).toEqual(next);
+  });
+
+  it('drops a stored agent session that is not valid, and keeps the thread', async () => {
+    const d = join(root(), 'history');
+    const crypto = fakeCrypto();
+    const store = new HistoryStore(d, crypto, () => 1000);
+    const t = await store.append(null, entry('ok'), meta);
+    const bad = { ...t, agent: { profileId: 'cc', session: 'a b; rm -rf', cwd: 'C:\\x' } };
+    writeFileSync(join(d, t.id + '.thread'), crypto.encryptString(JSON.stringify(bad)));
+    const read = await new HistoryStore(d, crypto, () => 1000).get(t.id);
+    expect(read?.entries.map((e) => e.line)).toEqual(['ok']);
+    expect(read && 'agent' in read).toBe(false);
+  });
 });

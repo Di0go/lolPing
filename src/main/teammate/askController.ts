@@ -1,35 +1,43 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
+import type { Platform } from '../../shared/platform';
 import type { Settings } from '../../shared/settings';
+import { AGENT_PRESETS, agentPrompt, type AgentRunSpec } from '../../shared/teammate/agents';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
+import type { BridgeContent } from '../../shared/teammate/bridgeProtocol';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
 import { overviewToPhysical, physicalToOverview, receiptPoint, type Rect, type Shot } from '../../shared/teammate/coords';
 import type { FormField } from '../../shared/teammate/doRules';
+import { editorFolder } from '../../shared/teammate/editorFolder';
 import { frameAsk, type Framing } from '../../shared/teammate/framing';
-import type { ThreadRecord } from '../../shared/teammate/history';
+import { isSessionId, type ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
 import { resolveTarget, type Mark } from '../../shared/teammate/marks';
 import { needsKey } from '../../shared/teammate/providers';
 import { route, type RouteReason } from '../../shared/teammate/router';
-import { isBuiltin, type BuiltinProfile, type TeammateSettings } from '../../shared/teammate/settings';
+import {
+  isBuiltin, type AgentProfile, type BuiltinProfile, type Profile, type TeammateSettings,
+} from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import {
-  applyLimits, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall,
+  applyLimits, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall, type ToolDef,
 } from '../../shared/teammate/tools';
 import type { BubbleState, CardState, MateAction, MateView, PutState } from '../../shared/teammateIpc';
+import type { BridgeHandler } from '../mcp/bridgeServer';
 import type { OverlayManager } from '../overlayManager';
 import type { ActionRunner, RunInfo } from './actions';
+import { AgentStartError, type AgentRun, type AgentRunner } from './agents/runner';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
 import type { Doc } from './files';
 import { FILE_READ_LIMIT, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
-import { aimsExactly, canLook, firstTurn, systemPrompt, type AskContext } from './prompt';
+import { agentAsk, aimsExactly, canLook, firstTurn, systemPrompt, type AskContext } from './prompt';
 import {
   ProviderError, type Part, type ProviderAdapter, type RawCall, type StreamHandlers, type Turn,
 } from './providers/types';
@@ -63,11 +71,24 @@ export interface AskDeps {
   actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described' | 'put'> & Pick<EventEmitter, 'on'>;
   /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
   cursor?: () => Point;
-  /** Makes, reads and deletes an ask's capture folder; the file system by default. */
+  /** Makes, reads, writes and deletes an ask's capture folder; the file system by default. */
   files?: {
     read(path: string): Promise<Buffer>;
+    write(path: string, text: string): Promise<void>;
     makeDir(path: string): Promise<void>;
     removeDir(path: string): Promise<void>;
+  };
+  /** Runs agent profiles; without it an agent ask fails as when lolPing's end of the bridge couldn't open. */
+  agents?: {
+    runner: Pick<AgentRunner, 'start'>;
+    /** How the agent starts the bridge for ask token `ask`; null while lolPing's end of it isn't listening. */
+    bridge: { command(ask: string): AgentRunSpec['bridge'] | null };
+    /** lolPing's environment with the user's PATH, for the agent. */
+    env: () => Promise<NodeJS.ProcessEnv>;
+    /** Where an agent runs when its editor folder list is empty. */
+    home: () => string;
+    /** For the editor's window title, whose separator differs on macOS. */
+    platform: Platform;
   };
 }
 
@@ -93,6 +114,13 @@ const OVER_LIMIT: Part[] = [{
 }];
 const ANSWER_NUDGE = 'Every ask ends with `say` (the one-line answer) and `answer` (the full answer in Markdown). '
   + 'Call both in the same round as your pings.';
+/** Results that tell an agent its call did nothing. */
+const REFUSED = new Set<Part[]>([NOT_AVAILABLE, INVALID, OVER_LIMIT]);
+const ASK_OVER: BridgeContent[] = [{ text: 'That ask is over.' }];
+const UNPROMPTED: BridgeContent[] = [{ text: 'lolPing isn\'t taking unprompted calls yet.' }];
+/** An agent's error goes on the line cut to this many characters. */
+const AGENT_ERROR_MAX = 200;
+const ASK_SECRET_BYTES = 16;
 
 interface Run {
   machine: AskMachine;
@@ -110,9 +138,15 @@ interface Run {
   lang: Lang;
   tag: PingTag;
   emotes: boolean;
-  profile: BuiltinProfile | null;
+  profile: Profile | null;
   /** Why the profile was chosen, in words, for the card footer. */
   route: string;
+  /** An agent's ask: the token its bridge calls carry and the tools it is offered. */
+  agent: { token: string; tools: ToolDef[] } | null;
+  /** The folder the agent ran in, as the card footer names it. */
+  folder: string;
+  /** The agent session this answer came from, kept with the thread so the next ask in it resumes it. */
+  session: NonNullable<ThreadRecord['agent']> | null;
   shot: Shot | null;
   app: string;
   title: string;
@@ -184,6 +218,47 @@ function failureOf(err: unknown): AskFailure {
   return 'other';
 }
 
+/** The same `file` and intent decide the tools and the prompt's rules for them, so the two never disagree. */
+const toolsFor = (run: Run, ctx: AskContext): ToolDef[] => toolDefs({
+  emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id),
+  kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0, selection: (ctx.system?.selection ?? '') !== '',
+});
+
+/** A path's last part, whichever separator it uses: a profile's folders may be written either way. */
+const baseName = (p: string): string => p.split(/[\\/]/).filter((s) => s !== '').pop() ?? p;
+
+/** Where an agent runs, and how the card footer names it. */
+function agentFolder(
+  profile: AgentProfile, ask: { app: string; title: string }, agents: NonNullable<AskDeps['agents']>, lang: Lang,
+): { path: string; label: string } {
+  const words = strings(lang).teammate.ask;
+  if (profile.folder.kind === 'fixed') {
+    return { path: profile.folder.path, label: words.folder(baseName(profile.folder.path)) };
+  }
+  const picked = editorFolder(profile.folder.folders, ask, agents.platform);
+  if (!picked) return { path: agents.home(), label: words.folderHome };
+  const name = baseName(picked.path);
+  return { path: picked.path, label: picked.matched ? words.folder(name) : words.folderFirst(name) };
+}
+
+const bridgeContent = (p: Part): BridgeContent => ('text' in p
+  ? { text: p.text }
+  : { image: { mime: p.image.mime, data: p.image.data.toString('base64') } });
+
+/**
+ * The ask side of lolPing's bridge: an agent started for an ask lists and calls that ask's tools. A connection's hello
+ * isn't a receipt, since dsh opens a probe connection first.
+ */
+export function bridgeHandler(c: Pick<AskController, 'agentTools' | 'agentCall'>): BridgeHandler {
+  return {
+    hello: () => undefined,
+    list: (s) => (s.ask === null ? [] : c.agentTools(s.ask) ?? []),
+    call: async (s, name, args) => (s.ask === null
+      ? { content: UNPROMPTED, isError: true }
+      : c.agentCall(s.ask, name, args)),
+  };
+}
+
 /** The routing reason as the card footer words it. */
 function routeLabel(reason: RouteReason, t: TeammateSettings, lang: Lang): string {
   const words = strings(lang).teammate.ask.route;
@@ -236,6 +311,7 @@ export class AskController extends EventEmitter {
     super();
     this.files = deps.files ?? {
       read: (p) => readFile(p),
+      write: (p, text) => writeFile(p, text, 'utf8'),
       makeDir: async (p) => {
         await mkdir(p, { recursive: true });
       },
@@ -281,7 +357,8 @@ export class AskController extends EventEmitter {
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
-      profile: null, route: '', shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
+      profile: null, route: '', agent: null, folder: '', session: null,
+      shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
       rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
@@ -406,6 +483,35 @@ export class AskController extends EventEmitter {
     this.viewed = null;
   }
 
+  /**
+   * The bridge's tools/list for the agent of ask token `ask`; null when no such ask is running. The first one is the
+   * receipt (spec §16): a connection alone isn't, since dsh opens a probe first.
+   */
+  agentTools(ask: string): ToolDef[] | null {
+    const run = this.agentRun(ask);
+    if (!run?.agent) return null;
+    this.received(run);
+    return run.agent.tools;
+  }
+
+  /** One tool call from the agent of ask token `ask`, drawn as a model's would be; an image comes back as base64. */
+  async agentCall(ask: string, name: string, args: unknown): Promise<{ content: BridgeContent[]; isError: boolean }> {
+    const run = this.agentRun(ask);
+    const agent = run?.agent;
+    if (!run || !agent) return { content: ASK_OVER, isError: true };
+    // Claude Code's permission prompts: consent cards come to agents later, until then the answer is no.
+    if (name === 'consent') return { content: NOT_AVAILABLE.map(bridgeContent), isError: true };
+    this.received(run); // an agent that calls without listing has the tools all the same
+    run.machine.answering();
+    const offered = new Set(agent.tools.map((d) => d.name));
+    // One look per ask, as for a model; taken away before it runs, so two at once can't both look.
+    if (name === 'look') agent.tools = agent.tools.filter((d) => d.name !== 'look');
+    const raw: RawCall = { id: 'agent', name, args: JSON.stringify(args ?? {}) };
+    const step = await this.play(run, [raw], offered, false);
+    const content = step.results[0]?.content ?? DONE;
+    return { content: content.map(bridgeContent), isError: REFUSED.has(content) };
+  }
+
   /** A thread opened from History has no spot of its own: its reply asks at the cursor. */
   private askFromViewed(a: Extract<MateAction, { t: 'reply' | 'deep' }>): void {
     const phys = this.deps.cursor?.();
@@ -444,54 +550,23 @@ export class AskController extends EventEmitter {
     run.title = fg.title;
     run.window = fg.window;
     const routed = route(t, { intent: run.spot.intent, deep: run.intent.def.deep, app: run.app, title: run.title });
-    // An agent profile can't answer an ask yet, so it counts as no profile.
+    const routeText = routed ? routeLabel(routed.reason, t, run.lang) : '';
+    if (routed && !isBuiltin(routed.profile)) return this.askAgent(run, routed.profile, routeText);
     const profile = routed && isBuiltin(routed.profile) ? routed.profile : null;
     const stored = profile && deps.secrets.available() ? deps.secrets.key(profile.id) : null;
     const key = stored ?? (profile && !needsKey(profile) ? '' : null);
     if (!profile || key === null) return this.fail(run, 'noProfile');
     if (!run.display) return this.fail(run, 'capture');
     run.profile = profile;
-    run.route = routed ? routeLabel(routed.reason, t, run.lang) : '';
+    run.route = routeText;
     run.machine.startGathering();
 
-    // The context comes first: the boxes around the spot decide what the capture shows.
-    await this.files.makeDir(run.dir);
-    const allin = run.intent.def.id === 'allin';
-    const layers = await gather({ context: deps.context, ...deps.readers }, {
-      settings: t.context, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
-      act: run.intent.def.kind === 'act',
-    }, signal);
-    if (!this.alive(run)) return;
-    const framing = frameAsk(run.intent.def.id, layers.boxes[0] ?? [], run.display.rect, run.spot.phys);
-    const cap = await this.capture(run, [run.spot.phys], framing);
-    if (!this.alive(run)) return;
-    const shot: Shot = { area: framing.area, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
-    run.shot = shot;
-    const overviewJpeg = await this.files.read(cap.overviewPath);
-    const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
-    if (!this.alive(run)) return;
-    run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
-    run.screenMarks = layers.marks;
-    run.system = layers.system;
-    run.fields = layers.fields;
-    run.box = layers.boxes[0]?.[0] ?? null;
-    run.doc = layers.doc;
-    // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
-    run.used = aimsExactly(run.intent.def.id) ? layers.used : layers.used.filter((u) => u.kind !== 'marks');
-    run.skipped = layers.skipped;
-    const ctx: AskContext = {
-      lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
-      shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
-      instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
-      file: layers.file, fields: layers.fields,
-    };
+    const prepared = await this.prepare(run, t, run.display.rect);
+    if (!prepared) return;
+    const { ctx } = prepared;
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
-    // The same `file` and intent decide the tools and the prompt's rules for them, so the two never disagree.
-    let tools = toolDefs({
-      emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id),
-      kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0, selection: (ctx.system?.selection ?? '') !== '',
-    });
+    let tools = toolsFor(run, ctx);
     const turns: Turn[] = [firstTurn(ctx)];
     run.machine.sent();
     this.deadline(run, RECEIVE_MS, () => {
@@ -525,6 +600,125 @@ export class AskController extends EventEmitter {
       turns.push({ role: 'tool', results: step.results });
     }
     await this.finish(run);
+  }
+
+  /** Reads the context, then the capture it frames, for either kind of profile; null when the ask ended meanwhile. */
+  private async prepare(
+    run: Run, t: TeammateSettings, display: Rect,
+  ): Promise<{ ctx: AskContext; cap: Capture } | null> {
+    const { deps } = this;
+    const signal = run.abort.signal;
+    // The context comes first: the boxes around the spot decide what the capture shows.
+    await this.files.makeDir(run.dir);
+    const allin = run.intent.def.id === 'allin';
+    const layers = await gather({ context: deps.context, ...deps.readers }, {
+      settings: t.context, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
+      act: run.intent.def.kind === 'act',
+    }, signal);
+    if (!this.alive(run)) return null;
+    const framing = frameAsk(run.intent.def.id, layers.boxes[0] ?? [], display, run.spot.phys);
+    const cap = await this.capture(run, [run.spot.phys], framing);
+    if (!this.alive(run)) return null;
+    const shot: Shot = { area: framing.area, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
+    run.shot = shot;
+    const overviewJpeg = await this.files.read(cap.overviewPath);
+    const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
+    if (!this.alive(run)) return null;
+    run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
+    run.screenMarks = layers.marks;
+    run.system = layers.system;
+    run.fields = layers.fields;
+    run.box = layers.boxes[0]?.[0] ?? null;
+    run.doc = layers.doc;
+    // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
+    run.used = aimsExactly(run.intent.def.id) ? layers.used : layers.used.filter((u) => u.kind !== 'marks');
+    run.skipped = layers.skipped;
+    const ctx: AskContext = {
+      lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
+      shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
+      instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
+      file: layers.file, fields: layers.fields,
+    };
+    return { ctx, cap };
+  }
+
+  /**
+   * An agent answers the ask: it runs headless with the ask written into the ask's folder, and draws through lolPing's
+   * bridge, which calls agentTools and agentCall. Its exit ends the ask.
+   */
+  private async askAgent(run: Run, profile: AgentProfile, routeText: string): Promise<void> {
+    const { agents } = this.deps;
+    const words = strings(run.lang).teammate.ask;
+    run.profile = profile;
+    run.route = routeText;
+    // The profile's own time limit replaces the built-in client's.
+    for (const d of run.deadlines) clearTimeout(d);
+    run.deadlines = [];
+    this.deadline(run, profile.timeoutS * 1000, () => this.fail(run, 'timeout'));
+    const token = `${run.machine.id}.${randomBytes(ASK_SECRET_BYTES).toString('hex')}`;
+    const bridge = agents?.bridge.command(token) ?? null;
+    if (!agents || !bridge) return this.fail(run, 'agentStart', words.agent.noBridge);
+    if (!run.display) return this.fail(run, 'capture');
+    run.machine.startGathering();
+
+    const prepared = await this.prepare(run, this.deps.settings().teammate, run.display.rect);
+    if (!prepared) return;
+    const { ctx, cap } = prepared;
+    // dsh resumes a session only in the folder it was recorded in.
+    const resume = run.thread?.agent?.profileId === profile.id ? run.thread.agent : null;
+    const folder = agentFolder(profile, { app: run.app, title: run.title }, agents, run.lang);
+    const cwd = resume?.cwd ?? folder.path;
+    run.folder = resume ? words.folder(baseName(resume.cwd)) : folder.label;
+    const images = { overview: baseName(cap.overviewPath), zooms: cap.zooms.map((z) => baseName(z.path)) };
+    await this.files.write(join(run.dir, 'ask.md'), agentAsk(ctx, images));
+    await this.files.write(join(run.dir, 'ask.json'), JSON.stringify({
+      intent: run.intent.def.id, words: run.words, app: run.app, title: run.title, spots: ctx.spots,
+      file: ctx.file?.doc.name ?? null, selection: ctx.system?.selection ?? '',
+    }));
+    if (!this.alive(run)) return;
+    run.agent = { token, tools: toolsFor(run, ctx) };
+    const spec: AgentRunSpec = {
+      prompt: agentPrompt(run.dir), askDir: run.dir, bridge, resume: resume?.session ?? null,
+      // dsh reads its patch as YAML; every other preset that takes a file reads JSON.
+      mcpConfigPath: join(run.dir, profile.preset === 'dsh' ? 'mcp.yml' : 'mcp.json'),
+    };
+    run.machine.sent();
+
+    let agentRun: AgentRun;
+    try {
+      const env = await agents.env();
+      if (!this.alive(run)) return;
+      agentRun = await agents.runner.start(profile, spec, cwd, env);
+    } catch (err) {
+      if (!(err instanceof AgentStartError) || !this.alive(run)) throw err;
+      const { command } = profile;
+      const line = err.kind === 'notFound' ? words.agent.notFound(command) : words.agent.noStart(command);
+      return this.fail(run, 'agentStart', line);
+    }
+    // A cancel, a new ask, Stop, a deadline or a failure ends the agent and everything it started.
+    if (!this.alive(run)) return agentRun.kill();
+    run.abort.signal.addEventListener('abort', () => agentRun.kill(), { once: true });
+    // Spec §16: an agent lists the tools about 2 s after it starts.
+    this.deadline(run, RECEIVE_MS, () => {
+      if (run.machine.phase === 'sent') this.fail(run, 'notReceived');
+    });
+
+    const result = await agentRun.done;
+    if (!this.alive(run)) return;
+    if (!run.line && run.markdown.length === 0 && run.marks.length === 0) {
+      const name = profile.preset === 'custom' ? profile.name : AGENT_PRESETS[profile.preset].name;
+      const error = result.error?.trim() ?? '';
+      return this.fail(run, 'agent', error
+        ? words.agent.error(name, error.slice(0, AGENT_ERROR_MAX)) : words.agent.stopped(name));
+    }
+    if (isSessionId(result.session)) run.session = { profileId: profile.id, session: result.session, cwd };
+    await this.finish(run);
+  }
+
+  /** The running ask an agent's bridge names by its token, if it is still going. */
+  private agentRun(ask: string): Run | null {
+    const run = this.run;
+    return run && this.alive(run) && run.agent?.token === ask ? run : null;
   }
 
   private handlers(run: Run): StreamHandlers {
@@ -705,6 +899,7 @@ export class AskController extends EventEmitter {
       const zoom = cap.zooms[0];
       if (!zoom) return [{ text: 'Could not look closer.' }];
       const data = await this.files.read(zoom.path);
+      if (data.length === 0) return [{ text: 'Could not look closer.' }];
       const cx = Math.round(area.x + area.w / 2);
       const cy = Math.round(area.y + area.h / 2);
       return [
@@ -817,14 +1012,15 @@ export class AskController extends EventEmitter {
       at: this.deps.now(), intent: run.spot.intent, words: run.words, line: run.said,
       markdown: run.markdown.join('\n\n'), thumb: run.thumb, ...(done.length > 0 ? { done } : {}),
     };
+    const agent = run.session ? { agent: run.session } : {};
     const meta = {
       title: (run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
-      profile: run.profile?.name ?? '',
+      profile: run.profile?.name ?? '', ...agent,
     };
     // The thread is kept here first, so it continues even when history is off and append saves nothing.
     const now = this.deps.now();
     const local: ThreadRecord = run.thread
-      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry] }
+      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry], ...agent }
       : { id: randomUUID(), ...meta, started: now, lastActivity: now, entries: [entry] };
     this.thread = local;
     const saving = this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => null);
@@ -862,7 +1058,8 @@ export class AskController extends EventEmitter {
       .catch((err: unknown) => console.warn('[teammate] history:', err));
   }
 
-  private fail(run: Run, reason: AskFailure): void {
+  /** `line`: what the bubble says when the reason's own words can't say it (an agent's error, its command). */
+  private fail(run: Run, reason: AskFailure, line?: string): void {
     run.machine.fail(reason);
     this.stopRun();
     this.clearMarks();
@@ -872,7 +1069,7 @@ export class AskController extends EventEmitter {
       this.marksShown = true;
     }
     if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, false));
-    this.showLine(run, strings(run.lang).teammate.ask.failed[reason]);
+    this.showLine(run, line ?? strings(run.lang).teammate.ask.failed[reason]);
     this.answeredAt = this.deps.now();
     this.scheduleFade();
   }
@@ -937,11 +1134,13 @@ export class AskController extends EventEmitter {
       view: 'card', lang: run.lang, tag: run.tag, entries, streaming,
       title: run.thread?.title ?? (run.line || run.intent.label).slice(0, TITLE_MAX),
       footer: {
-        profile: run.profile?.name ?? '', model: run.profile?.model ?? '', route: run.route, tokens: run.tokens,
+        profile: run.profile?.name ?? '', model: run.profile?.kind === 'builtin' ? run.profile.model : '',
+        route: run.route, tokens: run.tokens,
         used: [
           t.ask.usedScreen,
           ...run.used.map((u) => usedLabel(u, run.lang)),
           ...(run.skipped ? [t.ask.contextSkipped] : []),
+          ...(run.folder ? [run.folder] : []),
         ],
       },
       put: this.put,

@@ -77,6 +77,12 @@ export function spawnArgv(file: string, args: readonly string[], platform: Platf
   return { file: cmdExe(), args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
 }
 
+/** `env` with PATH set to `value`. Windows names ignore case: the key it has is replaced, so there are never two. */
+export function withPath(env: NodeJS.ProcessEnv, value: string, platform: Platform): NodeJS.ProcessEnv {
+  const key = platform === 'win' ? Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'Path' : 'PATH';
+  return { ...env, [key]: value };
+}
+
 let shellPath: Promise<string> | null = null;
 
 /** macOS: PATH from `$SHELL -ilc 'printf %s "$PATH"'` (3 s limit), cached; elsewhere process.env.PATH. */

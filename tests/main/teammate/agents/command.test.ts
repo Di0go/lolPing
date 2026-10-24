@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { findExecutable, spawnArgv } from '../../../../src/main/teammate/agents/command';
+import { findExecutable, spawnArgv, withPath } from '../../../../src/main/teammate/agents/command';
 
 const existing = (...files: string[]) => {
   const set = new Set(files.map((f) => f.toLowerCase()));
@@ -160,5 +160,19 @@ describe('userPath', () => {
     expect(await userPath('win', run)).toBe(process.env.PATH ?? '');
     expect(await userPath('linux', run)).toBe(process.env.PATH ?? '');
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('withPath', () => {
+  it('replaces whichever PATH key Windows uses and keeps the rest', () => {
+    const env = { Path: 'C:\\old', SystemRoot: 'C:\\Windows', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+    expect(withPath(env, 'C:\\new', 'win')).toEqual({ ...env, Path: 'C:\\new' });
+    expect(withPath({ PATH: 'C:\\old' }, 'C:\\new', 'win')).toEqual({ PATH: 'C:\\new' });
+    expect(withPath({}, 'C:\\new', 'win')).toEqual({ Path: 'C:\\new' });
+  });
+
+  it('sets PATH by its exact name on macOS and Linux', () => {
+    expect(withPath({ HOME: '/Users/a', PATH: '/usr/bin' }, '/opt/homebrew/bin:/usr/bin', 'mac'))
+      .toEqual({ HOME: '/Users/a', PATH: '/opt/homebrew/bin:/usr/bin' });
   });
 });
