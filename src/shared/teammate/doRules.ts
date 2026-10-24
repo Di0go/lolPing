@@ -57,6 +57,8 @@ const AGENT_DETAIL_MAX = 400;
 /** An edit's detail shows a path longer than head + tail characters as its start and end. */
 const AGENT_PATH_HEAD = 80;
 const AGENT_PATH_TAIL = 110;
+/** A command's detail shows this many lines. */
+const AGENT_COMMAND_LINES = 8;
 /** An edit's detail shows this many lines of the new text. */
 const AGENT_EDIT_LINES = 3;
 
@@ -69,14 +71,19 @@ const cutTo = (text: string, max: number): string => {
 };
 
 // Controls other than a line break or tab, Unicode line and paragraph separators (drawn as line breaks, but a shell
-// reads them as letters), and every format character (zero-width and direction marks): shown escaped, so the card
-// can't draw something other than what will run. A bare CR is one too; only CR LF is a line break.
-const UNSAFE_LAYOUT = /(?![\n\t])\p{Cc}|[\p{Zl}\p{Zp}\p{Cf}]/gu;
-const UNSAFE_ALL = /\p{Cc}|[\p{Zl}\p{Zp}\p{Cf}]/gu;
+// reads them as letters), every format character and every other invisible one (zero-width, direction marks, variation
+// selectors, fillers, the Braille blank): shown escaped, so the card can't draw something other than what will run.
+const UNSAFE_CLASS = '[\\p{Zl}\\p{Zp}\\p{Cf}\\p{Default_Ignorable_Code_Point}\\u2800]';
+const UNSAFE_LAYOUT = new RegExp(`(?![\\n\\t])\\p{Cc}|${UNSAFE_CLASS}`, 'gu');
+const UNSAFE_ALL = new RegExp(`\\p{Cc}|${UNSAFE_CLASS}`, 'gu');
 
-/** `text` with unsafe characters as \uXXXX; a line break and tab stay unless `oneLine`. */
-function escapeUnsafe(text: string, oneLine: boolean): string {
-  return text.replace(/\r\n/g, '\n').replace(oneLine ? UNSAFE_ALL : UNSAFE_LAYOUT, (c) => {
+/**
+ * `text` with unsafe characters as \uXXXX; a line break and tab stay unless `oneLine`. CR LF is folded into a line
+ * break only for `foldCrlf`: bash keeps a CR inside the word it ends, so a CR must show wherever it would run.
+ */
+function escapeUnsafe(text: string, o: { oneLine?: boolean; foldCrlf?: boolean } = {}): string {
+  const folded = o.foldCrlf ? text.replace(/\r\n/g, '\n') : text;
+  return folded.replace(o.oneLine ? UNSAFE_ALL : UNSAFE_LAYOUT, (c) => {
     const hex = (c.codePointAt(0) ?? 0).toString(16).toUpperCase();
     return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex.padStart(4, '0')}`;
   });
@@ -87,30 +94,42 @@ const squeeze = (text: string): string => text
   .replace(/[\t\p{Zs}]{4,}/gu, ' ')
   .replace(/(?:[\t\p{Zs}]*\n){3,}/gu, '\n\n');
 
+/** However the padding is made, a command shows this many lines and then says how many it left out. */
+function capLines(text: string): string {
+  const lines = text.split('\n');
+  if (lines.length <= AGENT_COMMAND_LINES) return text;
+  const left = lines.length - AGENT_COMMAND_LINES;
+  return [...lines.slice(0, AGENT_COMMAND_LINES), `… +${left} line${left === 1 ? '' : 's'}`].join('\n');
+}
+
 /**
  * A file or address in the card's question and the history line: escaped, and when it is longer than `max` the end is
  * kept (the file name) with a "…" in front.
  */
 export function agentLabel(text: string, max: number): string {
-  const chars = Array.from(escapeUnsafe(text, true));
+  const chars = Array.from(escapeUnsafe(text, { oneLine: true }));
   return chars.length <= max ? chars.join('') : `…${chars.slice(chars.length - (max - 1)).join('')}`;
 }
 
 /** A path longer than the head and tail together shows both ends: "C:\Users\…\notes.txt". */
 function agentPath(path: string): string {
-  const chars = Array.from(escapeUnsafe(path, true));
+  const chars = Array.from(escapeUnsafe(path, { oneLine: true }));
   if (chars.length <= AGENT_PATH_HEAD + AGENT_PATH_TAIL) return chars.join('');
   return `${chars.slice(0, AGENT_PATH_HEAD).join('')}…${chars.slice(chars.length - AGENT_PATH_TAIL).join('')}`;
 }
 
 /**
- * The start of the text an edit puts in: Edit, Write, MultiEdit and NotebookEdit each keep it under another name. What
- * is left out is said: "…" after the first lines, and the number of edits a MultiEdit has besides its first.
+ * The start of the text an edit puts in. Each tool keeps it under its own name, and only that one is read, so a stray
+ * extra key can't change what the card shows. What is left out is said: "…" after the first lines, and the number of
+ * edits a MultiEdit has besides its first.
  */
-function newText(input: Record<string, unknown>): string {
-  const edits = Array.isArray(input.edits) ? input.edits : [];
+function newText(tool: string, input: Record<string, unknown>): string {
+  const edits = Array.isArray(input.edits) && /^multiedit$/i.test(tool) ? input.edits : [];
   const first = isRecord(edits[0]) ? edits[0].new_string : undefined;
-  const text = [input.new_string, input.content, input.new_source, first].find((v) => typeof v === 'string');
+  const field: Record<string, unknown> = {
+    write: input.content, edit: input.new_string, multiedit: first, notebookedit: input.new_source,
+  };
+  const text = field[tool.toLowerCase()];
   const lines = typeof text === 'string' ? text.replace(/\r\n/g, '\n').split('\n') : [];
   const shown = lines.slice(0, AGENT_EDIT_LINES);
   if (lines.length > AGENT_EDIT_LINES) shown.push('…');
@@ -127,11 +146,16 @@ export function describeAgentInput(tool: string, input: unknown): string {
   const { kind, target } = agentWhat(tool, input);
   if (!isRecord(input)) return '';
   let text = '';
-  if (kind === 'run' && typeof input.command === 'string') text = squeeze(escapeUnsafe(input.command, false));
-  else if (kind === 'edit') text = [agentPath(target), escapeUnsafe(newText(input), false)]
-    .filter((s) => s !== '').join('\n');
-  else if (kind === 'open') text = escapeUnsafe(target, true);
-  else text = escapeUnsafe(JSON.stringify(input), false);
+  if (kind === 'run' && typeof input.command === 'string') {
+    text = capLines(squeeze(escapeUnsafe(input.command, { foldCrlf: /^powershell$/i.test(tool) })));
+  } else if (kind === 'edit') {
+    const body = escapeUnsafe(newText(tool, input), { foldCrlf: true });
+    text = [agentPath(target), body].filter((s) => s !== '').join('\n');
+  } else if (kind === 'open') {
+    text = escapeUnsafe(target, { oneLine: true });
+  } else {
+    text = escapeUnsafe(JSON.stringify(input));
+  }
   return cutTo(text, AGENT_DETAIL_MAX);
 }
 
