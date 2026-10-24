@@ -7,8 +7,8 @@ import type { Settings } from '../../shared/settings';
 import { SELECTION_MAX, type PasteResult } from '../../shared/teammate/contextProtocol';
 import type { Rect } from '../../shared/teammate/coords';
 import {
-  allowed, formPreview, neverFill, pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow,
-  type PutAction,
+  agentAllowed, agentPermissionKey, agentWhat, allowed, describeAgentInput, formPreview, isShellTool, neverFill,
+  pastePlan, permissionKey, type FormField, type LeftField, type PreviewRow, type PutAction,
 } from '../../shared/teammate/doRules';
 import { eventIcs, tableHtml, tableTsv } from '../../shared/teammate/grab';
 import type { ActionCall } from '../../shared/teammate/tools';
@@ -34,12 +34,16 @@ const FRONT_POLL_MS = 50;
 const DETAIL_MAX = 200;
 /** A field's label on its ping, as long as the model's own ping labels. */
 const PING_LABEL_MAX = 20;
+/** The file or address in an agent's card question and history line. */
+const WHAT_MAX = 120;
 
 /** What the runner needs from the ask an action came from, all read when the ask was made. */
 export interface RunInfo {
   /** The ask's id: a put button acts only on the answer it belongs to. */
   id: string;
   profileId: string;
+  /** The profile's name, which the agent's consent card and history line call it by. */
+  profileName: string;
   tag: PingTag;
   app: string;
   /** The window the ask was made in (an HWND in decimal on Windows): pastes and fills go only there. */
@@ -86,7 +90,12 @@ export interface ActionDeps {
 
 type Waiting =
   | { kind: 'consent'; run: RunInfo; call: Paste | EventCall | Open; action: Exclude<PutAction, 'fill'> }
-  | { kind: 'form'; run: RunInfo; call: Fill };
+  | { kind: 'form'; run: RunInfo; call: Fill }
+  // `call` is absent: put() looks a paste's or fill's own card up by its call.
+  | {
+    kind: 'agent'; call?: undefined; run: RunInfo; tool: string; input: unknown;
+    settle: (answer: 'allow' | 'deny') => void;
+  };
 
 interface Shown {
   item: Waiting;
@@ -151,7 +160,8 @@ function detailOf(call: Paste | EventCall | Open): string {
  * up at a time, and the next waits until the action before it is done. Emits 'put' (PutState) when the bubble's and
  * card's put button changes, and again after a paste that did not land, so a bubble hidden for its click can come back
  * with the button. Emits 'described' (ask id, descriptions) each time an action of that ask is done, and 'asking'
- * (true, then false) while a consent card or form preview waits for the user.
+ * (true, then false) while a consent card or form preview waits for the user. A coding agent's permission prompt
+ * (askAgent) takes the same cards, one at a time with the rest.
  */
 export class ActionRunner extends EventEmitter {
   private queue: Waiting[] = [];
@@ -178,10 +188,7 @@ export class ActionRunner extends EventEmitter {
 
   /** A tool call from an answer: copy runs at once; the rest wait for consent (or Always allow) or the preview. */
   take(run: RunInfo, call: ActionCall): void {
-    if (run.id !== this.ask) {
-      this.ask = run.id;
-      this.done = [];
-    }
+    this.begin(run);
     switch (call.tool) {
       case 'copy':
         this.copy(run, call).catch((err: unknown) => console.warn('[teammate] copy:', err));
@@ -198,6 +205,30 @@ export class ActionRunner extends EventEmitter {
       case 'open':
         return this.enqueue({ kind: 'consent', run, call, action: call.tool });
     }
+  }
+
+  /**
+   * A coding agent's permission prompt: 'allow' once the user does (or Always allow covers it), 'deny' when they
+   * decline, the card's 30 s run out, or the ask ends (`signal` aborts, or cancel()).
+   */
+  askAgent(run: RunInfo, req: { tool: string; input: unknown }, signal: AbortSignal): Promise<'allow' | 'deny'> {
+    if (signal.aborted) return Promise.resolve('deny');
+    this.begin(run);
+    if (this.agentOk(run, req.tool)) {
+      this.describeAgent(run, req.tool, req.input);
+      return Promise.resolve('allow');
+    }
+    return new Promise((resolve) => {
+      const item: Extract<Waiting, { kind: 'agent' }> = {
+        kind: 'agent', run, tool: req.tool, input: req.input, settle: (answer) => {
+          signal.removeEventListener('abort', gone);
+          resolve(answer);
+        },
+      };
+      const gone = (): void => this.drop(item);
+      signal.addEventListener('abort', gone, { once: true });
+      this.enqueue(item);
+    });
   }
 
   /** The bubble's or card's Paste / Replace / Fill button: the user's click is the consent. */
@@ -228,6 +259,19 @@ export class ActionRunner extends EventEmitter {
     const { item } = shown;
     // A click that left an earlier card as this one replaced it is not an answer to this one.
     if (a.serial !== shown.serial) return;
+    if (view === 'consent' && item.kind === 'agent') {
+      if (a.t !== 'allow' && a.t !== 'always' && a.t !== 'decline') return;
+      this.closeShown();
+      if (a.t === 'decline') {
+        item.settle('deny');
+      } else {
+        // A shell command is never remembered: the card doesn't offer it, and a stray click is only Allow once.
+        if (a.t === 'always' && !isShellTool(item.tool)) this.rememberAgent(item.run.profileId, item.tool);
+        this.describeAgent(item.run, item.tool, item.input);
+        item.settle('allow');
+      }
+      return this.pump();
+    }
     if (view === 'consent' && item.kind === 'consent') {
       if (a.t !== 'allow' && a.t !== 'always' && a.t !== 'decline') return;
       this.closeShown();
@@ -250,8 +294,11 @@ export class ActionRunner extends EventEmitter {
     this.abort.abort();
     this.abort = new AbortController();
     this.wake?.();
+    const pending = [...this.queue, ...(this.shown ? [this.shown.item] : [])];
     this.queue = [];
     this.closeShown();
+    // An agent left waiting would hold its bridge call open.
+    for (const item of pending) if (item.kind === 'agent') item.settle('deny');
     this.busy = false;
     this.target = null;
     this.setPut(null);
@@ -262,6 +309,14 @@ export class ActionRunner extends EventEmitter {
   /** For history: "Pasted 2 lines into Chrome", "Filled 5 fields, left 2", "Copied a table, 3 × 4". */
   described(): string[] {
     return [...this.done];
+  }
+
+  /** The first call of an ask starts its list of what was done. */
+  private begin(run: RunInfo): void {
+    if (run.id !== this.ask) {
+      this.ask = run.id;
+      this.done = [];
+    }
   }
 
   private enqueue(item: Waiting): void {
@@ -275,6 +330,13 @@ export class ActionRunner extends EventEmitter {
     const item = this.queue.shift();
     if (!item) return;
     if (item.kind === 'form') return this.showPreview(item);
+    if (item.kind === 'agent') {
+      // Checked now, not when the call came: Always allow on one card covers the next one waiting.
+      if (!this.agentOk(item.run, item.tool)) return this.showAgent(item);
+      this.describeAgent(item.run, item.tool, item.input);
+      item.settle('allow');
+      return this.pump();
+    }
     // Checked now, not when the call came: Always allow on one card covers the next one waiting.
     if (allowed(this.deps.settings().teammate.permissions, item.run.profileId, item.action)) {
       void this.runNow((signal) => this.execute(item, signal));
@@ -328,6 +390,54 @@ export class ActionRunner extends EventEmitter {
     this.emit('asking', true);
   }
 
+  private showAgent(item: Extract<Waiting, { kind: 'agent' }>): void {
+    const { run, tool, input } = item;
+    const serial = this.deps.windows.showConsent(run.at, {
+      view: 'consent', lang: run.lang, tag: run.tag, action: 'agent', tool,
+      text: this.agentLine(run, tool, input, false), detail: describeAgentInput(tool, input),
+      always: !isShellTool(tool), seconds: CONSENT_MS / 1000,
+    });
+    const stop = this.deps.timer(CONSENT_MS, () => {
+      if (this.shown?.item !== item) return;
+      this.closeShown();
+      item.settle('deny');
+      this.pump();
+    });
+    this.shown = { item, serial, stop, preview: null };
+    this.emit('asking', true);
+  }
+
+  /** The card's question ("Claude Code wants to edit src/app.ts"), or with `done` the history line. */
+  private agentLine(run: RunInfo, tool: string, input: unknown, done: boolean): string {
+    const t = this.text(run);
+    const { kind, target } = agentWhat(tool, input);
+    const what = firstChars(target, WHAT_MAX);
+    const name = run.profileName;
+    switch (kind) {
+      case 'edit': return done ? t.didAgentEdit(name, what) : t.agentEdit(name, what);
+      case 'run': return done ? t.didAgentRun(name) : t.agentRun(name);
+      case 'open': return done ? t.didAgentOpen(name, what) : t.agentOpen(name, what);
+      case 'use': return done ? t.didAgentUse(name, tool) : t.agentUse(name, tool);
+    }
+  }
+
+  private describeAgent(run: RunInfo, tool: string, input: unknown): void {
+    this.describe(run, this.agentLine(run, tool, input, true));
+  }
+
+  /** The ask ended with this prompt unanswered: its card goes, or its place in the line is given up. */
+  private drop(item: Extract<Waiting, { kind: 'agent' }>): void {
+    this.queue = this.queue.filter((i) => i !== item);
+    const was = this.shown?.item === item;
+    if (was) this.closeShown();
+    item.settle('deny');
+    if (was) this.pump();
+  }
+
+  private agentOk(run: RunInfo, tool: string): boolean {
+    return agentAllowed(this.deps.settings().teammate.permissions, run.profileId, tool);
+  }
+
   private showPreview(item: Extract<Waiting, { kind: 'form' }>): void {
     const { run, call } = item;
     const preview = formPreview(run.fields, call.fields);
@@ -343,14 +453,20 @@ export class ActionRunner extends EventEmitter {
     if (!shown) return;
     this.shown = null;
     shown.stop();
-    if (shown.item.kind === 'consent') this.deps.windows.hideConsent();
-    else this.deps.windows.hideForm();
+    if (shown.item.kind === 'form') this.deps.windows.hideForm();
+    else this.deps.windows.hideConsent();
     this.emit('asking', false);
   }
 
   private remember(profileId: string, action: PutAction): void {
     const list = this.deps.settings().teammate.permissions;
     const key = permissionKey(profileId, action);
+    if (!list.includes(key)) this.deps.savePermissions([...list, key]);
+  }
+
+  private rememberAgent(profileId: string, tool: string): void {
+    const list = this.deps.settings().teammate.permissions;
+    const key = agentPermissionKey(profileId, tool);
     if (!list.includes(key)) this.deps.savePermissions([...list, key]);
   }
 

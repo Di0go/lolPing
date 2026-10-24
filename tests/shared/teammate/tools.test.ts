@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { applyLimits, parseToolCall, toolDefs, type ToolCall } from '../../../src/shared/teammate/tools';
+import {
+  CONSENT_TOOL, applyLimits, parseConsent, parseToolCall, toolDefs, type ToolCall,
+} from '../../../src/shared/teammate/tools';
 import { EMOTE_CATALOG } from '../../../src/shared/emoteCatalog';
 
 const OFF = { emotes: false, spots: 1, file: false, look: false, kind: 'answer', form: false, selection: false } as const;
@@ -277,5 +279,35 @@ describe('tools', () => {
     const open = (n: number): ToolCall => ({ tool: 'open', url: `https://example.com/${n}` });
     const calls = [paste('one'), paste('two'), fill, fill, event, event, open(1), open(2), open(3), open(4)];
     expect(applyLimits(calls)).toEqual([calls[0], calls[2], calls[4], calls[6], calls[7], calls[8]]);
+  });
+});
+
+describe('consent tool', () => {
+  it('asks for the tool and its input, and the id when there is one', () => {
+    expect(CONSENT_TOOL.name).toBe('consent');
+    expect(CONSENT_TOOL.description).toMatch(/permission/);
+    expect(CONSENT_TOOL.parameters).toMatchObject({
+      type: 'object', required: ['tool_name', 'input'],
+      properties: { tool_name: { type: 'string' }, input: { type: 'object' }, tool_use_id: { type: 'string' } },
+    });
+  });
+
+  it('reads the tool name and input of a permission prompt', () => {
+    const input = { file_path: 'src/app.ts', old_string: 'a', new_string: 'b' };
+    expect(parseConsent({ tool_name: 'Edit', input })).toEqual({ tool: 'Edit', input });
+    expect(parseConsent({ tool_name: 'mcp__lolping__say', input: {}, tool_use_id: 'toolu_1' }))
+      .toEqual({ tool: 'mcp__lolping__say', input: {} });
+  });
+
+  it('refuses a name no permission key can carry and an input that is not an object', () => {
+    for (const tool_name of ['', 'a b', 'a:b', 'x'.repeat(65), 'Ed\nit', 5, null]) {
+      expect(parseConsent({ tool_name, input: {} }), String(tool_name)).toBeNull();
+    }
+    expect(parseConsent({ tool_name: 'Edit' })).toBeNull();
+    expect(parseConsent({ tool_name: 'Edit', input: 'x' })).toBeNull();
+    expect(parseConsent({ tool_name: 'Edit', input: null })).toBeNull();
+    expect(parseConsent(null)).toBeNull();
+    expect(parseConsent('Edit')).toBeNull();
+    expect(parseConsent({ tool_name: 'x'.repeat(64), input: {} })?.tool).toBe('x'.repeat(64));
   });
 });

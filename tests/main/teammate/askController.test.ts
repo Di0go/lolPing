@@ -113,6 +113,7 @@ function harness(opts: HarnessOptions = {}) {
       runnerCancels += 1;
     },
     described: () => [...(opts.done ?? [])],
+    askAgent: async () => 'deny' as const,
   });
   const dones: Array<{ at: number; done: string[] | undefined }> = [];
   const amends: Array<{ threadId: string; at: number; done: string[] }> = [];
@@ -1249,7 +1250,8 @@ describe('AskController', () => {
       await flush();
       expect(h.taken).toEqual([{ tool: 'paste', text: 'Friday works.', mode: 'replace' }]);
       expect(h.takenRuns).toEqual([{
-        id: h.tickets[0], profileId: 'fast', tag: TAG, app: 'notepad.exe', window: '263544', lang: 'en',
+        id: h.tickets[0], profileId: 'fast', profileName: 'fast', tag: TAG, app: 'notepad.exe', window: '263544',
+        lang: 'en',
         spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box,
         focus: { kind: 'field', label: 'Reply', value: 'teh text', secure: false },
         selection: 'teh text',

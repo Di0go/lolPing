@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   agentAllowed,
   agentPermissionKey,
+  agentWhat,
   allowed,
+  describeAgentInput,
   isShellTool,
   formPreview,
   neverFill,
@@ -181,5 +183,65 @@ describe('pastePlan', () => {
 
   it('ignores the selection when inserting', () => {
     expect(pastePlan({ ...base, selectionNow: 'other', selectionAsked: 'text' })).toEqual({ method: 'clipboard' });
+  });
+});
+
+describe('describeAgentInput', () => {
+  it('shows a Bash or PowerShell command as it is', () => {
+    expect(describeAgentInput('Bash', { command: 'npm test -- --run', description: 'Run tests' }))
+      .toBe('npm test -- --run');
+    expect(describeAgentInput('PowerShell', { command: 'Get-ChildItem -Recurse' })).toBe('Get-ChildItem -Recurse');
+  });
+
+  it('shows the file of an edit, then the first lines of the new text', () => {
+    const edit = { file_path: 'src/app.ts', old_string: 'teh', new_string: 'the\nsecond\nthird\nfourth' };
+    expect(describeAgentInput('Edit', edit)).toBe('src/app.ts\nthe\nsecond\nthird');
+    expect(describeAgentInput('Write', { file_path: 'C:\\code\\a.md', content: 'hello' }))
+      .toBe('C:\\code\\a.md\nhello');
+    expect(describeAgentInput('MultiEdit', { file_path: 'a.ts', edits: [{ old_string: 'x', new_string: 'y' }] }))
+      .toBe('a.ts\ny');
+    expect(describeAgentInput('NotebookEdit', { notebook_path: 'n.ipynb', new_source: 'print(1)' }))
+      .toBe('n.ipynb\nprint(1)');
+    expect(describeAgentInput('Edit', { file_path: 'src/app.ts' })).toBe('src/app.ts');
+  });
+
+  it('shows the address of a fetch', () => {
+    expect(describeAgentInput('WebFetch', { url: 'https://example.com/a?b=1', prompt: 'summarise' }))
+      .toBe('https://example.com/a?b=1');
+  });
+
+  it('shows any other tool as compact JSON, and nothing for an input that is not an object', () => {
+    expect(describeAgentInput('Grep', { pattern: 'foo', path: 'src' })).toBe('{"pattern":"foo","path":"src"}');
+    expect(describeAgentInput('Bash', { cmd: 'ls' })).toBe('{"cmd":"ls"}');
+    expect(describeAgentInput('Bash', null)).toBe('');
+    expect(describeAgentInput('Edit', undefined)).toBe('');
+  });
+
+  it('cuts everything at 400 characters', () => {
+    const long = 'x'.repeat(1000);
+    expect(Array.from(describeAgentInput('Bash', { command: long })).length).toBe(400);
+    expect(Array.from(describeAgentInput('Edit', { file_path: 'a.ts', new_string: long })).length).toBe(400);
+    expect(Array.from(describeAgentInput('Grep', { pattern: long })).length).toBe(400);
+    expect(Array.from(describeAgentInput('Bash', { command: '界'.repeat(500) })).length).toBe(400);
+  });
+});
+
+describe('agentWhat', () => {
+  it('names an edit by its file, a run, an open by its address, and anything else as a use', () => {
+    expect(agentWhat('Edit', { file_path: 'src/app.ts' })).toEqual({ kind: 'edit', target: 'src/app.ts' });
+    expect(agentWhat('Write', { file_path: 'a.md' })).toEqual({ kind: 'edit', target: 'a.md' });
+    expect(agentWhat('MultiEdit', { file_path: 'a.ts', edits: [] })).toEqual({ kind: 'edit', target: 'a.ts' });
+    expect(agentWhat('NotebookEdit', { notebook_path: 'n.ipynb' })).toEqual({ kind: 'edit', target: 'n.ipynb' });
+    expect(agentWhat('Bash', { command: 'ls' })).toEqual({ kind: 'run', target: '' });
+    expect(agentWhat('PowerShell', { command: 'ls' })).toEqual({ kind: 'run', target: '' });
+    expect(agentWhat('WebFetch', { url: 'https://example.com/' }))
+      .toEqual({ kind: 'open', target: 'https://example.com/' });
+    expect(agentWhat('Grep', { pattern: 'x' })).toEqual({ kind: 'use', target: '' });
+  });
+
+  it('falls back to a use when the input lacks what the tool is known by', () => {
+    expect(agentWhat('Edit', {})).toEqual({ kind: 'use', target: '' });
+    expect(agentWhat('WebFetch', { url: 5 })).toEqual({ kind: 'use', target: '' });
+    expect(agentWhat('Edit', 'src/app.ts')).toEqual({ kind: 'use', target: '' });
   });
 });

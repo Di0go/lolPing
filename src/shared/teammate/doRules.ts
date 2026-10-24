@@ -35,6 +35,57 @@ export function agentAllowed(permissions: readonly string[], profileId: string, 
   return !isShellTool(tool) && permissions.includes(agentPermissionKey(profileId, tool));
 }
 
+/** What the card says an agent's tool call is, and the file or address it names (for `edit` and `open`). */
+export function agentWhat(tool: string, input: unknown): { kind: 'edit' | 'run' | 'open' | 'use'; target: string } {
+  const field = (name: string): string => {
+    const v = isRecord(input) ? input[name] : undefined;
+    return typeof v === 'string' ? v : '';
+  };
+  if (/^(?:bash|powershell)$/i.test(tool)) return { kind: 'run', target: '' };
+  if (EDIT_TOOLS.test(tool)) {
+    const file = field('file_path') || field('notebook_path');
+    if (file !== '') return { kind: 'edit', target: file };
+  } else if (/^webfetch$/i.test(tool) && field('url') !== '') {
+    return { kind: 'open', target: field('url') };
+  }
+  return { kind: 'use', target: '' };
+}
+
+const EDIT_TOOLS = /^(?:edit|write|multiedit|notebookedit)$/i;
+/** The consent card's detail for an agent's tool call is cut here. */
+const AGENT_DETAIL_MAX = 400;
+/** An edit's detail shows this many lines of the new text. */
+const AGENT_EDIT_LINES = 3;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const cutTo = (text: string, max: number): string => {
+  const chars = Array.from(text);
+  return chars.length <= max ? text : chars.slice(0, max).join('');
+};
+
+/** The start of the text an edit puts in: Edit, Write, MultiEdit and NotebookEdit each keep it under another name. */
+function newText(input: Record<string, unknown>): string {
+  const first = Array.isArray(input.edits) && isRecord(input.edits[0]) ? input.edits[0].new_string : undefined;
+  const text = [input.new_string, input.content, input.new_source, first].find((v) => typeof v === 'string');
+  return typeof text === 'string' ? text.split(/\r\n|\r|\n/).slice(0, AGENT_EDIT_LINES).join('\n') : '';
+}
+
+/**
+ * What the consent card shows for an agent's tool call: a command, a file and the first lines of an edit, an address,
+ * or the input as compact JSON. At most 400 characters; paths are shown as given.
+ */
+export function describeAgentInput(tool: string, input: unknown): string {
+  const { kind, target } = agentWhat(tool, input);
+  if (!isRecord(input)) return '';
+  let text = '';
+  if (kind === 'run' && typeof input.command === 'string') text = input.command;
+  else if (kind === 'edit') text = [target, newText(input)].filter((s) => s !== '').join('\n');
+  else if (kind === 'open') text = target;
+  else text = JSON.stringify(input);
+  return cutTo(text, AGENT_DETAIL_MAX);
+}
+
 /** Whether the user chose Always allow for this action. Fill never is: it always shows its preview. */
 export function allowed(permissions: readonly string[], profileId: string, action: PutAction): boolean {
   if (action === 'fill') return false;

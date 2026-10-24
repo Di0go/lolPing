@@ -228,7 +228,31 @@ export function toolDefs(opts: {
   return defs;
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** Claude Code's `--permission-prompt-tool`: it asks here before it edits or runs anything. */
+export const CONSENT_TOOL: ToolDef = {
+  name: 'consent',
+  description: "lolPing's permission prompt: Claude Code asks it before using a tool. The user decides on a card.",
+  parameters: {
+    type: 'object',
+    properties: {
+      tool_name: { type: 'string', description: 'The tool that wants to run.' },
+      input: { type: 'object', description: 'The input the tool would run with.' },
+      tool_use_id: { type: 'string' },
+    },
+    required: ['tool_name', 'input'],
+  },
+};
+
+/** A tool name goes into a saved permission key, so only the characters a key can hold. */
+const CONSENT_TOOL_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** The tool and input of a permission prompt; null when the name can't be a permission key or input isn't an object. */
+export function parseConsent(args: unknown): { tool: string; input: unknown } | null {
+  if (!isRecord(args) || typeof args.tool_name !== 'string' || !CONSENT_TOOL_NAME.test(args.tool_name)) return null;
+  return isRecord(args.input) ? { tool: args.tool_name, input: args.input } : null;
+}
+
+const isRecord =(v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 function text(v: unknown, max: number): string | null {

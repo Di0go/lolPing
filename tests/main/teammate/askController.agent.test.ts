@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentStartError, type AgentResult, type AgentRun } from '../../../src/main/teammate/agents/runner';
+import { EventEmitter } from 'node:events';
+import type { RunInfo } from '../../../src/main/teammate/actions';
 import { AskController, type AskDeps } from '../../../src/main/teammate/askController';
 import { strings } from '../../../src/shared/i18n';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
@@ -46,6 +48,8 @@ interface Options {
   bridgeDown?: boolean;
   /** No agents deps at all. */
   noAgents?: boolean;
+  /** What the user does with a permission prompt: the default is Allow once; 'wait' leaves it until the ask ends. */
+  consent?: 'allow' | 'deny' | 'wait';
 }
 
 function harness(opts: Options = {}) {
@@ -57,6 +61,22 @@ function harness(opts: Options = {}) {
   const written = new Map<string, string>();
   const appends: Array<{ threadId: string | null; line: string; markdown: string; agent: ThreadRecord['agent'] }> = [];
   let captures = 0;
+  const prompts: Array<{ run: RunInfo; req: { tool: string; input: unknown }; signal: AbortSignal }> = [];
+  const actions = Object.assign(new EventEmitter(), {
+    take: () => undefined,
+    put: async () => undefined,
+    cancel: () => undefined,
+    described: () => [] as string[],
+    askAgent: (run: RunInfo, req: { tool: string; input: unknown }, signal: AbortSignal) => {
+      prompts.push({ run, req, signal });
+      if (opts.consent === 'wait') {
+        return new Promise<'allow' | 'deny'>((resolve) => {
+          signal.addEventListener('abort', () => resolve('deny'), { once: true });
+        });
+      }
+      return Promise.resolve(opts.consent ?? 'allow');
+    },
+  });
 
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
@@ -173,11 +193,12 @@ function harness(opts: Options = {}) {
       makeDir: async () => undefined,
       removeDir: async () => undefined,
     },
+    actions,
     ...(opts.noAgents ? {} : { agents }),
   };
   const ctl = new AskController(deps);
   return {
-    ctl, pings, bubbles, cards, started, asks, written, appends,
+    ctl, pings, bubbles, cards, started, asks, written, appends, prompts,
     lines: () => bubbles.map((b) => b.line),
     /** The ask token the latest agent was given. */
     token: () => started.at(-1)?.spec.bridge.env.LOLPING_ASK ?? '',
@@ -238,7 +259,7 @@ describe('AskController with an agent', () => {
 
     const tools = h.ctl.agentTools(h.token());
     expect(tools?.map((d) => d.name)).toEqual(expect.arrayContaining(['say', 'ping', 'emote', 'answer']));
-    expect(tools?.map((d) => d.name)).not.toContain('consent');
+    expect(tools?.map((d) => d.name)).toContain('consent');
     expect(h.pings.map((p) => p.id)).toEqual(['omw']);
     h.ctl.agentTools(h.token());
     expect(h.pings.map((p) => p.id)).toEqual(['omw']); // once
@@ -300,13 +321,74 @@ describe('AskController with an agent', () => {
     expect(again).toEqual({ content: [{ text: 'Not available.' }], isError: true });
   });
 
-  it('declines a consent call until consent cards come to agents', async () => {
+  it('offers the consent tool only to a preset that routes its permission prompts to lolPing', async () => {
+    const claude = harness();
+    claude.ctl.ask(spot('danger'));
+    await flush();
+    expect(claude.ctl.agentTools(claude.token())?.map((d) => d.name)).toContain('consent');
+
+    for (const profile of [agent({ preset: 'dsh' }), agent({ preset: 'custom' })]) {
+      const h = harness({ teammate: { profiles: [profile] } });
+      h.ctl.ask(spot('danger'));
+      await flush();
+      expect(h.ctl.agentTools(h.token())?.map((d) => d.name), profile.preset).not.toContain('consent');
+      const r = await h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Write', input: {} });
+      expect(r, profile.preset).toEqual({ content: [{ text: 'Not available.' }], isError: true });
+      expect(h.prompts, profile.preset).toEqual([]);
+    }
+  });
+
+  it('asks the user for a permission prompt and answers allow with the input', async () => {
     const h = harness();
     h.ctl.ask(spot('danger'));
     await flush();
     h.ctl.agentTools(h.token());
-    const r = await h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Write', input: {} });
-    expect(r).toEqual({ content: [{ text: 'Not available.' }], isError: true });
+    const input = { file_path: 'src/app.ts', old_string: 'teh', new_string: 'the' };
+    const r = await h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Edit', input, tool_use_id: 'toolu_1' });
+    expect(r.isError).toBe(false);
+    expect(r.content).toHaveLength(1);
+    expect(JSON.parse(textOf(r))).toEqual({ behavior: 'allow', updatedInput: input });
+    expect(h.prompts).toHaveLength(1);
+    expect(h.prompts[0].req).toEqual({ tool: 'Edit', input });
+    expect(h.prompts[0].run).toMatchObject({ profileId: 'cc', profileName: 'My Claude' });
+  });
+
+  it('answers deny when the user declines', async () => {
+    const h = harness({ consent: 'deny' });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.ctl.agentTools(h.token());
+    const r = await h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Bash', input: { command: 'rm -rf x' } });
+    expect(r.isError).toBe(false);
+    expect(JSON.parse(textOf(r))).toEqual({ behavior: 'deny', message: 'The user declined in lolPing.' });
+  });
+
+  it('refuses a permission prompt whose tool name no permission key can hold, without asking', async () => {
+    const h = harness();
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.ctl.agentTools(h.token());
+    for (const args of [{ tool_name: 'Ed:it', input: {} }, { tool_name: 'Edit' }, 'Edit', null]) {
+      const r = await h.ctl.agentCall(h.token(), 'consent', args);
+      expect(r.isError).toBe(false);
+      expect(JSON.parse(textOf(r)), JSON.stringify(args)).toMatchObject({ behavior: 'deny' });
+    }
+    expect(h.prompts).toEqual([]);
+  });
+
+  it('answers deny to a permission prompt still waiting when the ask ends', async () => {
+    const h = harness({ consent: 'wait' });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    h.ctl.agentTools(h.token());
+    const pending = h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Write', input: { file_path: 'a.md' } });
+    await flush();
+    expect(h.prompts[0].signal.aborted).toBe(false);
+    h.ctl.cancel('user');
+    const r = await pending;
+    expect(r.isError).toBe(false);
+    expect(JSON.parse(textOf(r))).toEqual({ behavior: 'deny', message: 'The user declined in lolPing.' });
+    expect(h.prompts[0].signal.aborted).toBe(true);
   });
 
   it('refuses calls from an ask that was replaced', async () => {

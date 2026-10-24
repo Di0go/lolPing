@@ -78,10 +78,13 @@ export interface ConsentState {
   view: 'consent';
   lang: Lang;
   tag: PingTag;
-  action: PutAction;
+  /** What is asked: a teammate's action, or 'agent' for a coding agent's permission prompt. */
+  action: PutAction | 'agent';
+  /** The agent's tool, when `action` is 'agent'. */
+  tool?: string;
   /** The question, already worded for the action ("Paste your reply into Chrome?"). */
   text: string;
-  /** What will be pasted (its first 200 characters), the URL, or the event's title and time. */
+  /** What will be pasted (its first 200 characters), the URL, the event's title and time, or an agent's command. */
   detail: string;
   /** Offer Always allow. */
   always: boolean;

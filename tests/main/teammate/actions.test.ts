@@ -16,7 +16,7 @@ const ASK_WINDOW = '263544';
 const REPLY_BOX = { x: 900, y: 780, w: 400, h: 40 };
 
 const info = (over: Partial<RunInfo> = {}): RunInfo => ({
-  id: 'ask1', profileId: 'fast', tag: TAG, app: 'Chrome', window: ASK_WINDOW, lang: 'en',
+  id: 'ask1', profileId: 'fast', profileName: 'Fast', tag: TAG, app: 'Chrome', window: ASK_WINDOW, lang: 'en',
   spot: { x: 1000, y: 800 }, at: { x: 500, y: 400 }, box: REPLY_BOX,
   focus: { kind: 'field', label: 'Reply', value: '', secure: false }, selection: '', fields: [], ...over,
 });
@@ -839,5 +839,211 @@ describe('ActionRunner', () => {
     await flush();
     expect(form.of('formHidden')).toHaveLength(1);
     expect(form.of('setField')).toEqual([]);
+  });
+});
+
+const CLAUDE = { profileId: 'cc', profileName: 'Claude Code' };
+const EDIT = { file_path: 'src/app.ts', old_string: 'teh', new_string: 'the' };
+
+/** An agent's permission prompt; `answer()` is its reply once there is one. */
+function agentAsk(h: ReturnType<typeof harness>, tool: string, input: unknown, over: Partial<RunInfo> = {}) {
+  const abort = new AbortController();
+  let answer: 'allow' | 'deny' | undefined;
+  void h.runner.askAgent(info({ ...CLAUDE, ...over }), { tool, input }, abort.signal).then((a) => {
+    answer = a;
+  });
+  return { abort, answer: () => answer };
+}
+
+describe('ActionRunner for an agent', () => {
+  it('asks before an agent edits a file and answers allow', async () => {
+    const h = harness();
+    const ask = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    expect(h.of('consent')).toEqual([{
+      at: { x: 500, y: 400 }, view: 'consent', lang: 'en', tag: TAG, action: 'agent', tool: 'Edit',
+      text: 'Claude Code wants to edit src/app.ts', detail: 'src/app.ts\nthe', always: true, seconds: 30,
+    }]);
+    expect(ask.answer()).toBeUndefined();
+    expect(h.runner.described()).toEqual([]);
+
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    await flush();
+    expect(ask.answer()).toBe('allow');
+    expect(h.of('consentHidden')).toHaveLength(1);
+    expect(h.of('permissions')).toEqual([]);
+    expect(h.runner.described()).toEqual(['Allowed Claude Code to edit src/app.ts']);
+    // Nothing is pasted, opened or put on the clipboard on the agent's behalf.
+    expect(h.kinds()).not.toContain('paste');
+  });
+
+  it('words a run, an open and any other tool for the card and the history', async () => {
+    const h = harness();
+    agentAsk(h, 'Bash', { command: 'npm test' });
+    await flush();
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    agentAsk(h, 'WebFetch', { url: 'https://example.com/docs' });
+    await flush();
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    agentAsk(h, 'Grep', { pattern: 'x' });
+    await flush();
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    await flush();
+    const cards = h.of('consent') as ConsentState[];
+    expect(cards.map((c) => c.text)).toEqual([
+      'Claude Code wants to run a command', 'Claude Code wants to open https://example.com/docs',
+      'Claude Code wants to use Grep',
+    ]);
+    expect(cards.map((c) => c.detail)).toEqual(['npm test', 'https://example.com/docs', '{"pattern":"x"}']);
+    expect(h.runner.described()).toEqual([
+      'Allowed Claude Code to run a command', 'Allowed Claude Code to open https://example.com/docs',
+      'Allowed Claude Code to use Grep',
+    ]);
+  });
+
+  it('words the card and the history in Chinese for a Chinese ask', async () => {
+    const h = harness();
+    agentAsk(h, 'Edit', EDIT, { lang: 'zh-CN' });
+    await flush();
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    await flush();
+    expect((h.of('consent') as ConsentState[])[0].text).toBe('Claude Code 想编辑 src/app.ts');
+    expect(h.runner.described()).toEqual(['允许 Claude Code 编辑 src/app.ts']);
+  });
+
+  it('declines after 30 s', async () => {
+    const h = harness();
+    const ask = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    await h.advance(29_999);
+    expect(ask.answer()).toBeUndefined();
+    await h.advance(1);
+    expect(ask.answer()).toBe('deny');
+    expect(h.of('consentHidden')).toHaveLength(1);
+    expect(h.runner.described()).toEqual([]);
+    expect(h.liveTimers()).toBe(0);
+  });
+
+  it('answers deny to Decline and keeps nothing', async () => {
+    const h = harness();
+    const ask = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    h.runner.onAction('consent', { t: 'decline', serial: h.card() });
+    await flush();
+    expect(ask.answer()).toBe('deny');
+    expect(h.of('permissions')).toEqual([]);
+    expect(h.runner.described()).toEqual([]);
+  });
+
+  it('allows a tool the user always allowed without a card', async () => {
+    const h = harness({ permissions: ['cc:agent:Edit'] });
+    const ask = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    expect(ask.answer()).toBe('allow');
+    expect(h.of('consent')).toEqual([]);
+    expect(h.runner.described()).toEqual(['Allowed Claude Code to edit src/app.ts']);
+    // Another tool, and another profile's Edit, still ask.
+    agentAsk(h, 'Write', { file_path: 'a.md', content: 'x' });
+    agentAsk(h, 'Edit', EDIT, { profileId: 'other' });
+    await flush();
+    expect(h.of('consent')).toHaveLength(1);
+  });
+
+  it('remembers Always allow for the profile and tool', async () => {
+    const h = harness();
+    agentAsk(h, 'Edit', EDIT);
+    await flush();
+    h.runner.onAction('consent', { t: 'always', serial: h.card() });
+    await flush();
+    expect(h.of('permissions')).toEqual([['cc:agent:Edit']]);
+    const next = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    expect(next.answer()).toBe('allow');
+    expect(h.of('consent')).toHaveLength(1);
+  });
+
+  it('never offers Always allow for a shell command', async () => {
+    const h = harness();
+    for (const tool of ['Bash', 'PowerShell', 'run_shell_command']) {
+      const ask = agentAsk(h, tool, { command: 'ls' });
+      await flush();
+      // A stray Always click is only an Allow once.
+      h.runner.onAction('consent', { t: 'always', serial: h.card() });
+      await flush();
+      expect(ask.answer(), tool).toBe('allow');
+    }
+    expect((h.of('consent') as ConsentState[]).map((c) => c.always)).toEqual([false, false, false]);
+    expect(h.of('permissions')).toEqual([]);
+  });
+
+  it('shows one card at a time and lets Always allow cover the next one waiting', async () => {
+    const h = harness();
+    const first = agentAsk(h, 'Edit', EDIT);
+    const second = agentAsk(h, 'Edit', { ...EDIT, file_path: 'src/b.ts' });
+    await flush();
+    expect(h.of('consent')).toHaveLength(1);
+    h.runner.onAction('consent', { t: 'always', serial: h.card() });
+    await flush();
+    expect(first.answer()).toBe('allow');
+    expect(second.answer()).toBe('allow');
+    expect(h.of('consent')).toHaveLength(1);
+    expect(h.runner.described()).toEqual([
+      'Allowed Claude Code to edit src/app.ts', 'Allowed Claude Code to edit src/b.ts',
+    ]);
+  });
+
+  it('waits behind a paste card, and a click on the old card is not its answer', async () => {
+    const h = harness();
+    h.runner.take(info(), paste());
+    const ask = agentAsk(h, 'Edit', EDIT);
+    await flush();
+    expect(h.of('consent')).toHaveLength(1);
+    const pasteCard = h.card();
+    h.runner.onAction('consent', { t: 'allow', serial: pasteCard });
+    await flush();
+    expect(h.of('paste')).toHaveLength(1);
+    expect((h.of('consent') as ConsentState[]).map((c) => c.action)).toEqual(['paste', 'agent']);
+    h.runner.onAction('consent', { t: 'allow', serial: pasteCard });
+    await flush();
+    expect(ask.answer()).toBeUndefined();
+    h.runner.onAction('consent', { t: 'allow', serial: h.card() });
+    await flush();
+    expect(ask.answer()).toBe('allow');
+  });
+
+  it('answers deny and takes the card down when the ask is aborted', async () => {
+    const h = harness();
+    const shown = agentAsk(h, 'Edit', EDIT);
+    const waiting = agentAsk(h, 'Bash', { command: 'ls' });
+    await flush();
+    waiting.abort.abort();
+    await flush();
+    expect(waiting.answer()).toBe('deny');
+    expect(h.of('consentHidden')).toHaveLength(0);
+    shown.abort.abort();
+    await flush();
+    expect(shown.answer()).toBe('deny');
+    expect(h.of('consentHidden')).toHaveLength(1);
+    // The aborted one that was waiting is not shown after the first goes.
+    expect(h.of('consent')).toHaveLength(1);
+    expect(h.liveTimers()).toBe(0);
+
+    const gone = new AbortController();
+    gone.abort();
+    expect(await h.runner.askAgent(info(CLAUDE), { tool: 'Edit', input: EDIT }, gone.signal)).toBe('deny');
+    expect(h.of('consent')).toHaveLength(1);
+  });
+
+  it('answers deny to every card of the agent on a new ask', async () => {
+    const h = harness();
+    const shown = agentAsk(h, 'Edit', EDIT);
+    const waiting = agentAsk(h, 'Bash', { command: 'ls' });
+    await flush();
+    h.runner.cancel();
+    await flush();
+    expect(shown.answer()).toBe('deny');
+    expect(waiting.answer()).toBe('deny');
+    expect(h.of('consentHidden')).toHaveLength(1);
+    expect(h.liveTimers()).toBe(0);
   });
 });

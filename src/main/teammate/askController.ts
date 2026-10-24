@@ -25,7 +25,8 @@ import {
 } from '../../shared/teammate/settings';
 import { threadAction } from '../../shared/teammate/threads';
 import {
-  applyLimits, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall, type ToolDef,
+  CONSENT_TOOL, applyLimits, parseConsent, parseToolCall, toolDefs, type ActionCall, type Target, type ToolCall,
+  type ToolDef,
 } from '../../shared/teammate/tools';
 import type { BubbleState, CardState, MateAction, MateView, PutState } from '../../shared/teammateIpc';
 import type { BridgeHandler } from '../mcp/bridgeServer';
@@ -68,7 +69,7 @@ export interface AskDeps {
   now: () => number;
   usage: (u: { input: number; output: number }) => void;
   /** Carries out the copy, event, paste, fill and open calls; without it they are dropped. */
-  actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described' | 'put'> & Pick<EventEmitter, 'on'>;
+  actions?: Pick<ActionRunner, 'take' | 'cancel' | 'described' | 'put' | 'askAgent'> & Pick<EventEmitter, 'on'>;
   /** The cursor in physical px: a reply in a thread opened from History asks there (no cursor: it does nothing). */
   cursor?: () => Point;
   /** Makes, reads, writes and deletes an ask's capture folder; the file system by default. */
@@ -108,6 +109,9 @@ const DONE: Part[] = [{ text: 'Done.' }];
 /** A paste, fill, event or open waits for the user's consent or the form preview: not done yet. */
 const ASKED: Part[] = [{ text: 'Asked the user; it happens if they agree.' }];
 const NOT_AVAILABLE: Part[] = [{ text: 'Not available.' }];
+/** What Claude Code is told when the user said no, or the card timed out, or the ask ended. */
+const DECLINED = 'The user declined in lolPing.';
+const INVALID_CONSENT = 'Refused: the permission request was not valid.';
 const INVALID: Part[] = [{ text: 'Ignored: the arguments were not valid.' }];
 const OVER_LIMIT: Part[] = [{
   text: 'Ignored: an answer has at most 6 pings, 1 emote, 1 paste, 1 fill, 1 event and 3 opens.',
@@ -223,6 +227,11 @@ const toolsFor = (run: Run, ctx: AskContext): ToolDef[] => toolDefs({
   emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id),
   kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0, selection: (ctx.system?.selection ?? '') !== '',
 });
+
+/** Whether the preset's permission prompts come to lolPing's `consent` tool (Claude Code only). */
+const asksConsent = (profile: AgentProfile): boolean => (
+  profile.preset !== 'custom' && AGENT_PRESETS[profile.preset].consent
+);
 
 /** An agent's answer is what it drew, whatever its exit code says. */
 const drew = (run: Run): boolean => run.line !== '' || run.markdown.length > 0 || run.marks.length > 0;
@@ -502,8 +511,7 @@ export class AskController extends EventEmitter {
     const run = this.agentRun(ask);
     const agent = run?.agent;
     if (!run || !agent) return { content: ASK_OVER, isError: true };
-    // Claude Code's permission prompts: consent cards come to agents later, until then the answer is no.
-    if (name === 'consent') return { content: NOT_AVAILABLE.map(bridgeContent), isError: true };
+    if (name === 'consent') return this.agentConsent(run, args);
     this.received(run); // an agent that calls without listing has the tools all the same
     run.machine.answering();
     const offered = new Set(agent.tools.map((d) => d.name));
@@ -513,6 +521,24 @@ export class AskController extends EventEmitter {
     const step = await this.play(run, [raw], offered, false);
     const content = step.results[0]?.content ?? DONE;
     return { content: content.map(bridgeContent), isError: REFUSED.has(content) };
+  }
+
+  /**
+   * Claude Code's permission prompt, asked of the user on a consent card. The reply is the text Claude Code reads
+   * (spec §16), and a decline is an answer, not an error.
+   */
+  private async agentConsent(run: Run, args: unknown): Promise<{ content: BridgeContent[]; isError: boolean }> {
+    if (!run.profile || run.profile.kind !== 'agent' || !asksConsent(run.profile)) {
+      return { content: NOT_AVAILABLE.map(bridgeContent), isError: true };
+    }
+    this.received(run);
+    const req = parseConsent(args);
+    const actions = this.deps.actions;
+    const answer = req && actions ? await actions.askAgent(this.runInfo(run), req, run.abort.signal) : 'deny';
+    const reply = answer === 'allow' && req
+      ? { behavior: 'allow', updatedInput: req.input }
+      : { behavior: 'deny', message: req ? DECLINED : INVALID_CONSENT };
+    return { content: [{ text: JSON.stringify(reply) }], isError: false };
   }
 
   /** A thread opened from History has no spot of its own: its reply asks at the cursor. */
@@ -684,7 +710,7 @@ export class AskController extends EventEmitter {
       file: ctx.file?.doc.name ?? null, selection: ctx.system?.selection ?? '',
     }));
     if (!this.alive(run)) return;
-    run.agent = { token, tools: toolsFor(run, ctx) };
+    run.agent = { token, tools: [...toolsFor(run, ctx), ...(asksConsent(profile) ? [CONSENT_TOOL] : [])] };
     const spec: AgentRunSpec = {
       prompt: agentPrompt(run.dir), askDir: run.dir, bridge, resume: resume?.session ?? null,
       // dsh reads its patch as YAML; every other preset that takes a file reads JSON.
@@ -890,8 +916,9 @@ export class AskController extends EventEmitter {
   private runInfo(run: Run): RunInfo {
     const focus = run.system?.focus ?? null;
     run.info ??= {
-      id: run.machine.id, profileId: run.profile?.id ?? '', tag: run.tag, app: run.app, window: run.window,
-      lang: run.lang, spot: run.spot.phys, at: this.deps.overlay.toDip(run.spot.phys) ?? this.deps.overlay.primaryDip(),
+      id: run.machine.id, profileId: run.profile?.id ?? '', profileName: run.profile?.name ?? '', tag: run.tag,
+      app: run.app, window: run.window, lang: run.lang, spot: run.spot.phys,
+      at: this.deps.overlay.toDip(run.spot.phys) ?? this.deps.overlay.primaryDip(),
       box: run.box,
       focus: focus ? { kind: focus.kind, label: focus.label, value: focus.value, secure: focus.secure } : null,
       selection: run.system?.selection ?? '', fields: run.fields,

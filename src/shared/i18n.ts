@@ -53,6 +53,11 @@ const enMateUi = {
   consentReplace: (app: string) => `Replace the selected text in ${app}?`,
   consentEvent: 'Add this event to your calendar?',
   consentOpen: 'Open this link?',
+  /** What a coding agent asks the user before it edits, runs, opens or uses something. */
+  agentEdit: (agent: string, file: string) => `${agent} wants to edit ${file}`,
+  agentRun: (agent: string) => `${agent} wants to run a command`,
+  agentOpen: (agent: string, url: string) => `${agent} wants to open ${url}`,
+  agentUse: (agent: string, tool: string) => `${agent} wants to use ${tool}`,
   allowOnce: 'Allow once',
   alwaysAllow: 'Always allow',
   decline: 'Decline',
@@ -99,6 +104,10 @@ const enMateUi = {
     `Filled ${filled === 1 ? '1 field' : `${filled} fields`}${left > 0 ? `, left ${left}` : ''}`,
   didEvent: 'Made a calendar event',
   didOpen: 'Opened a link',
+  didAgentEdit: (agent: string, file: string) => `Allowed ${agent} to edit ${file}`,
+  didAgentRun: (agent: string) => `Allowed ${agent} to run a command`,
+  didAgentOpen: (agent: string, url: string) => `Allowed ${agent} to open ${url}`,
+  didAgentUse: (agent: string, tool: string) => `Allowed ${agent} to use ${tool}`,
 };
 
 /** What a file's sections are: PDF pages, slides, sheets, or parts of a text or Word file. */
@@ -1001,6 +1010,10 @@ const zh: Strings = {
       consentReplace: (app: string) => `替换 ${app} 里选中的文字？`,
       consentEvent: '把这个日程加到日历？',
       consentOpen: '打开这个链接？',
+      agentEdit: (agent: string, file: string) => `${agent} 想编辑 ${file}`,
+      agentRun: (agent: string) => `${agent} 想运行一个命令`,
+      agentOpen: (agent: string, url: string) => `${agent} 想打开 ${url}`,
+      agentUse: (agent: string, tool: string) => `${agent} 想使用 ${tool}`,
       allowOnce: '允许一次',
       alwaysAllow: '总是允许',
       decline: '拒绝',
@@ -1040,6 +1053,10 @@ const zh: Strings = {
       didFill: (filled: number, left: number) => `填写了 ${filled} 个字段${left > 0 ? `，留下 ${left} 个` : ''}`,
       didEvent: '生成了一个日程',
       didOpen: '打开了一个链接',
+      didAgentEdit: (agent: string, file: string) => `允许 ${agent} 编辑 ${file}`,
+      didAgentRun: (agent: string) => `允许 ${agent} 运行一个命令`,
+      didAgentOpen: (agent: string, url: string) => `允许 ${agent} 打开 ${url}`,
+      didAgentUse: (agent: string, tool: string) => `允许 ${agent} 使用 ${tool}`,
     },
     ask: {
       failed: {

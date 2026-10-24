@@ -19,7 +19,8 @@ const useStyles = makeStyles({
     rowGap: '8px',
   },
   head: { display: 'flex', alignItems: 'center', columnGap: '8px', minWidth: 0 },
-  text: { fontWeight: tokens.fontWeightSemibold },
+  /** An agent's question can hold a long path or address with no spaces to break at. */
+  text: { fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere' },
   /** What will be pasted: quiet, and scrollable with the wheel when it is long. */
   detail: {
     maxHeight: '96px',
