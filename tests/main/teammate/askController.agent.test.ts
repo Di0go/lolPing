@@ -485,6 +485,17 @@ describe('AskController with an agent', () => {
     expect(h.lines()).toEqual(['Couldn’t start claude']);
   });
 
+  it('says the working folder is gone when it is', async () => {
+    const h = harness({ startThrows: new AgentStartError('noFolder', 'no folder') });
+    h.ctl.ask(spot('danger'));
+    await flush();
+    expect(h.lines()).toEqual(['The folder lolPing isn’t there any more.']);
+    const zh = harness({ startThrows: new AgentStartError('noFolder', 'no folder'), lang: 'zh-CN' });
+    zh.ctl.ask(spot('danger'));
+    await flush();
+    expect(zh.lines()).toEqual(['文件夹 lolPing 已经不在了。']);
+  });
+
   it('asks for a restart when lolPing\'s agent connection isn\'t open', async () => {
     for (const opts of [{ bridgeDown: true }, { noAgents: true }]) {
       const h = harness(opts);

@@ -29,7 +29,7 @@ export interface AgentRun {
 }
 
 export class AgentStartError extends Error {
-  constructor(readonly kind: 'notFound' | 'spawn', message: string) {
+  constructor(readonly kind: 'notFound' | 'noFolder' | 'spawn', message: string) {
     super(message);
     this.name = 'AgentStartError';
   }
@@ -70,6 +70,15 @@ export function isExecutable(p: string): boolean {
     if (!statSync(p).isFile()) return false;
     if (platformOf(process.platform) !== 'win') accessSync(p, constants.X_OK);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A folder that is there: a missing working folder would fail the spawn as if the command were broken. */
+function isFolder(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
   } catch {
     return false;
   }
@@ -116,6 +125,7 @@ export class AgentRunner {
   async start(p: AgentProfile, spec: AgentRunSpec, cwd: string, env: NodeJS.ProcessEnv): Promise<AgentRun> {
     const { platform } = this.deps;
     const preset = p.preset === 'custom' ? null : AGENT_PRESETS[p.preset];
+    if (!isFolder(cwd)) throw new AgentStartError('noFolder', `${cwd} is not a folder`);
     const file = findExecutable(p.command, {
       PATH: envValue(env, 'PATH', platform) ?? '', PATHEXT: envValue(env, 'PATHEXT', platform),
     }, platform, isExecutable);

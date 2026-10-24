@@ -205,6 +205,19 @@ describe('AgentRunner', () => {
     expect(written).toEqual([]);
   });
 
+  it('throws noFolder for a working folder that is not there, before it starts anything', async () => {
+    await placeholder('claude');
+    const { runner, calls, written } = spyRunner();
+    const p = profile({ preset: 'claude', command: 'claude' });
+    const gone = path.join(dir, 'gone');
+    await expect(runner.start(p, spec(), gone, { PATH: dir })).rejects.toMatchObject({ kind: 'noFolder' });
+    const file = path.join(dir, 'a-file');
+    await writeFile(file, '');
+    await expect(runner.start(p, spec(), file, { PATH: dir })).rejects.toMatchObject({ kind: 'noFolder' });
+    expect(calls).toEqual([]);
+    expect(written).toEqual([]);
+  });
+
   it('throws spawn when the process fails to start', async () => {
     await placeholder('claude');
     const { runner } = spyRunner(true);

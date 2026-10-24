@@ -830,7 +830,8 @@ export class AskController extends EventEmitter {
     } catch (err) {
       if (!(err instanceof AgentStartError) || !this.alive(run)) throw err;
       const { command } = profile;
-      const line = err.kind === 'notFound' ? words.agent.notFound(command) : words.agent.noStart(command);
+      const line = err.kind === 'notFound' ? words.agent.notFound(command)
+        : err.kind === 'noFolder' ? words.agent.noFolder(baseName(cwd)) : words.agent.noStart(command);
       return this.fail(run, 'agentStart', line);
     }
     // A cancel, a new ask, Stop, a deadline or a failure ends the agent and everything it started.

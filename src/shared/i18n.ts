@@ -147,6 +147,8 @@ interface MateAskText {
     /** No tools/list within 10 s; for an agent that reads its own MCP settings, where lolPing goes (null: unnamed). */
     notConnected: (name: string) => string;
     addLolPing: (where: string | null) => string;
+    /** The working folder (a fixed one, or where the thread's session was) is gone. */
+    noFolder: (name: string) => string;
   };
 }
 
@@ -194,6 +196,7 @@ const enMateAsk: MateAskText = {
     stopped: (name) => `${name} stopped without answering.`,
     notConnected: (name) => `${name} didn’t connect to lolPing within 10 seconds.`,
     addLolPing: (where) => ` Check that lolPing is in ${where ?? 'its MCP settings'}.`,
+    noFolder: (name) => `The folder ${name} isn’t there any more.`,
   },
 };
 
@@ -1214,6 +1217,7 @@ const zh: Strings = {
         error: (name, line) => `${name}: ${line}`,
         stopped: (name) => `${name} 没有回答就停止了。`,
         notConnected: (name) => `${name} 在 10 秒内没有连接到 lolPing。`,
+        noFolder: (name) => `文件夹 ${name} 已经不在了。`,
         addLolPing: (where) => (where === null ? '请检查它的 MCP 设置里是否加了 lolPing。' : `请检查 ${where} 里是否加了 lolPing。`),
       },
     },
