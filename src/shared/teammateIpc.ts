@@ -51,6 +51,8 @@ export interface CardState {
   streaming: boolean;
   footer: { profile: string; model: string; route: string; tokens: number | null; used: string[] };
   put: PutState;
+  /** An agent's unprompted answer: no reply box and no Whole picture, which would ask the user's own teammate. */
+  answerOnly?: boolean;
 }
 
 /** One thread in the History window's list. */

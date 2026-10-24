@@ -221,6 +221,18 @@ describe('AskController visitors', () => {
     ]);
   });
 
+  it('shows the card of an agent with its answer only, and asks the user teammate nothing from it', async () => {
+    const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
+    await h.ctl.visitorCall({ name: 'x' }, 'answer', { markdown: 'Agent answer.' });
+    expect(h.cards.at(-1)?.answerOnly).toBe(true);
+    h.ctl.onTeammateAction('card', { t: 'reply', text: 'why?' });
+    h.ctl.onTeammateAction('card', { t: 'deep' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.ctl.running).toBe(false);
+    expect(h.appends).toEqual([]);
+    expect(h.cards.at(-1)?.entries.map((e) => e.markdown)).toEqual(['Agent answer.']);
+  });
+
   it('keeps an unprompted answer out of history and out of the current thread', async () => {
     const h = harness();
     await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'hi' });

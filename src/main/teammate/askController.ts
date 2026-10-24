@@ -471,11 +471,12 @@ export class AskController extends EventEmitter {
         this.hideCard();
         this.viewed = null;
         break;
+      // An agent's card has neither: they would ask the user's own teammate about the agent's answer.
       case 'reply':
-        if (run) this.ask({ ...run.spot, intent: 'generic' }, { text: a.text, newThread: false });
+        if (run && !run.visitor) this.ask({ ...run.spot, intent: 'generic' }, { text: a.text, newThread: false });
         break;
       case 'deep':
-        if (run) this.ask({ ...run.spot, intent: 'allin' });
+        if (run && !run.visitor) this.ask({ ...run.spot, intent: 'allin' });
         break;
       case 'put':
         // The click is the consent; the runner checks it belongs to the action it has for this ask.
@@ -1299,6 +1300,7 @@ export class AskController extends EventEmitter {
         ],
       },
       put: run.visitor ? null : this.put,
+      ...(run.visitor ? { answerOnly: true } : {}),
     };
   }
 

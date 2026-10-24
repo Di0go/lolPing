@@ -250,8 +250,8 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
           })}
         </div>
         {/* The put button is last: its arrival moves none of the others from under the pointer. */}
-        <div className={st.buttons}>{cardButtons(put).map(button)}</div>
-        <Input
+        <div className={st.buttons}>{cardButtons(put, s.answerOnly).map(button)}</div>
+        {!s.answerOnly && <Input
           className={st.reply}
           size="small"
           placeholder={t.reply}
@@ -264,7 +264,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
           contentAfter={
             <Button size="small" appearance="transparent" icon={<Send16Regular />} aria-label={t.send} onClick={sendReply} />
           }
-        />
+        />}
         <Caption1 className={st.footer}>{footerText(s.footer, t)}</Caption1>
       </FluentCard>
     </div>

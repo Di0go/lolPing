@@ -63,6 +63,10 @@ describe('cardText', () => {
     expect(cardButtons('Fill')).toEqual(['copy', 'deep', 'history', 'put']);
   });
 
+  it('leaves Whole picture off a card that shows an answer only', () => {
+    expect(cardButtons(null, true)).toEqual(['copy', 'history']);
+  });
+
   it('ignores a put click that comes before the button has been there 400 ms', () => {
     let now = 1000;
     const guard = new PutGuard(() => now);

@@ -39,9 +39,9 @@ export function bubbleButtons(more: boolean, put: string | null): ('more' | 'put
   return [...(more ? ['more' as const] : []), ...(put ? ['put' as const] : [])];
 }
 
-/** The card's buttons in order, the put button last for the same reason. */
-export function cardButtons(put: string | null): ('copy' | 'deep' | 'history' | 'put')[] {
-  return ['copy', 'deep', 'history', ...(put ? ['put' as const] : [])];
+/** The card's buttons in order, the put button last for the same reason; `answerOnly` drops Whole picture. */
+export function cardButtons(put: string | null, answerOnly = false): ('copy' | 'deep' | 'history' | 'put')[] {
+  return ['copy', ...(answerOnly ? [] : ['deep' as const]), 'history', ...(put ? ['put' as const] : [])];
 }
 
 /** A put button this new may have appeared under a click meant for something else: that click is not consent. */
