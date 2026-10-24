@@ -52,6 +52,7 @@ interface Options {
   noAgents?: boolean;
   /** What the user does with a permission prompt: the default is Allow once; 'wait' leaves it until the ask ends. */
   consent?: 'allow' | 'deny' | 'wait';
+  lang?: 'en' | 'zh-CN';
 }
 
 function harness(opts: Options = {}) {
@@ -121,7 +122,7 @@ function harness(opts: Options = {}) {
   const deps: AskDeps = {
     settings: () => settings,
     enabled: () => true,
-    lang: () => 'en',
+    lang: () => opts.lang ?? 'en',
     secrets: { available: () => true, key: () => null, instructions: () => '' },
     context: {
       foreground: async () => opts.foreground ?? VSCODE,
@@ -280,8 +281,28 @@ describe('AskController with an agent', () => {
     await vi.advanceTimersByTimeAsync(9_999);
     expect(h.ctl.running).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
-    expect(h.lines()).toEqual([t.ask.failed.notReceived]);
+    expect(h.lines()).toEqual(['Claude Code didn’t connect to lolPing within 10 seconds.']);
     expect(h.started[0].kills).toBe(1);
+  });
+
+  it('says where to add lolPing when an agent that reads its own MCP settings does not connect', async () => {
+    const lines = async (preset: AgentProfile['preset'], lang: 'en' | 'zh-CN' = 'en'): Promise<string | undefined> => {
+      const h = harness({ teammate: { profiles: [agent({ preset, name: 'Mine' })], defaultProfile: 'cc' }, lang });
+      h.ctl.ask(spot('danger'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(10_000);
+      return h.lines().at(-1);
+    };
+    expect(await lines('cursor')).toBe(
+      'Cursor CLI didn’t connect to lolPing within 10 seconds. Check that lolPing is in ~/.cursor/mcp.json.',
+    );
+    expect(await lines('qoder')).toBe(
+      'Qoder CLI didn’t connect to lolPing within 10 seconds. Check that lolPing is in its MCP settings.',
+    );
+    expect(await lines('custom')).toBe('Mine didn’t connect to lolPing within 10 seconds.');
+    expect(await lines('cursor', 'zh-CN'))
+      .toBe('Cursor CLI 在 10 秒内没有连接到 lolPing。请检查 ~/.cursor/mcp.json 里是否加了 lolPing。');
+    expect(await lines('qoder', 'zh-CN')).toBe('Qoder CLI 在 10 秒内没有连接到 lolPing。请检查它的 MCP 设置里是否加了 lolPing。');
   });
 
   it('draws an agent\'s say, ping and answer like a model\'s', async () => {

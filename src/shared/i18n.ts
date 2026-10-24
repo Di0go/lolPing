@@ -144,6 +144,9 @@ interface MateAskText {
     noBridge: string;
     error: (name: string, line: string) => string;
     stopped: (name: string) => string;
+    /** No tools/list within 10 s; for an agent that reads its own MCP settings, where lolPing goes (null: unnamed). */
+    notConnected: (name: string) => string;
+    addLolPing: (where: string | null) => string;
   };
 }
 
@@ -189,6 +192,8 @@ const enMateAsk: MateAskText = {
     noBridge: 'lolPing couldn’t open its agent connection. Restart lolPing.',
     error: (name, line) => `${name}: ${line}`,
     stopped: (name) => `${name} stopped without answering.`,
+    notConnected: (name) => `${name} didn’t connect to lolPing within 10 seconds.`,
+    addLolPing: (where) => ` Check that lolPing is in ${where ?? 'its MCP settings'}.`,
   },
 };
 
@@ -1208,6 +1213,8 @@ const zh: Strings = {
         noBridge: 'lolPing 无法打开代理连接，请重启 lolPing。',
         error: (name, line) => `${name}: ${line}`,
         stopped: (name) => `${name} 没有回答就停止了。`,
+        notConnected: (name) => `${name} 在 10 秒内没有连接到 lolPing。`,
+        addLolPing: (where) => (where === null ? '请检查它的 MCP 设置里是否加了 lolPing。' : `请检查 ${where} 里是否加了 lolPing。`),
       },
     },
     settings: {

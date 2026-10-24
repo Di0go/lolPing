@@ -837,15 +837,18 @@ export class AskController extends EventEmitter {
     if (!this.alive(run)) return agentRun.kill();
     run.agentRun = agentRun;
     run.abort.signal.addEventListener('abort', () => agentRun.kill(), { once: true });
-    // Spec §16: an agent lists the tools about 2 s after it starts.
+    const name = profile.preset === 'custom' ? profile.name : AGENT_PRESETS[profile.preset].name;
+    // Spec §16: an agent lists the tools about 2 s after it starts. One with its own MCP settings may lack lolPing.
     this.deadline(run, RECEIVE_MS, () => {
-      if (run.machine.phase === 'sent') this.fail(run, 'notReceived');
+      if (run.machine.phase !== 'sent') return;
+      const preset = profile.preset === 'custom' ? null : AGENT_PRESETS[profile.preset];
+      const where = preset?.mcp === 'user' ? words.agent.addLolPing(preset.userConfig ?? null) : '';
+      this.fail(run, 'notReceived', words.agent.notConnected(name) + where);
     });
 
     const result = await agentRun.done;
     if (!this.alive(run)) return;
     if (!drew(run)) {
-      const name = profile.preset === 'custom' ? profile.name : AGENT_PRESETS[profile.preset].name;
       const error = result.error?.trim() ?? '';
       return this.fail(run, 'agent', error
         ? words.agent.error(name, error.slice(0, AGENT_ERROR_MAX)) : words.agent.stopped(name));
