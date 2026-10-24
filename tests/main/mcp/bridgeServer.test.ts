@@ -264,6 +264,45 @@ describe('BridgeServer', () => {
     });
   });
 
+  it('logs a server error after it is listening instead of throwing', async () => {
+    await server.stop();
+    const made: net.Server[] = [];
+    const real = net.createServer;
+    const spy = vi.spyOn(net, 'createServer').mockImplementation(((...a: Parameters<typeof net.createServer>) => {
+      const s = real(...a);
+      made.push(s);
+      return s;
+    }) as typeof net.createServer);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      server = make();
+      await server.start();
+      expect(made).toHaveLength(1);
+      expect(() => made[0]?.emit('error', new Error('EMFILE'))).not.toThrow();
+      expect(warn).toHaveBeenCalledWith('[teammate] bridge:', expect.any(Error));
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('answers with an error result when the result cannot be sent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // A getter that throws makes JSON.stringify of the result fail.
+    const bad = { get text(): string { throw new Error('no'); } };
+    callImpl = async () => ({ content: [bad], isError: false });
+    try {
+      const c = await connect();
+      c.send(hello(token()));
+      c.send({ t: 'call', id: 5, name: 'look', args: {} });
+      expect(await c.line(0)).toEqual({
+        t: 'result', id: 5, content: [{ text: 'lolPing failed to run that.' }], isError: true,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('counts open connections, with or without hello', async () => {
     expect(server.connections).toBe(0);
     const a = await connect();

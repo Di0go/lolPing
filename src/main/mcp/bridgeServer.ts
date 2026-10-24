@@ -145,6 +145,8 @@ export class BridgeServer {
         resolve();
       });
     });
+    // Without a listener a later error, such as EMFILE on accept, would be an uncaught exception in main.
+    server.on('error', (err) => console.warn('[teammate] bridge:', err));
     this.server = server;
     if (posix) await chmod(this.deps.path, 0o600);
   }
@@ -203,7 +205,15 @@ export class BridgeServer {
       this.aborts.add(abort);
       void Promise.resolve().then(() => this.deps.handler.call(s, m.name, m.args, abort.signal))
         .then(
-          (r) => send({ t: 'result', id: m.id, content: r.content, isError: r.isError }),
+          (r) => {
+            try {
+              send({ t: 'result', id: m.id, content: r.content, isError: r.isError });
+            } catch (err) {
+              // A result that can't be encoded still answers the call, so the agent isn't left waiting.
+              console.warn('[teammate] bridge:', err);
+              send({ t: 'result', id: m.id, content: FAILED_CALL, isError: true });
+            }
+          },
           () => send({ t: 'result', id: m.id, content: FAILED_CALL, isError: true }),
         )
         .finally(() => {
