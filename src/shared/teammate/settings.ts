@@ -116,7 +116,8 @@ const MAX_ARG_LINES = 40;
 const RULE_FIELD_MAX = 200;
 const TIMEOUT_MIN_S = 30;
 const TIMEOUT_MAX_S = 1800;
-const TIMEOUT_DEFAULT_S = 300;
+/** An agent profile's time limit when the settings file has none, and a new profile's. */
+export const TIMEOUT_DEFAULT_S = 300;
 export const INTENT_LABEL_MAX = 40;
 export const INTENT_INSTRUCTION_MAX = 2000;
 export const TAG_NAME_MAX = 12;

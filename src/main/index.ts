@@ -57,7 +57,7 @@ import { ActionRunner } from './teammate/actions';
 import { captureOutput, checkAgent } from './teammate/agents/check';
 import { findExecutable, userPath, withPath } from './teammate/agents/command';
 import { launchTerminal } from './teammate/agents/openInTerminal';
-import { AgentRunner, envValue, isExecutable, killProcessTree } from './teammate/agents/runner';
+import { AgentRunner, isExecutable, killProcessTree, searchPath } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
 import { installedEditors } from './teammate/editors';
@@ -748,9 +748,7 @@ function start(): void {
     const args = profile && session ? resumeArgs(profile, session.session) : null;
     if (!session || !profile || !args) return true; // nothing the History window offered: not a failure to report
     const env = await userEnv();
-    const file = findExecutable(profile.command, {
-      PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
-    }, PLATFORM, isExecutable);
+    const file = findExecutable(profile.command, searchPath(env, PLATFORM), PLATFORM, isExecutable);
     const opened = file !== null && isDirectory(session.cwd)
       && await launchTerminal({ spawn, platform: PLATFORM, cwd: session.cwd, file, args, env });
     if (!opened) historyOpenFailed = profile.name;
@@ -887,7 +885,7 @@ function start(): void {
             });
           },
         },
-        env: async () => withPath(process.env, await userPath(PLATFORM, runForOutput), PLATFORM),
+        env: userEnv,
         home: () => app.getPath('home'),
         platform: PLATFORM,
       },
@@ -1095,11 +1093,9 @@ function start(): void {
         if (IS_MAC) void shell.openExternal(SCREEN_RECORDING_PANE);
       },
       checkAgent: async (p) => {
-        const env = withPath(process.env, await userPath(PLATFORM, runForOutput), PLATFORM);
+        const env = await userEnv();
         return checkAgent(p, {
-          find: (command) => findExecutable(command, {
-            PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
-          }, PLATFORM, isExecutable),
+          find: (command) => findExecutable(command, searchPath(env, PLATFORM), PLATFORM, isExecutable),
           run: captureOutput({ spawn, platform: PLATFORM, killTree: killProcessTree(PLATFORM), env: () => env }),
         });
       },
@@ -1123,7 +1119,7 @@ function start(): void {
         return installedEditors({
           platform: PLATFORM,
           env: {
-            PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
+            ...searchPath(env, PLATFORM),
             LOCALAPPDATA: process.env.LOCALAPPDATA, ProgramFiles: process.env.ProgramFiles,
           },
           home: app.getPath('home'), exists: isExecutable, list: listDir,

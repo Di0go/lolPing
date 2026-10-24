@@ -1,7 +1,6 @@
 import { AGENT_PRESETS, type AgentPresetId } from './agents';
-import { MAX_FOLDERS, PATH_MAX, type AgentProfile, type Profile } from './settings';
+import { MAX_FOLDERS, PATH_MAX, TIMEOUT_DEFAULT_S, type AgentProfile, type Profile } from './settings';
 
-const TIMEOUT_DEFAULT_S = 300;
 const TIMEOUT_MIN_MINUTES = 1;
 const TIMEOUT_MAX_MINUTES = 30;
 /** What a new custom command runs until the user types theirs: settings keep no profile with an empty command. */

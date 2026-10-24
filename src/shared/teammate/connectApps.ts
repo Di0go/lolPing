@@ -1,5 +1,6 @@
 import type { Platform } from '../platform';
 import { dshInsertRows } from './agents';
+import { posixQuote, tomlKey, tomlString } from './quote';
 
 /** How lolPing's bridge starts: the app's executable as Node, with bridge.js. */
 export interface BridgeCommand {
@@ -66,27 +67,20 @@ export function mcpServersJson(b: BridgeCommand): string {
   return JSON.stringify({ mcpServers: { lolping: b } }, null, 2);
 }
 
-// A TOML basic string is a JSON string for everything a path or an id can hold.
-const toml = (v: string): string => JSON.stringify(v);
-const tomlKey = (k: string): string => (/^[A-Za-z0-9_-]+$/.test(k) ? k : toml(k));
-
 function tomlTable(b: BridgeCommand): string {
-  const env = Object.entries(b.env).map(([k, v]) => `${tomlKey(k)} = ${toml(v)}`);
+  const env = Object.entries(b.env).map(([k, v]) => `${tomlKey(k)} = ${tomlString(v)}`);
   return [
     '[mcp_servers.lolping]',
-    `command = ${toml(b.command)}`,
-    `args = [${b.args.map(toml).join(', ')}]`,
+    `command = ${tomlString(b.command)}`,
+    `args = [${b.args.map(tomlString).join(', ')}]`,
     ...(env.length === 0 ? [] : ['', '[mcp_servers.lolping.env]', ...env]),
     '',
   ].join('\n');
 }
 
-// Goose splits the command field shell-style on every platform; single quotes keep Windows backslashes as they are.
-const singleQuoted = (v: string): string => `'${v.replace(/'/g, '\'\\\'\'')}'`;
-
 /** One word of a command typed into the user's shell: PowerShell and cmd on Windows, a POSIX shell elsewhere. */
 function shellWord(platform: Platform, v: string): string {
-  if (platform !== 'win') return /^[\w@%+=:,./-]+$/.test(v) ? v : singleQuoted(v);
+  if (platform !== 'win') return /^[\w@%+=:,./-]+$/.test(v) ? v : posixQuote(v);
   if (/^[\w@+=:,./\\-]+$/.test(v)) return v;
   // Backslashes double only before a quote, and at the end where the closing quote follows.
   return `"${v.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
@@ -113,8 +107,9 @@ export function connectSnippet(shape: ConnectShape, b: BridgeCommand, platform: 
     case 'dshPatch':
       return [...dshInsertRows(b), ''].join('\n');
     case 'gooseLine': {
+      // Goose splits the command field shell-style on every platform; single quotes keep Windows backslashes.
       const vars = envPairs(b);
-      return [[b.command, ...b.args].map(singleQuoted).join(' '), ...(vars.length > 0 ? ['', envLabel, ...vars] : [])]
+      return [[b.command, ...b.args].map(posixQuote).join(' '), ...(vars.length > 0 ? ['', envLabel, ...vars] : [])]
         .join('\n');
     }
     case 'claudeCodeLine':

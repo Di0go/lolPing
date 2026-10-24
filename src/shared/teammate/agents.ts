@@ -1,3 +1,5 @@
+import { posixQuote, tomlKey, tomlString } from './quote';
+
 export const AGENT_PRESET_IDS = [
   'claude', 'dsh', 'codex', 'gemini', 'qwen', 'copilot', 'cursor', 'opencode', 'kimi', 'auggie', 'goose', 'droid',
   'qoder', 'kiro',
@@ -127,16 +129,10 @@ function settingsConfig(s: AgentRunSpec): string {
 
 const withResume = (s: AgentRunSpec, flag: string[]): string[] => (s.resume === null ? [] : [...flag, s.resume]);
 
-// A TOML basic string is a JSON string for everything a path or an id can hold.
-const toml = (v: string): string => JSON.stringify(v);
-
 function tomlTable(env: Record<string, string>): string {
-  const pairs = Object.entries(env).map(([k, v]) => `${/^[A-Za-z0-9_-]+$/.test(k) ? k : toml(k)} = ${toml(v)}`);
+  const pairs = Object.entries(env).map(([k, v]) => `${tomlKey(k)} = ${tomlString(v)}`);
   return pairs.length === 0 ? '{}' : `{ ${pairs.join(', ')} }`;
 }
-
-// Goose reads the extension as one shell-style line; single quotes keep Windows backslashes as they are.
-const shellQuote = (v: string): string => `'${v.replace(/'/g, '\'\\\'\'')}'`;
 
 const yamlString = (v: string): string => `'${v.replace(/'/g, '\'\'')}'`;
 
@@ -241,7 +237,7 @@ export const AGENT_PRESETS: Readonly<Record<AgentPresetId, AgentPreset>> = {
     // Codex has no config-file flag, so the bridge goes in as -c overrides; options come before `resume`.
     args: (s) => [
       'exec', '--json', '--skip-git-repo-check',
-      '-c', `mcp_servers.lolping.command=${toml(s.bridge.command)}`,
+      '-c', `mcp_servers.lolping.command=${tomlString(s.bridge.command)}`,
       '-c', `mcp_servers.lolping.args=${JSON.stringify(s.bridge.args)}`,
       '-c', `mcp_servers.lolping.env=${tomlTable(s.bridge.env)}`,
       ...(s.resume === null ? [] : ['resume', s.resume]), s.prompt,
@@ -319,8 +315,9 @@ export const AGENT_PRESETS: Readonly<Record<AgentPresetId, AgentPreset>> = {
     // Goose can't take env through a config, so its extension line carries the bridge's as leading NAME=value words.
     args: (s) => [
       'run', '-t', s.prompt, '--with-extension', [
-        ...Object.entries(s.bridge.env).map(([k, v]) => `${k}=${shellQuote(v)}`),
-        ...[s.bridge.command, ...s.bridge.args].map(shellQuote),
+        // Goose reads the extension as one shell-style line; single quotes keep Windows backslashes as they are.
+        ...Object.entries(s.bridge.env).map(([k, v]) => `${k}=${posixQuote(v)}`),
+        ...[s.bridge.command, ...s.bridge.args].map(posixQuote),
       ].join(' '),
       ...(s.resume === null ? [] : ['-r', '--session-id', s.resume]),
     ],

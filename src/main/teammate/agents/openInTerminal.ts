@@ -1,8 +1,6 @@
 import type { Platform } from '../../../shared/platform';
+import { posixQuote } from '../../../shared/teammate/quote';
 import { cmdLine, forCmd, quoteArgument, system32 } from './command';
-
-/** One word for a POSIX shell: single quotes keep every character as it is. */
-const posixQuote = (v: string): string => `'${v.replace(/'/g, '\'\\\'\'')}'`;
 
 // Terminal types the line into an interactive shell, where Ctrl-U, Esc and the like edit the line instead of being
 // quoted text, so no quoting can make a control character safe.

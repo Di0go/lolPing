@@ -64,6 +64,11 @@ export function envValue(env: NodeJS.ProcessEnv, name: string, platform: Platfor
   return key === undefined ? undefined : env[key];
 }
 
+/** PATH and PATHEXT of `env`, as findExecutable reads them. */
+export function searchPath(env: NodeJS.ProcessEnv, platform: Platform): { PATH: string; PATHEXT?: string } {
+  return { PATH: envValue(env, 'PATH', platform) ?? '', PATHEXT: envValue(env, 'PATHEXT', platform) };
+}
+
 /** A file that can be run: on macOS and Linux it needs the execute bit, so a script or README on PATH isn't taken. */
 export function isExecutable(p: string): boolean {
   try {
@@ -132,9 +137,7 @@ export class AgentRunner {
     const { platform } = this.deps;
     const preset = p.preset === 'custom' ? null : AGENT_PRESETS[p.preset];
     if (!isFolder(cwd)) throw new AgentStartError('noFolder', `${cwd} is not a folder`);
-    const file = findExecutable(p.command, {
-      PATH: envValue(env, 'PATH', platform) ?? '', PATHEXT: envValue(env, 'PATHEXT', platform),
-    }, platform, isExecutable);
+    const file = findExecutable(p.command, searchPath(env, platform), platform, isExecutable);
     if (file === null) throw new AgentStartError('notFound', `Couldn't find ${p.command}`);
 
     // A custom command gets Claude's mcpServers file, the shape most agents read.
