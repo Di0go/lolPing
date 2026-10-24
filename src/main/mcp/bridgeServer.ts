@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { chmod, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -33,32 +33,82 @@ export interface BridgeHandler {
 export interface BridgeServerDeps {
   path: string;
   tokenFile: string;
+  /** The folder the socket sits in when it must be made private first; see bridgeLocation. */
+  privateDir?: string | null;
   handler: BridgeHandler;
   now: () => number;
   random: (n: number) => Buffer;
   writeToken: (file: string, token: string) => Promise<void>;
 }
 
+/** What bridgeLocation reads from the machine; a test passes its own. */
+export interface SocketSurroundings {
+  tmp?: string;
+  /** $XDG_RUNTIME_DIR: on Linux a folder the system makes private to the user. */
+  runtimeDir?: string;
+  /** The user's id; null where there is none, and then the folder is named by a hash. */
+  uid?: number | null;
+}
+
+export interface BridgeLocation {
+  path: string;
+  /** A folder the app must make private (0700, owned by the user) before it listens, or null. */
+  privateDir: string | null;
+}
+
 /**
  * Where the bridge finds the app: a per-user pipe on Windows, a socket in the user's own data folder elsewhere. When
- * that path is too long for a socket, a short one in the temp folder; both sides work it out from the same inputs.
+ * that path is too long for a socket, a short one: in $TMPDIR on macOS (a per-user folder), in $XDG_RUNTIME_DIR on
+ * Linux or else a folder of the user's own in /tmp, which is shared and so is never used for the socket itself.
+ * Both sides work it out from the same inputs.
  */
-export function bridgePath(platform: Platform, userData: string, username: string, tmp: string = tmpdir()): string {
+export function bridgeLocation(platform: Platform, userData: string, username: string, around: SocketSurroundings = {}):
+  BridgeLocation {
   if (platform === 'win') {
     const id = createHash('sha256').update(username).digest('hex').slice(0, PIPE_NAME_HEX);
-    return `\\\\.\\pipe\\lolping-${id}`;
+    return { path: `\\\\.\\pipe\\lolping-${id}`, privateDir: null };
   }
   const inUserData = path.join(userData, 'mcp.sock');
-  if (Buffer.byteLength(inUserData) <= SOCKET_PATH_MAX[platform]) return inUserData;
+  if (Buffer.byteLength(inUserData) <= SOCKET_PATH_MAX[platform]) return { path: inUserData, privateDir: null };
+  const tmp = around.tmp ?? tmpdir();
   const id = createHash('sha256').update(JSON.stringify([username, userData])).digest('hex').slice(0, PIPE_NAME_HEX);
-  return path.join(tmp, `lolping-${id}.sock`);
+  if (platform === 'mac') return { path: path.join(tmp, `lolping-${id}.sock`), privateDir: null };
+  const runtime = 'runtimeDir' in around ? around.runtimeDir : process.env.XDG_RUNTIME_DIR;
+  if (runtime !== undefined && runtime !== '' && path.isAbsolute(runtime)) {
+    return { path: path.join(runtime, `lolping-${id}.sock`), privateDir: null };
+  }
+  const uid = 'uid' in around ? around.uid ?? null : process.getuid?.() ?? null;
+  const dir = path.join(tmp, `lolping-${uid ?? id}`);
+  return { path: path.join(dir, `${id}.sock`), privateDir: dir };
+}
+
+export const bridgePath = (
+  platform: Platform, userData: string, username: string, around?: SocketSurroundings,
+): string => bridgeLocation(platform, userData, username, around).path;
+
+/** Makes `dir` if it isn't there and throws unless it is a real folder owned by `uid` that only `uid` can use. */
+export async function ensurePrivateDir(dir: string, uid: number | null = process.getuid?.() ?? null): Promise<void> {
+  try {
+    await mkdir(dir, { mode: 0o700 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  }
+  // lstat, so a link someone else put there is not followed.
+  const info = await lstat(dir);
+  if (!info.isDirectory() || (uid !== null && info.uid !== uid) || (info.mode & 0o777) !== 0o700) {
+    throw new Error(`${dir} is not a private folder of this user`);
+  }
 }
 
 /** Writes the token so only the user can read it, even over a file an older run left with another mode. */
 export async function writeTokenFile(file: string, token: string): Promise<void> {
+  if (platformOf(process.platform) !== 'win') {
+    // Before the write, so the new token never sits in a file others can read. A write's mode only counts on creation.
+    await chmod(file, 0o600).catch((e: NodeJS.ErrnoException) => {
+      if (e.code !== 'ENOENT') throw e;
+    });
+  }
   await writeFile(file, token, { mode: 0o600 });
-  // A write's mode only counts when it creates the file. Windows has no such mode to set.
-  if (platformOf(process.platform) !== 'win') await chmod(file, 0o600);
 }
 
 const sameToken = (given: string, expected: string): boolean => {
@@ -84,6 +134,7 @@ export class BridgeServer {
     this.token = this.deps.random(TOKEN_BYTES).toString('hex');
     await this.deps.writeToken(this.deps.tokenFile, this.token);
     const posix = platformOf(process.platform) !== 'win';
+    if (posix && this.deps.privateDir) await ensurePrivateDir(this.deps.privateDir);
     // A socket file left by a crashed run would make listen fail with EADDRINUSE.
     if (posix) await rm(this.deps.path, { force: true });
     const server = net.createServer((socket) => this.accept(socket));

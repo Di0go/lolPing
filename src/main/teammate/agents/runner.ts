@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
-import type { Platform } from '../../../shared/platform';
+import { platformOf, type Platform } from '../../../shared/platform';
 import { AGENT_PRESETS, type AgentParsed, type AgentRunSpec } from '../../../shared/teammate/agents';
 import type { AgentProfile } from '../../../shared/teammate/settings';
 import { findExecutable, spawnArgv, system32 } from './command';
@@ -40,6 +40,13 @@ export interface AgentRunnerDeps {
   writeFile: (p: string, text: string) => Promise<void>;
 }
 
+// What the agent itself gets of the bridge's environment; the rest belongs to the bridge process alone.
+const AGENT_BRIDGE_ENV = ['LOLPING_PIPE', 'LOLPING_DATA', 'LOLPING_ASK'];
+
+function agentBridgeEnv(env: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => AGENT_BRIDGE_ENV.includes(k)));
+}
+
 const TOKEN = /\{(prompt|askDir|mcpConfig)\}/g;
 
 /** A custom profile's lines with the placeholders filled; each line stays one argument. */
@@ -59,7 +66,7 @@ export function envValue(env: NodeJS.ProcessEnv, name: string, platform: Platfor
 export function isExecutable(p: string): boolean {
   try {
     if (!statSync(p).isFile()) return false;
-    if (process.platform !== 'win32') accessSync(p, constants.X_OK);
+    if (platformOf(process.platform) !== 'win') accessSync(p, constants.X_OK);
     return true;
   } catch {
     return false;
@@ -118,8 +125,10 @@ export class AgentRunner {
 
     const args = preset === null ? customArgv(p.customArgs, spec) : preset.args(spec);
     const childEnv: NodeJS.ProcessEnv = {
-      ...env, ...preset?.env(spec), ...spec.bridge.env, LOLPING_ASK_DIR: spec.askDir,
+      ...env, ...preset?.env(spec), ...agentBridgeEnv(spec.bridge.env), LOLPING_ASK_DIR: spec.askDir,
     };
+    // lolPing's own node switch would make any Electron app the agent starts run as plain Node.
+    delete childEnv.ELECTRON_RUN_AS_NODE;
     let child: ChildProcess;
     try {
       const argv = spawnArgv(file, args, platform);

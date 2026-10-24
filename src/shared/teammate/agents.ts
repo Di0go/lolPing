@@ -315,9 +315,12 @@ export const AGENT_PRESETS: Readonly<Record<AgentPresetId, AgentPreset>> = {
   },
   goose: {
     id: 'goose', name: 'Goose', bin: 'goose', checked: false, consent: false, mcp: 'run', approvals: 'own',
-    // The extension line can't carry env, so LOLPING_ASK comes through the agent's own environment.
+    // Goose can't take env through a config, so its extension line carries the bridge's as leading NAME=value words.
     args: (s) => [
-      'run', '-t', s.prompt, '--with-extension', [s.bridge.command, ...s.bridge.args].map(shellQuote).join(' '),
+      'run', '-t', s.prompt, '--with-extension', [
+        ...Object.entries(s.bridge.env).map(([k, v]) => `${k}=${shellQuote(v)}`),
+        ...[s.bridge.command, ...s.bridge.args].map(shellQuote),
+      ].join(' '),
       ...(s.resume === null ? [] : ['-r', '--session-id', s.resume]),
     ],
     configFile: noConfig,

@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { BridgeServer, bridgePath } from '../../../src/main/mcp/bridgeServer';
+import { BridgeServer, bridgeLocation, bridgePath } from '../../../src/main/mcp/bridgeServer';
 import { platformOf } from '../../../src/shared/platform';
 import type { ToolDef } from '../../../src/shared/teammate/tools';
 
@@ -19,7 +19,7 @@ const TOOLS: ToolDef[] = [{ name: 'look', description: 'Look at the screen.', pa
 describe('the bridge as a separate process', () => {
   let work = '';
   let script = '';
-  let required: string[] = [];
+  let bundled: string[] = [];
   const cleanup: (() => Promise<void>)[] = [];
 
   beforeAll(async () => {
@@ -29,13 +29,14 @@ describe('the bridge as a separate process', () => {
       entryPoints: [path.resolve('src/main/mcp/bridge.ts')], bundle: true, platform: 'node', format: 'cjs',
       outfile: script, logLevel: 'silent', metafile: true,
     });
-    required = Object.values(built.metafile.outputs).flatMap((o) => o.imports.map((i) => i.path));
+    bundled = Object.keys(built.metafile.inputs);
   }, SLOW);
 
   // An agent starts the bridge with ELECTRON_RUN_AS_NODE, where `require('electron')` is only the path to the binary.
+  // esbuild inlines that package, so it shows up among the inputs, not among the bundle's requires.
   it('needs nothing from Electron', () => {
-    expect(required.filter((r) => r === 'electron' || r.startsWith('electron/'))).toEqual([]);
-    expect(required.length).toBeGreaterThan(0);
+    expect(bundled.filter((f) => f.split(path.sep).join('/').includes('node_modules/electron/'))).toEqual([]);
+    expect(bundled.some((f) => f.endsWith('bridge.ts'))).toBe(true);
   });
 
   afterEach(async () => {
@@ -47,11 +48,12 @@ describe('the bridge as a separate process', () => {
   });
 
   /** Starts the app's end at `listenOn`, with the token in `dataDir`, and returns the tools/call arguments it saw. */
-  async function startApp(dataDir: string, listenOn: string): Promise<{ called: unknown[] }> {
+  async function startApp(dataDir: string, listenOn: string, privateDir: string | null = null):
+    Promise<{ called: unknown[] }> {
     await mkdir(dataDir, { recursive: true });
     const called: unknown[] = [];
     const server = new BridgeServer({
-      path: listenOn, tokenFile: path.join(dataDir, 'mcp-token'), now: Date.now, random: randomBytes,
+      path: listenOn, privateDir, tokenFile: path.join(dataDir, 'mcp-token'), now: Date.now, random: randomBytes,
       writeToken: (file, token) => writeFile(file, token, { mode: 0o600 }),
       handler: {
         hello: () => undefined,
@@ -98,11 +100,13 @@ describe('the bridge as a separate process', () => {
 
   it.runIf(process.platform !== 'win32')('finds the fallback socket when userData is too deep for a socket path', async () => {
     const data = path.join(work, 'd'.repeat(120), 'lolPing');
-    const listenOn = bridgePath(platform, data, os.userInfo().username);
-    expect(listenOn).not.toContain(data);
-    await startApp(data, listenOn);
-    // The client passes only a few variables on; os.tmpdir() reads TMPDIR, and the fallback lives there.
-    const client = await connect({ LOLPING_DATA: data, TMPDIR: os.tmpdir() });
+    const where = bridgeLocation(platform, data, os.userInfo().username);
+    expect(where.path).not.toContain(data);
+    await startApp(data, where.path, where.privateDir);
+    // The client passes only a few variables on, and the fallback depends on these two.
+    const client = await connect({
+      LOLPING_DATA: data, TMPDIR: os.tmpdir(), XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? '',
+    });
     expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['look']);
   }, SLOW);
 });

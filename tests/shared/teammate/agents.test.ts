@@ -215,11 +215,16 @@ describe('agents', () => {
     expect(resumed.filter((a) => a.startsWith('mcp_servers.lolping.'))).toHaveLength(3);
   });
 
-  it('gives goose the bridge as one quoted command line', () => {
-    const argv = AGENT_PRESETS.goose.args(spec());
+  it('gives goose the bridge as one quoted command line, led by the bridge\'s environment as NAME=value words', () => {
+    const bridge = { ...BRIDGE, env: { ELECTRON_RUN_AS_NODE: '1', ...BRIDGE.env, LOLPING_DATA: 'C:\\a b\'s' } };
+    const argv = AGENT_PRESETS.goose.args(spec({ bridge }));
     expect(argv.slice(0, 3)).toEqual(['run', '-t', agentPrompt(ASK_DIR)]);
     expect(argv[3]).toBe('--with-extension');
-    expect(argv[4]).toBe('\'C:\\Program Files\\lolPing\\lolPing.exe\' \'--mcp-bridge\' \'it\'\\\'\'s\'');
+    expect(argv[4]).toBe([
+      'ELECTRON_RUN_AS_NODE=\'1\'', 'LOLPING_ASK=\'ask-1\'', 'LOLPING_PIPE=\'\\\\.\\pipe\\lolping-0123456789abcdef\'',
+      'LOLPING_DATA=\'C:\\a b\'\\\'\'s\'',
+      '\'C:\\Program Files\\lolPing\\lolPing.exe\'', '\'--mcp-bridge\'', '\'it\'\\\'\'s\'',
+    ].join(' '));
     expect(argv).toHaveLength(5);
     expect(AGENT_PRESETS.goose.args(spec({ resume: 'g1' })).slice(5)).toEqual(['-r', '--session-id', 'g1']);
     expect(AGENT_PRESETS.goose.configFile(spec())).toBeNull();

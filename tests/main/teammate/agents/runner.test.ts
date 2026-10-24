@@ -62,7 +62,7 @@ function spec(): AgentRunSpec {
     prompt: agentPrompt(askDir), askDir, mcpConfigPath: path.join(dir, 'mcp.json'),
     bridge: {
       command: process.execPath, args: [path.join(dir, 'app', 'out', 'main', 'index.js'), '--mcp'],
-      env: { LOLPING_PIPE: '\\\\.\\pipe\\lolping-0123', LOLPING_DATA: path.join(dir, 'data'), LOLPING_ASK: 'ask-1.ab' },
+      env: { ELECTRON_RUN_AS_NODE: '1', LOLPING_PIPE: '\\\\.\\pipe\\lolping-0123', LOLPING_DATA: path.join(dir, 'data'), LOLPING_ASK: 'ask-1.ab' },
     },
     resume: null,
   };
@@ -256,10 +256,31 @@ describe('AgentRunner', () => {
       expect(call?.args, id).toEqual(preset.args(s));
       expect(call?.options, id).toMatchObject({
         cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !win, windowsVerbatimArguments: false,
-        env: { PATH: dir, HOME: 'home', ...preset.env(s), ...s.bridge.env, LOLPING_ASK_DIR: s.askDir },
+        env: {
+          PATH: dir, HOME: 'home', ...preset.env(s), LOLPING_PIPE: s.bridge.env.LOLPING_PIPE,
+          LOLPING_DATA: s.bridge.env.LOLPING_DATA, LOLPING_ASK: s.bridge.env.LOLPING_ASK, LOLPING_ASK_DIR: s.askDir,
+        },
       });
       const config = preset.configFile(s);
       expect(written, id).toEqual(config === null ? [] : [[s.mcpConfigPath, config]]);
+    }
+  });
+
+  it('keeps ELECTRON_RUN_AS_NODE out of the environment of every agent', async () => {
+    const s = spec();
+    expect(s.bridge.env.ELECTRON_RUN_AS_NODE).toBe('1');
+    for (const id of AGENT_PRESET_IDS) {
+      const preset = AGENT_PRESETS[id];
+      await placeholder(preset.bin);
+      const { runner, calls } = spyRunner();
+      // Even a switch lolPing was itself started with doesn't reach the agent.
+      await runner.start(profile({ preset: id, command: preset.bin }), s, dir, { PATH: dir, ELECTRON_RUN_AS_NODE: '1' });
+      const env = calls[0]?.options.env ?? {};
+      expect(env.ELECTRON_RUN_AS_NODE, id).toBeUndefined();
+      expect(env, id).toMatchObject({
+        LOLPING_PIPE: s.bridge.env.LOLPING_PIPE, LOLPING_DATA: s.bridge.env.LOLPING_DATA,
+        LOLPING_ASK: s.bridge.env.LOLPING_ASK, LOLPING_ASK_DIR: s.askDir,
+      });
     }
   });
 

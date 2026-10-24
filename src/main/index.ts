@@ -52,7 +52,7 @@ import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
 import { bridgeCommand, userConfigSnippet } from './mcp/bridgeCommand';
-import { BridgeServer, bridgePath, writeTokenFile } from './mcp/bridgeServer';
+import { BridgeServer, bridgeLocation, bridgePath, writeTokenFile } from './mcp/bridgeServer';
 import { ActionRunner } from './teammate/actions';
 import { captureOutput, checkAgent } from './teammate/agents/check';
 import { findExecutable, userPath, withPath } from './teammate/agents/command';
@@ -918,9 +918,9 @@ function start(): void {
     });
     // The pipe may be taken, possibly by another user's process: then nothing of an agent's goes through it.
     const mcp = (async (): Promise<BridgeServer> => {
-      const path = bridgePath(PLATFORM, userData, userInfo().username);
+      const { path, privateDir } = bridgeLocation(PLATFORM, userData, userInfo().username);
       const server = new BridgeServer({
-        path, tokenFile: join(userData, 'mcp-token'), handler: bridgeHandler(controller), now: Date.now,
+        path, privateDir, tokenFile: join(userData, 'mcp-token'), handler: bridgeHandler(controller), now: Date.now,
         random: randomBytes, writeToken: writeTokenFile,
       });
       await server.start();

@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  BridgeServer, bridgePath, writeTokenFile, type BridgeHandler, type BridgeSession,
+  BridgeServer, bridgeLocation, bridgePath, ensurePrivateDir, writeTokenFile, type BridgeHandler, type BridgeSession,
 } from '../../../src/main/mcp/bridgeServer';
 import {
   BRIDGE_LINE_MAX, BRIDGE_VERSION, encodeLine, parseFromApp,
@@ -324,6 +324,25 @@ describe('BridgeServer', () => {
     expect(await readFile(tokenFile, 'utf8')).toBe('new');
   });
 
+  it.skipIf(isWin)('listens in a private folder of its own on Linux when userData is too deep', async () => {
+    await server.stop();
+    const deep = path.join(dir, 'd'.repeat(120), 'lolPing');
+    const where = bridgeLocation('linux', deep, 'alice', { tmp: dir, runtimeDir: undefined, uid: process.getuid?.() ?? null });
+    expect(where.privateDir).not.toBeNull();
+    sockPath = where.path;
+    server = new BridgeServer({
+      path: where.path, privateDir: where.privateDir, tokenFile: path.join(dir, 'mcp-token'), handler, now: () => 0,
+      random: (n) => randomBytes(n), writeToken: async (_file, text) => { tokens.push(text); },
+    });
+    await server.start();
+    expect((await stat(where.privateDir ?? '')).mode & 0o777).toBe(0o700);
+    expect((await stat(where.path)).mode & 0o777).toBe(0o600);
+    const c = await connect();
+    c.send(hello(token()));
+    c.send({ t: 'list', id: 1 });
+    expect(await c.line(0)).toEqual({ t: 'tools', id: 1, tools: TOOLS });
+  });
+
   it.skipIf(isWin)('listens on the short fallback socket when userData is too deep for a socket path', async () => {
     await server.stop();
     const deep = path.join(dir, 'd'.repeat(120), 'lolPing');
@@ -349,17 +368,18 @@ describe('BridgeServer', () => {
 
 describe('bridgePath for a long userData folder', () => {
   const TMP = path.join('/var/folders/zz/abc', 'T');
+  const LINUX = { tmp: TMP, runtimeDir: undefined, uid: 1000 };
   /** A userData folder whose socket path `<it>/mcp.sock` is exactly `bytes` long. */
   const userDataFor = (bytes: number): string => `/${'a'.repeat(bytes - '/mcp.sock'.length - 1)}`;
 
   it('keeps mcp.sock in userData up to 103 bytes on macOS', () => {
     const userData = userDataFor(103);
-    expect(bridgePath('mac', userData, 'alice', TMP)).toBe(path.join(userData, 'mcp.sock'));
+    expect(bridgePath('mac', userData, 'alice', { tmp: TMP })).toBe(path.join(userData, 'mcp.sock'));
   });
 
   it('falls back to a socket in the temp folder at 104 bytes on macOS', () => {
     const userData = userDataFor(104);
-    const p = bridgePath('mac', userData, 'alice', TMP);
+    const p = bridgePath('mac', userData, 'alice', { tmp: TMP });
     expect(p).toMatch(/lolping-[0-9a-f]{16}\.sock$/);
     expect(path.dirname(p)).toBe(TMP);
   });
@@ -367,24 +387,116 @@ describe('bridgePath for a long userData folder', () => {
   it('counts bytes, not characters', () => {
     const userData = `/Users/${'é'.repeat(50)}/Library/Application Support/lolPing`;
     expect(userData.length + '/mcp.sock'.length).toBeLessThan(104);
-    expect(path.dirname(bridgePath('mac', userData, 'x', TMP))).toBe(TMP);
+    expect(path.dirname(bridgePath('mac', userData, 'x', { tmp: TMP }))).toBe(TMP);
   });
 
   it('allows 107 bytes on Linux', () => {
-    expect(bridgePath('linux', userDataFor(107), 'alice', TMP)).toBe(path.join(userDataFor(107), 'mcp.sock'));
-    expect(path.dirname(bridgePath('linux', userDataFor(108), 'alice', TMP))).toBe(TMP);
+    expect(bridgePath('linux', userDataFor(107), 'alice', LINUX)).toBe(path.join(userDataFor(107), 'mcp.sock'));
+    expect(path.dirname(bridgePath('linux', userDataFor(108), 'alice', LINUX))).toBe(path.join(TMP, 'lolping-1000'));
   });
 
   it('gives the same fallback to both sides and another one to another folder', () => {
     const a = `/${'a'.repeat(150)}`;
     const b = `/${'b'.repeat(150)}`;
-    expect(bridgePath('mac', a, 'alice', TMP)).toBe(bridgePath('mac', a, 'alice', TMP));
-    expect(bridgePath('mac', a, 'alice', TMP)).not.toBe(bridgePath('mac', b, 'alice', TMP));
-    expect(bridgePath('mac', a, 'alice', TMP)).not.toBe(bridgePath('mac', a, 'bob', TMP));
+    expect(bridgePath('mac', a, 'alice', { tmp: TMP })).toBe(bridgePath('mac', a, 'alice', { tmp: TMP }));
+    expect(bridgePath('mac', a, 'alice', { tmp: TMP })).not.toBe(bridgePath('mac', b, 'alice', { tmp: TMP }));
+    expect(bridgePath('mac', a, 'alice', { tmp: TMP })).not.toBe(bridgePath('mac', a, 'bob', { tmp: TMP }));
   });
 
   it('leaves the Windows pipe alone however long the folder is', () => {
-    const p = bridgePath('win', `C:\\${'a'.repeat(200)}`, 'alice', TMP);
+    const p = bridgePath('win', `C:\\${'a'.repeat(200)}`, 'alice', { tmp: TMP });
     expect(p).toMatch(/^\\\\\.\\pipe\\lolping-[0-9a-f]{16}$/);
+  });
+});
+
+describe('the Linux fallback socket', () => {
+  const TMP = path.join('/tmp');
+  const deep = `/${'a'.repeat(150)}`;
+
+  it('goes in XDG_RUNTIME_DIR when there is one, which the system keeps private to the user', () => {
+    const where = bridgeLocation('linux', deep, 'alice', { tmp: TMP, runtimeDir: '/run/user/1000', uid: 1000 });
+    expect(path.dirname(where.path)).toBe(path.join('/run/user/1000'));
+    expect(where.path).toMatch(/lolping-[0-9a-f]{16}\.sock$/);
+    expect(where.privateDir).toBeNull();
+  });
+
+  it('ignores a XDG_RUNTIME_DIR that is empty or not an absolute path', () => {
+    for (const runtimeDir of ['', 'run/user/1000']) {
+      const where = bridgeLocation('linux', deep, 'alice', { tmp: TMP, runtimeDir, uid: 1000 });
+      expect(where.privateDir).toBe(path.join(TMP, 'lolping-1000'));
+    }
+  });
+
+  it('otherwise goes in a folder of the user in the temp folder, never in the shared folder itself', () => {
+    const where = bridgeLocation('linux', deep, 'alice', { tmp: TMP, runtimeDir: undefined, uid: 1000 });
+    expect(where.privateDir).toBe(path.join(TMP, 'lolping-1000'));
+    expect(path.dirname(where.path)).toBe(where.privateDir);
+  });
+
+  it('names the folder by a hash when there is no user id, and by id for each user', () => {
+    const a = bridgeLocation('linux', deep, 'alice', { tmp: TMP, runtimeDir: undefined, uid: null }).privateDir;
+    expect(a).toMatch(/lolping-[0-9a-f]{16}$/);
+    const u1 = bridgeLocation('linux', deep, 'alice', { tmp: TMP, runtimeDir: undefined, uid: 1001 }).privateDir;
+    expect(u1).not.toBe(path.join(TMP, 'lolping-1000'));
+  });
+
+  it('is not used for macOS, whose temp folder is private already, nor when userData is short enough', () => {
+    expect(bridgeLocation('mac', deep, 'alice', { tmp: TMP }).privateDir).toBeNull();
+    expect(bridgeLocation('linux', '/home/a/.config/lolPing', 'alice', { tmp: TMP, runtimeDir: '/run/user/1' }))
+      .toEqual({ path: path.join('/home/a/.config/lolPing', 'mcp.sock'), privateDir: null });
+  });
+});
+
+describe('ensurePrivateDir', () => {
+  let base = '';
+  beforeEach(async () => {
+    base = await mkdtemp(path.join(os.tmpdir(), 'lolping-priv-'));
+  });
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+  const uid = process.getuid?.() ?? null;
+
+  it.skipIf(isWin)('makes the folder with mode 0700 and accepts it again', async () => {
+    const dir = path.join(base, 'lolping-x');
+    await ensurePrivateDir(dir);
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    await expect(ensurePrivateDir(dir)).resolves.toBeUndefined();
+  });
+
+  it.skipIf(isWin)('refuses a folder that others can enter', async () => {
+    const dir = path.join(base, 'open');
+    await mkdir(dir, { mode: 0o755 });
+    await chmod(dir, 0o755);
+    await expect(ensurePrivateDir(dir)).rejects.toThrow('not a private folder');
+  });
+
+  it.skipIf(isWin)('refuses a link to a folder, and a file', async () => {
+    const real = path.join(base, 'real');
+    await mkdir(real, { mode: 0o700 });
+    const link = path.join(base, 'link');
+    await symlink(real, link);
+    await expect(ensurePrivateDir(link)).rejects.toThrow('not a private folder');
+    const file = path.join(base, 'file');
+    await writeFile(file, '');
+    await expect(ensurePrivateDir(file)).rejects.toThrow();
+  });
+
+  it.skipIf(isWin)('refuses a folder owned by another user', async () => {
+    const dir = path.join(base, 'mine');
+    await mkdir(dir, { mode: 0o700 });
+    await expect(ensurePrivateDir(dir, (uid ?? 0) + 1)).rejects.toThrow('not a private folder');
+  });
+
+  it.skipIf(isWin)('makes the server refuse to start in a folder that is not private', async () => {
+    const dir = path.join(base, 'shared');
+    await mkdir(dir, { mode: 0o777 });
+    await chmod(dir, 0o777);
+    const server = new BridgeServer({
+      path: path.join(dir, 'x.sock'), privateDir: dir, tokenFile: path.join(base, 'mcp-token'), now: () => 0,
+      random: (n) => randomBytes(n), writeToken: async () => undefined,
+      handler: { hello: () => undefined, list: () => [], call: async () => ({ content: [], isError: false }) },
+    });
+    await expect(server.start()).rejects.toThrow('not a private folder');
   });
 });
