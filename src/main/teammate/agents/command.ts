@@ -93,7 +93,8 @@ export function withPath(env: NodeJS.ProcessEnv, value: string, platform: Platfo
   return { ...env, [key]: value };
 }
 
-let shellPath: Promise<string> | null = null;
+/** The login shell's PATH, or null when it gave none; a lookup in flight is shared, a failed one isn't kept. */
+let shellPath: Promise<string | null> | null = null;
 
 // A login shell's startup files may print a greeting or escape codes; the markers say where PATH is.
 const PATH_MARK = '__LPPATH__';
@@ -105,15 +106,21 @@ const markedPath = (out: string): string | null => {
   return value === '' ? null : value;
 };
 
-/** macOS: PATH from `$SHELL -ilc` (3 s limit), cached; elsewhere process.env.PATH. */
+/**
+ * macOS: PATH from `$SHELL -ilc` (3 s limit), cached once it worked; elsewhere process.env.PATH. A lookup that failed
+ * (a slow shell at login, say) gives lolPing's own PATH this time and is tried again the next time.
+ */
 export function userPath(platform: Platform, run: (cmd: string, args: string[], ms: number) => Promise<string>):
   Promise<string> {
   const own = process.env.PATH ?? '';
   if (platform !== 'mac') return Promise.resolve(own);
   // Apps started from Finder get launchd's short PATH, without Homebrew or npm's folders.
   shellPath ??= run(process.env.SHELL || '/bin/zsh', ['-ilc', PATH_SCRIPT], SHELL_PATH_MS).then(
-    (out) => markedPath(out) ?? own,
-    () => own,
-  );
-  return shellPath;
+    (out) => markedPath(out),
+    () => null,
+  ).then((found) => {
+    if (found === null) shellPath = null;
+    return found;
+  });
+  return shellPath.then((found) => found ?? own);
 }

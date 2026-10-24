@@ -178,6 +178,21 @@ describe('userPath', () => {
     expect(await userPath('mac', async () => { throw new Error('timed out'); })).toBe(process.env.PATH ?? '');
   });
 
+  it('asks the shell again after a lookup that failed, and keeps the first one that worked', async () => {
+    const userPath = await fresh();
+    const answers = [
+      async (): Promise<string> => { throw new Error('timed out'); },
+      async () => 'no markers',
+      async () => '__LPPATH__/opt/homebrew/bin__LPPATH__',
+    ];
+    const run = vi.fn(async () => (answers.shift() ?? (async () => 'unused'))());
+    expect(await userPath('mac', run)).toBe(process.env.PATH ?? '');
+    expect(await userPath('mac', run)).toBe(process.env.PATH ?? '');
+    expect(await userPath('mac', run)).toBe('/opt/homebrew/bin');
+    expect(await userPath('mac', run)).toBe('/opt/homebrew/bin');
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
   it('uses its own PATH on Windows and Linux without running a shell', async () => {
     const userPath = await fresh();
     const run = vi.fn(async () => '/elsewhere');
