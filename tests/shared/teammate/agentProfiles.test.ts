@@ -1,11 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentNotes, newAgentProfile, openInRows, resumableProfile, resumeArgs, timeoutMinutes, timeoutSeconds, withFolder,
+  agentNotes, defaultAfterAdd, newAgentProfile, openInRows, resumableProfile, resumeArgs, timeoutMinutes,
+  timeoutSeconds, withFolder,
 } from '../../../src/shared/teammate/agentProfiles';
 import { AGENT_PRESET_IDS, AGENT_PRESETS } from '../../../src/shared/teammate/agents';
 import { MAX_FOLDERS, normalizeTeammate, type AgentProfile } from '../../../src/shared/teammate/settings';
 
 const WIN = { platform: 'win', trigger: 'alt', emoteTrigger: 'ctrl' } as const;
+
+describe('defaultAfterAdd', () => {
+  const agent = (preset: 'claude' | 'custom') =>
+    newAgentProfile({ id: 'new', preset, tagColor: 0, customName: 'Custom command' });
+
+  it('makes the first profile added the default, unless it is a custom command', () => {
+    expect(defaultAfterAdd(null, agent('claude'))).toBe('new');
+    expect(defaultAfterAdd(null, agent('custom'))).toBeNull();
+  });
+
+  it('keeps the default there is', () => {
+    expect(defaultAfterAdd('old', agent('claude'))).toBe('old');
+    expect(defaultAfterAdd('old', agent('custom'))).toBe('old');
+  });
+});
 
 describe('newAgentProfile', () => {
   const base = { id: 'p1', tagColor: 5 };

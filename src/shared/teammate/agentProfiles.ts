@@ -19,6 +19,14 @@ export function newAgentProfile(
   };
 }
 
+/**
+ * The default profile once `added` is added: the first one becomes it, but not a custom command, which runs only
+ * once the user has typed theirs and picks it.
+ */
+export function defaultAfterAdd(current: string | null, added: Profile): string | null {
+  return current ?? (added.kind === 'agent' && added.preset === 'custom' ? null : added.id);
+}
+
 const clampMinutes = (m: number): number => Math.min(TIMEOUT_MAX_MINUTES, Math.max(TIMEOUT_MIN_MINUTES, Math.round(m)));
 
 /** The time limit as the whole minutes the page shows, 1 to 30. */

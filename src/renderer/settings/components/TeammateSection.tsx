@@ -7,7 +7,7 @@ import {
 import { useEffect, useState, type ReactNode } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
-import { newAgentProfile } from '../../../shared/teammate/agentProfiles';
+import { defaultAfterAdd, newAgentProfile } from '../../../shared/teammate/agentProfiles';
 import { AGENT_PRESET_IDS, AGENT_PRESETS, type AgentPresetId } from '../../../shared/teammate/agents';
 import { parsePermissionKey } from '../../../shared/teammate/doRules';
 import { needsKey, PROVIDERS, visionGuess, type ProviderId } from '../../../shared/teammate/providers';
@@ -368,11 +368,11 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
       id: newProfileId(), kind: 'builtin', name: preset.name, tagColor: mate.tagColor, tagColorCustom: null,
       provider: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, model: '',
     };
-    patch({ profiles: [...mate.profiles, profile], defaultProfile: mate.defaultProfile ?? profile.id });
+    patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
   };
   const addAgent = (preset: AgentPresetId | 'custom') => {
     const profile = newAgentProfile({ id: newProfileId(), preset, customName: m.agentCustom, tagColor: mate.tagColor });
-    patch({ profiles: [...mate.profiles, profile], defaultProfile: mate.defaultProfile ?? profile.id });
+    patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
   };
   const changeProfile = (id: string, p: Partial<BuiltinProfile>) =>
     patch({ profiles: mate.profiles.map((x) => (x.id === id && isBuiltin(x) ? { ...x, ...p } : x)) });
