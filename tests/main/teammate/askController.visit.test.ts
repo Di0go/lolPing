@@ -386,7 +386,7 @@ describe('AskController visitors', () => {
     expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(false);
   });
 
-  it('refuses while a History card is open or the answer has a button to press', async () => {
+  it('refuses while a History card is open', async () => {
     const h = harness();
     h.ctl.showThread({
       id: 't', title: 'Old', app: '', windowTitle: '', profile: '', started: 0, lastActivity: 0, entries: [],
@@ -397,9 +397,33 @@ describe('AskController visitors', () => {
     expect(h.cards).toHaveLength(1);
     h.ctl.onTeammateAction('card', { t: 'close' });
     expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(false);
+  });
 
-    h.actions.emit('put', { kind: 'paste', label: 'Paste' });
+  it('refuses while the answer\'s Paste button is up, and draws once its bubble\'s time runs out', async () => {
+    const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
+    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    h.actions.emit('put', 'paste');
+    expect(h.bubbles.at(-1)?.put).toBe('paste');
+    expect(text(await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'Agent here.' }))).toBe(
+      'lolPing is busy; try again in a moment.',
+    );
+    // The user ignores the offer: the bubble goes with its time, and the button with it.
+    await h.advance(60_000);
+    const r = await h.ctl.visitorCall({ name: 'x' }, 'say', { text: 'Agent here.' });
+    expect(r.isError).toBe(false);
+    expect(h.bubbles.at(-1)).toMatchObject({ line: 'Agent here.', put: null });
+  });
+
+  it('refuses while the answer\'s bubble is hidden for a paste that brings it back if it fails', async () => {
+    const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
+    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    h.actions.emit('put', 'paste');
+    h.ctl.hideBubbleForPut();
     expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(true);
+    h.actions.emit('put', null); // the paste landed
+    expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(false);
   });
 
   it('does not leave an agent\'s card showing as still streaming when a second line arrives', async () => {

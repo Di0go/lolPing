@@ -609,10 +609,15 @@ export class AskController extends EventEmitter {
     this.ask({ intent: 'generic', phys, displayId: display.id }, { text: a.text, newThread: false });
   }
 
-  /** An ask runs, a consent card waits, or the user's own answer or History card is on screen: an agent waits. */
+  /**
+   * An ask runs, a consent card waits, or the user's own answer or History card is on screen: an agent waits. A put
+   * button counts only with its answer up, or hidden for a paste that brings it back if it doesn't land.
+   */
   private busy(): boolean {
-    const mine = this.shown !== null && !this.shown.visitor && (this.bubbleShown || this.cardShown);
-    return this.run !== null || this.asking || mine || this.viewed !== null || this.put !== null;
+    const own = this.shown !== null && !this.shown.visitor;
+    const mine = own && (this.bubbleShown || this.cardShown);
+    const pasting = own && this.put !== null && this.hiddenForPut === this.shown;
+    return this.run !== null || this.asking || mine || pasting || this.viewed !== null;
   }
 
   /** The profile of the agent's preset wins its name and colour; any other client is named as it names itself. */
