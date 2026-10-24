@@ -89,12 +89,12 @@ describe('spawnArgv', () => {
     const argv = spawnArgv('C:\\x y\\codex.CMD', ['a&b', 'a"b', 'C:\\dir\\'], 'win');
     expect(argv.verbatim).toBe(true);
     expect(argv.args).toEqual([
-      '/d', '/s', '/c', '"C:\\x^ y\\codex.CMD ^^^"a^^^&b^^^" ^^^"a\\^^^"b^^^" ^^^"C:\\dir\\\\^^^""',
+      '/d', '/v:off', '/s', '/c', '"C:\\x^ y\\codex.CMD ^^^"a^^^&b^^^" ^^^"a\\^^^"b^^^" ^^^"C:\\dir\\\\^^^""',
     ]);
   });
 
   it('puts an empty expansion after every % so no variable name can form', () => {
-    expect(spawnArgv('C:\\50%\\x.cmd', ['%PATH%'], 'win').args[3])
+    expect(spawnArgv('C:\\50%\\x.cmd', ['%PATH%'], 'win').args[4])
       .toBe('"C:\\50%%cd:~,%\\x.cmd ^^^"%%cd:~,%PATH%%cd:~,%^^^""');
   });
 

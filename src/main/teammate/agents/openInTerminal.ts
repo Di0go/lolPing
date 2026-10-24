@@ -18,12 +18,13 @@ export function terminalArgv(platform: Platform, cwd: string, file: string, args
     const cmd = system32('cmd.exe');
     // Two cmd.exe read this line, the one running `start` and the one `start` opens, so each word is escaped for the
     // first and `cmdLine` has escaped the command for the second. `/s` makes the opened cmd keep the quotes inside.
-    // Node must pass the line as it is: its own quoting would put backslashes before the quotes.
+    // Node must pass the line as it is: its own quoting would put backslashes before the quotes. /v:off on both, as
+    // in spawnArgv, so a `!` stays literal.
     return {
       file: cmd,
       args: [
-        '/d', '/c', 'start', '""', '/d', forCmd(quoteArgument(cwd)), forCmd(quoteArgument(cmd)),
-        '/d', '/s', '/k', forCmd(`"${cmdLine(file, args)}"`),
+        '/d', '/v:off', '/c', 'start', '""', '/d', forCmd(quoteArgument(cwd)), forCmd(quoteArgument(cmd)),
+        '/d', '/v:off', '/s', '/k', forCmd(`"${cmdLine(file, args)}"`),
       ],
       verbatim: true,
     };

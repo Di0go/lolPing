@@ -80,11 +80,14 @@ export function cmdLine(file: string, args: readonly string[]): string {
   return [file, ...args].map((a) => forCmd(quoteArgument(a))).join(' ');
 }
 
-/** argv for spawn: a .cmd/.bat becomes cmd.exe /d /s /c "<quoted line>"; anything else is passed as is. */
+/**
+ * argv for spawn: a .cmd/.bat becomes cmd.exe /d /v:off /s /c "<quoted line>"; anything else is passed as is. /v:off
+ * keeps a `!` literal even where the registry turns delayed expansion on.
+ */
 export function spawnArgv(file: string, args: readonly string[], platform: Platform):
   { file: string; args: string[]; verbatim: boolean } {
   if (platform !== 'win' || !isShim(file)) return { file, args: [...args], verbatim: false };
-  return { file: cmdExe(), args: ['/d', '/s', '/c', `"${cmdLine(file, args)}"`], verbatim: true };
+  return { file: cmdExe(), args: ['/d', '/v:off', '/s', '/c', `"${cmdLine(file, args)}"`], verbatim: true };
 }
 
 /** `env` with PATH set to `value`. Windows names ignore case: the key it has is replaced, so there are never two. */

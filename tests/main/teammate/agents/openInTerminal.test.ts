@@ -14,7 +14,8 @@ describe('terminalArgv on Windows', () => {
     expect(argv.file).toBe(system32('cmd.exe'));
     const cmd = system32('cmd.exe').replace(/([ ()&^])/g, '^$1');
     expect(argv.args).toEqual([
-      '/d', '/c', 'start', '""', '/d', '^"C:\\my^ proj\\a^&b^"', `^"${cmd}^"`, '/d', '/s', '/k',
+      '/d', '/v:off', '/c', 'start', '""', '/d', '^"C:\\my^ proj\\a^&b^"', `^"${cmd}^"`,
+      '/d', '/v:off', '/s', '/k',
       '^"^^^"C:\\tools\\claude.exe^^^"^ ^^^"--resume^^^"^ ^^^"s^^^ 1^^^&2^^^"^"',
     ]);
   });
