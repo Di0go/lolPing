@@ -73,6 +73,8 @@ export interface HistoryState {
   /** The search the list was made for, so the box shows what the list matches. */
   query: string;
   threads: HistoryThread[];
+  /** The agent profile's name when its Open in just failed: the window tells the user in one line. */
+  openFailed?: string;
 }
 
 /** "Paste this into Chrome?": the teammate asks before it acts. The window never takes the keyboard. */

@@ -92,6 +92,7 @@
       "extendInfo": {
         "NSAccessibilityUsageDescription": "lolPing reads the mouse and keyboard to open the ping wheel or the emote wheel when you hold its key and drag.",
         "NSDownloadsFolderUsageDescription": "lolPing saves update downloads to your Downloads folder.",
+        "NSAppleEventsUsageDescription": "lolPing opens Terminal to continue an agent's session.",
         "NSScreenCaptureUsageDescription": "The teammate looks at your screen when you ask it to ping what it sees.",
         "NSLocalNetworkUsageDescription": "lolPing finds the other people in your room on the local network and sends them your pings."
       }

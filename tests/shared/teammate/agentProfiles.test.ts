@@ -99,6 +99,12 @@ describe('resumeArgs', () => {
     expect(resumeArgs(profile('custom'), 'sess-1')).toBeNull();
     expect(resumeArgs(profile('auggie'), 'sess-1')).toBeNull();
   });
+
+  it('refuses a session id that would read as a flag', () => {
+    expect(resumeArgs(profile('claude'), '--dangerously-skip-permissions')).toBeNull();
+    expect(resumeArgs(profile('claude'), '-x')).toBeNull();
+    expect(resumeArgs(profile('claude'), 'a-b')).toEqual(['--resume', 'a-b']);
+  });
 });
 
 describe('resumableProfile', () => {

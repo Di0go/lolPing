@@ -56,7 +56,7 @@ import { BridgeServer, bridgePath } from './mcp/bridgeServer';
 import { ActionRunner } from './teammate/actions';
 import { captureOutput, checkAgent } from './teammate/agents/check';
 import { findExecutable, userPath, withPath } from './teammate/agents/command';
-import { terminalArgv } from './teammate/agents/openInTerminal';
+import { launchTerminal } from './teammate/agents/openInTerminal';
 import { AgentRunner, envValue, isFile as isRegularFile, killProcessTree } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
 import { ContextClient } from './teammate/contextClient';
@@ -691,6 +691,8 @@ function start(): void {
   // The teammate: built when its feature is switched on, taken down when it is switched off or the app quits.
   let wordsSpot: Spot | null = null;
   let historyQuery = '';
+  /** The agent profile whose Open in just failed; the History window says so until its next action. */
+  let historyOpenFailed: string | null = null;
   /** Foreground apps of this session's asks, newest first; the rules card offers them as app names. */
   let recentApps: readonly string[] = [];
   const mateLang = () => resolveLang(settings.language, app.getLocale());
@@ -713,7 +715,10 @@ function start(): void {
     syncSuspended();
   }
   const historyState = async (m: Mate, query: string): Promise<HistoryState> => {
-    const base = { view: 'history' as const, lang: mateLang(), query, threads: [] };
+    const base = {
+      view: 'history' as const, lang: mateLang(), query, threads: [],
+      ...(historyOpenFailed !== null ? { openFailed: historyOpenFailed } : {}),
+    };
     if (!m.history.available()) return { ...base, available: false, off: 'unavailable' };
     if (!settings.teammate.history.on) return { ...base, available: false, off: 'disabled' };
     // Open in <agent> shows only where the profile still exists and can continue a session.
@@ -728,6 +733,7 @@ function start(): void {
     const m = mate;
     if (!m) return;
     historyQuery = '';
+    historyOpenFailed = null;
     const state = await historyState(m, historyQuery);
     if (mate === m) m.windows.showHistory(state);
   }
@@ -736,25 +742,25 @@ function start(): void {
     store.update({ teammate: { ...t, history: { ...t.history, paused } } });
   }
   /** Continues the thread's agent session in a terminal. The profile and command come from settings, not the window. */
-  async function openInAgent(record: ThreadRecord | null): Promise<void> {
+  async function openInAgent(record: ThreadRecord | null): Promise<boolean> {
     const session = record?.agent;
     const profile = session ? resumableProfile(settings.teammate.profiles, session.profileId) : null;
     const args = profile && session ? resumeArgs(profile, session.session) : null;
-    if (!session || !profile || !args) return;
+    if (!session || !profile || !args) return true; // nothing the History window offered: not a failure to report
     const env = await userEnv();
     const file = findExecutable(profile.command, {
       PATH: envValue(env, 'PATH', PLATFORM) ?? '', PATHEXT: envValue(env, 'PATHEXT', PLATFORM),
     }, PLATFORM, isRegularFile);
-    if (file === null || !isDirectory(session.cwd)) {
-      console.warn('[teammate] open in agent: the command or the folder is gone');
-      return;
-    }
-    const t = terminalArgv(PLATFORM, session.cwd, file, args);
-    spawn(t.file, t.args, { detached: true, stdio: 'ignore', env, windowsVerbatimArguments: t.verbatim })
-      .on('error', (err) => console.warn('[teammate] open in agent:', err))
-      .unref();
+    const opened = file !== null && isDirectory(session.cwd)
+      && await launchTerminal({ spawn, platform: PLATFORM, cwd: session.cwd, file, args, env });
+    if (!opened) historyOpenFailed = profile.name;
+    return opened;
   }
   const onHistoryAction = async (m: Mate, a: MateAction): Promise<void> => {
+    // The failure line goes with the next action; delete, search and open in make the list again themselves.
+    const hadFailure = historyOpenFailed !== null;
+    historyOpenFailed = null;
+    if (hadFailure && (a.t === 'open' || a.t === 'continue')) await refreshHistory(m);
     switch (a.t) {
       case 'open':
       case 'continue': {
@@ -766,7 +772,9 @@ function start(): void {
         return;
       }
       case 'openInAgent':
-        return openInAgent(await m.history.get(a.id));
+        // A failure is told in the list, which is made again either way.
+        await openInAgent(await m.history.get(a.id));
+        return refreshHistory(m);
       case 'delete':
         await m.history.delete(a.id);
         m.controller.forgetThread(a.id);

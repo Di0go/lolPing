@@ -54,7 +54,8 @@ export function agentNotes(preset: AgentPresetId | 'custom'): AgentNote[] {
 
 /** argv that continues `session` in a terminal; null for a custom command and for an agent that can't resume. */
 export function resumeArgs(p: AgentProfile, session: string): string[] | null {
-  if (p.preset === 'custom') return null;
+  // A session id comes from the agent's own output; one that reads as a flag would be taken as one.
+  if (p.preset === 'custom' || session.startsWith('-')) return null;
   const args = AGENT_PRESETS[p.preset].openArgs(session);
   return args.length === 0 ? null : args;
 }

@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { system32 } from '../../../../src/main/teammate/agents/command';
-import { terminalArgv } from '../../../../src/main/teammate/agents/openInTerminal';
+import { launchTerminal, terminalArgv, type LaunchSpawn } from '../../../../src/main/teammate/agents/openInTerminal';
 
 describe('terminalArgv on Windows', () => {
   it('opens cmd in the folder with the resume command quoted', () => {
@@ -85,7 +86,10 @@ describe('terminalArgv on macOS', () => {
     const argv = terminalArgv('mac', '/Users/me/my proj', '/opt/bin/claude', ['--resume', 'abc']);
     expect(argv).toEqual({
       file: 'osascript', verbatim: false,
-      args: ['-e', 'tell application "Terminal" to do script "cd \'/Users/me/my proj\' && \'/opt/bin/claude\' \'--resume\' \'abc\'"'],
+      args: [
+        '-e', 'tell application "Terminal" to do script "cd \'/Users/me/my proj\' && \'/opt/bin/claude\' \'--resume\' \'abc\'"',
+        '-e', 'tell application "Terminal" to activate',
+      ],
     });
   });
 
@@ -103,11 +107,66 @@ describe('terminalArgv on macOS', () => {
   });
 });
 
+describe('terminalArgv and control characters', () => {
+  // Terminal types the line into an interactive shell, where Ctrl-U and the like edit it instead of being quoted text.
+  it.each(['mac', 'linux'] as const)('refuses a control character or DEL anywhere on %s', (platform) => {
+    for (const bad of ['\u0015', '\u0000', '\u001b', '\u007f', '\n', '\t']) {
+      expect(() => terminalArgv(platform, `/a${bad}b`, '/x', [])).toThrow();
+      expect(() => terminalArgv(platform, '/a', `/x${bad}`, [])).toThrow();
+      expect(() => terminalArgv(platform, '/a', '/x', ['--resume', `s${bad}`])).toThrow();
+    }
+    expect(() => terminalArgv(platform, '/a b/ü', '/x', ['--resume', 's 1'])).not.toThrow();
+  });
+});
+
 describe('terminalArgv on Linux', () => {
   it('runs sh -c with the folder and command single-quoted', () => {
     expect(terminalArgv('linux', '/home/me/it\'s', '/usr/bin/claude', ['--resume', 'a b'])).toEqual({
       file: 'x-terminal-emulator', verbatim: false,
       args: ['-e', 'sh', '-c', 'cd \'/home/me/it\'\\\'\'s\' && \'/usr/bin/claude\' \'--resume\' \'a b\''],
     });
+  });
+});
+
+describe('launchTerminal', () => {
+  /** A spawn that records the call and gives a child that `act` then drives. */
+  function fake(act: (child: EventEmitter) => void) {
+    const calls: Array<{ file: string; args: string[]; verbatim: boolean | undefined }> = [];
+    const spawnFn: LaunchSpawn = (file, args, options) => {
+      calls.push({ file, args, verbatim: options.windowsVerbatimArguments });
+      const child = Object.assign(new EventEmitter(), { unref: () => undefined });
+      queueMicrotask(() => act(child));
+      return child;
+    };
+    return { calls, spawnFn };
+  }
+  const run = (spawnFn: LaunchSpawn, platform: 'win' | 'mac' | 'linux' = 'mac') =>
+    launchTerminal({ spawn: spawnFn, platform, cwd: '/a', file: '/x', args: ['--resume', 's'], env: {} });
+
+  it('succeeds when the launcher exits 0, and passes the verbatim flag on', async () => {
+    const f = fake((c) => c.emit('exit', 0));
+    expect(await run(f.spawnFn, 'win')).toBe(true);
+    expect(f.calls[0].file).toBe(system32('cmd.exe'));
+    expect(f.calls[0].verbatim).toBe(true);
+  });
+
+  it('fails when osascript or start exits with an error', async () => {
+    expect(await run(fake((c) => c.emit('exit', 1)).spawnFn)).toBe(false);
+    expect(await run(fake((c) => c.emit('exit', null)).spawnFn, 'win')).toBe(false);
+  });
+
+  it('fails when the launcher can\'t be started', async () => {
+    expect(await run(fake((c) => c.emit('error', new Error('ENOENT'))).spawnFn, 'linux')).toBe(false);
+  });
+
+  it('does not wait for a Linux terminal to close', async () => {
+    expect(await run(fake((c) => c.emit('spawn')).spawnFn, 'linux')).toBe(true);
+  });
+
+  it('fails without starting anything when the line has a control character', async () => {
+    const f = fake(() => undefined);
+    expect(await launchTerminal({ spawn: f.spawnFn, platform: 'mac', cwd: '/a\u0015b', file: '/x', args: [], env: {} }))
+      .toBe(false);
+    expect(f.calls).toEqual([]);
   });
 });

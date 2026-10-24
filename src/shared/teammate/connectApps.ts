@@ -84,7 +84,7 @@ function tomlTable(b: BridgeCommand): string {
   ].join('\n');
 }
 
-// Goose reads the extension as one shell-style line; single quotes keep Windows backslashes as they are.
+// Goose splits the command field shell-style on every platform; single quotes keep Windows backslashes as they are.
 const singleQuoted = (v: string): string => `'${v.replace(/'/g, '\'\\\'\'')}'`;
 
 /** One word of a command typed into the user's shell: PowerShell and cmd on Windows, a POSIX shell elsewhere. */
@@ -97,8 +97,11 @@ function shellWord(platform: Platform, v: string): string {
 
 const envPairs = (b: BridgeCommand): string[] => Object.entries(b.env).map(([k, v]) => `${k}=${v}`);
 
-/** The text to copy for an app of the given shape: the bridge command as that app's config or command line wants it. */
-export function connectSnippet(shape: ConnectShape, b: BridgeCommand, platform: Platform): string {
+/**
+ * The text to copy for an app of the given shape: the bridge command as that app's config or command line wants it.
+ * `envLabel` heads the variable lines of Goose's snippet, whose dialog takes them in rows of their own.
+ */
+export function connectSnippet(shape: ConnectShape, b: BridgeCommand, platform: Platform, envLabel: string): string {
   switch (shape) {
     case 'mcpServers':
       return mcpServersJson(b);
@@ -112,9 +115,11 @@ export function connectSnippet(shape: ConnectShape, b: BridgeCommand, platform: 
       return tomlTable(b);
     case 'dshPatch':
       return [...dshInsertRows(b), ''].join('\n');
-    case 'gooseLine':
-      // Goose takes leading NAME=value words as the extension's environment.
-      return [...envPairs(b), b.command, ...b.args].map(singleQuoted).join(' ');
+    case 'gooseLine': {
+      const vars = envPairs(b);
+      return [[b.command, ...b.args].map(singleQuoted).join(' '), ...(vars.length > 0 ? ['', envLabel, ...vars] : [])]
+        .join('\n');
+    }
     case 'claudeCodeLine':
       return [
         'claude mcp add lolping', ...envPairs(b).map((pair) => `-e ${shellWord(platform, pair)}`), '--',

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { Platform } from '../../../src/shared/platform';
 import { AGENT_PRESETS } from '../../../src/shared/teammate/agents';
 import {
-  CONNECT_APPS, connectSnippet, mcpServersJson, type ConnectShape,
+  CONNECT_APPS, connectSnippet, mcpServersJson, type BridgeCommand, type ConnectShape,
 } from '../../../src/shared/teammate/connectApps';
 
 const BRIDGE = {
@@ -9,6 +10,10 @@ const BRIDGE = {
   args: ['C:\\Program Files\\lolPing\\resources\\out\\main\\bridge.js'],
   env: { ELECTRON_RUN_AS_NODE: '1', LOLPING_PIPE: '\\\\.\\pipe\\lolping-0123456789abcdef', LOLPING_DATA: 'C:\\Users\\a b' },
 };
+
+const ENV_LABEL = 'Environment variables:';
+const snip = (shape: ConnectShape, b: BridgeCommand, platform: Platform): string =>
+  connectSnippet(shape, b, platform, ENV_LABEL);
 
 const app = (id: string) => {
   const found = CONNECT_APPS.find((a) => a.id === id);
@@ -20,7 +25,7 @@ describe('CONNECT_APPS', () => {
   it('gives every app a snippet in its own shape', () => {
     const shapes = new Map<ConnectShape, string>();
     for (const a of CONNECT_APPS) {
-      const text = connectSnippet(a.shape, BRIDGE, 'win');
+      const text = snip(a.shape, BRIDGE, 'win');
       expect(text, a.id).not.toBe('');
       expect(text, a.id).toContain('lolping');
       expect(text, a.id).toContain('lolPing.exe');
@@ -60,24 +65,24 @@ describe('CONNECT_APPS', () => {
 
 describe('connectSnippet', () => {
   it('writes mcpServers as the JSON the profile card already copies', () => {
-    expect(JSON.parse(connectSnippet('mcpServers', BRIDGE, 'win'))).toEqual({ mcpServers: { lolping: BRIDGE } });
-    expect(connectSnippet('mcpServers', BRIDGE, 'mac')).toBe(mcpServersJson(BRIDGE));
+    expect(JSON.parse(snip('mcpServers', BRIDGE, 'win'))).toEqual({ mcpServers: { lolping: BRIDGE } });
+    expect(snip('mcpServers', BRIDGE, 'mac')).toBe(mcpServersJson(BRIDGE));
   });
 
   it('writes servers with a stdio type for VS Code', () => {
-    expect(JSON.parse(connectSnippet('servers', BRIDGE, 'win'))).toEqual({
+    expect(JSON.parse(snip('servers', BRIDGE, 'win'))).toEqual({
       servers: { lolping: { type: 'stdio', ...BRIDGE } },
     });
   });
 
   it('nests the command under a path for Zed', () => {
-    expect(JSON.parse(connectSnippet('context_servers', BRIDGE, 'win'))).toEqual({
+    expect(JSON.parse(snip('context_servers', BRIDGE, 'win'))).toEqual({
       context_servers: { lolping: { command: { path: BRIDGE.command, args: BRIDGE.args, env: BRIDGE.env } } },
     });
   });
 
   it('writes a TOML table with strings Codex can read back', () => {
-    const toml = connectSnippet('toml', BRIDGE, 'win');
+    const toml = snip('toml', BRIDGE, 'win');
     expect(toml).toBe([
       '[mcp_servers.lolping]',
       'command = "C:\\\\Program Files\\\\lolPing\\\\lolPing.exe"',
@@ -89,14 +94,14 @@ describe('connectSnippet', () => {
       'LOLPING_DATA = "C:\\\\Users\\\\a b"',
       '',
     ].join('\n'));
-    const quoted = connectSnippet('toml', { command: 'a"b', args: [], env: {} }, 'linux');
+    const quoted = snip('toml', { command: 'a"b', args: [], env: {} }, 'linux');
     expect(quoted).toContain('command = "a\\"b"');
     expect(quoted).toContain('args = []');
     expect(quoted).not.toContain('.env]');
   });
 
   it('writes dsh\'s insert row like the preset does, with quotes doubled', () => {
-    const yaml = connectSnippet('dshPatch', { ...BRIDGE, args: ['it\'s'] }, 'win');
+    const yaml = snip('dshPatch', { ...BRIDGE, args: ['it\'s'] }, 'win');
     const preset = AGENT_PRESETS.dsh.configFile({
       prompt: 'p', askDir: 'd', mcpConfigPath: 'm', bridge: { ...BRIDGE, args: ['it\'s'] }, resume: null,
     }) ?? '';
@@ -105,30 +110,30 @@ describe('connectSnippet', () => {
     expect(yaml).toContain('          - \'it\'\'s\'');
   });
 
-  it('puts Goose\'s variables and parts on one line in single quotes', () => {
-    const line = connectSnippet('gooseLine', BRIDGE, 'win');
-    expect(line).not.toContain('\n');
-    expect(line).toBe([
-      '\'ELECTRON_RUN_AS_NODE=1\'', '\'LOLPING_PIPE=\\\\.\\pipe\\lolping-0123456789abcdef\'',
-      '\'LOLPING_DATA=C:\\Users\\a b\'', `'${BRIDGE.command}'`, `'${BRIDGE.args[0]}'`,
-    ].join(' '));
-    expect(connectSnippet('gooseLine', { command: 'it\'s', args: [], env: {} }, 'mac')).toBe('\'it\'\\\'\'s\'');
+  it('gives Goose the command line, then the variables to type into its dialog', () => {
+    expect(connectSnippet('gooseLine', BRIDGE, 'win', ENV_LABEL)).toBe([
+      `'${BRIDGE.command}' '${BRIDGE.args[0]}'`, '', 'Environment variables:',
+      'ELECTRON_RUN_AS_NODE=1', String.raw`LOLPING_PIPE=\\.\pipe\lolping-0123456789abcdef`,
+      String.raw`LOLPING_DATA=C:\Users\a b`,
+    ].join('\n'));
+    expect(connectSnippet('gooseLine', { command: 'it\'s', args: [], env: {} }, 'mac', ENV_LABEL))
+      .toBe(String.raw`'it'\''s'`);
   });
 
   it('puts Claude Code\'s env flags before the double dash and quotes for the shell', () => {
-    const posix = connectSnippet('claudeCodeLine', { ...BRIDGE, command: '/Applications/lol Ping/lolPing' }, 'mac');
+    const posix = snip('claudeCodeLine', { ...BRIDGE, command: '/Applications/lol Ping/lolPing' }, 'mac');
     expect(posix).toBe([
       String.raw`claude mcp add lolping -e ELECTRON_RUN_AS_NODE=1 -e 'LOLPING_PIPE=\\.\pipe\lolping-0123456789abcdef'`,
       String.raw`-e 'LOLPING_DATA=C:\Users\a b' --`,
       String.raw`'/Applications/lol Ping/lolPing' 'C:\Program Files\lolPing\resources\out\main\bridge.js'`,
     ].join(' '));
-    const win = connectSnippet('claudeCodeLine', BRIDGE, 'win');
+    const win = snip('claudeCodeLine', BRIDGE, 'win');
     expect(win).toBe([
       'claude mcp add lolping -e ELECTRON_RUN_AS_NODE=1 -e LOLPING_PIPE=\\\\.\\pipe\\lolping-0123456789abcdef',
       '-e "LOLPING_DATA=C:\\Users\\a b" --',
       '"C:\\Program Files\\lolPing\\lolPing.exe" "C:\\Program Files\\lolPing\\resources\\out\\main\\bridge.js"',
     ].join(' '));
-    expect(connectSnippet('claudeCodeLine', { command: 'a', args: ['x"y', 'z \\'], env: {} }, 'win'))
+    expect(snip('claudeCodeLine', { command: 'a', args: ['x"y', 'z \\'], env: {} }, 'win'))
       .toBe('claude mcp add lolping -- a "x\\"y" "z \\\\"');
   });
 });

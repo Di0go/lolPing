@@ -296,7 +296,7 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
   ipcMain.handle(SETTINGS_CH.teammateConnectSnippet, (_e, id: unknown): { text: string } | null => {
     const app = typeof id === 'string' ? CONNECT_APPS.find((a) => a.id === id) : undefined;
     const bridge = app ? d.teammate.bridge() : null;
-    return app && bridge ? { text: connectSnippet(app.shape, bridge, d.platform) } : null;
+    return app && bridge ? { text: connectSnippet(app.shape, bridge, d.platform, d.text().teammate.settings.connectEnvLabel) } : null;
   });
   ipcMain.handle(SETTINGS_CH.teammateRecentApps, (): string[] => [...d.teammate.recentApps()]);
   ipcMain.handle(SETTINGS_CH.teammateEditors, (): Promise<string[]> => d.teammate.editors().catch(() => []));

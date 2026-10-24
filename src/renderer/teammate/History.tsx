@@ -49,6 +49,7 @@ const useStyles = makeStyles({
   ellipsis: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   meta: { color: tokens.colorNeutralForeground3 },
   note: { color: tokens.colorNeutralForeground2 },
+  error: { color: tokens.colorPaletteRedForeground1 },
 });
 
 export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: MateAction) => void }) {
@@ -90,6 +91,9 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
         </Text>
       ) : (
         <>
+          {s.openFailed !== undefined && (
+            <Text className={st.error} role="status">{ui.openInFailed(s.openFailed)}</Text>
+          )}
           <SearchBox
             className={st.search}
             placeholder={ui.search}

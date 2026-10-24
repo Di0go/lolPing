@@ -374,7 +374,9 @@ describe('teammate IPC', () => {
       context_servers: { lolping: { command: { path: 'lolPing.exe', args: ['bridge.js'], env: { LOLPING_PIPE: 'P' } } } },
     });
     const goose = await call(SETTINGS_CH.teammateConnectSnippet, 'goose');
-    expect(goose).toEqual({ text: "'LOLPING_PIPE=P' 'lolPing.exe' 'bridge.js'" });
+    expect(goose).toEqual({
+      text: ['\'lolPing.exe\' \'bridge.js\'', '', 'Environment variables:', 'LOLPING_PIPE=P'].join('\n'),
+    });
     for (const bad of ['nope', 5, null, { id: 'zed' }]) expect(await call(SETTINGS_CH.teammateConnectSnippet, bad)).toBeNull();
     bridgeUp = false;
     expect(await call(SETTINGS_CH.teammateConnectSnippet, 'zed')).toBeNull();
