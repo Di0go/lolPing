@@ -118,9 +118,14 @@ export function connectSnippet(shape: ConnectShape, b: BridgeCommand, platform: 
         .join('\n');
     }
     case 'claudeCodeLine':
-      return [
-        'claude mcp add lolping', ...envPairs(b).map((pair) => `-e ${shellWord(platform, pair)}`), '--',
-        ...[b.command, ...b.args].map((w) => shellWord(platform, w)),
-      ].join(' ');
+      return mcpAddLine('claude', b, platform);
   }
+}
+
+/** `<bin> mcp add lolping -e K=V … -- <command> <args…>`, quoted for the user's shell: Claude Code's and Qoder's. */
+export function mcpAddLine(bin: string, b: BridgeCommand, platform: Platform): string {
+  return [
+    `${bin} mcp add lolping`, ...envPairs(b).map((pair) => `-e ${shellWord(platform, pair)}`), '--',
+    ...[b.command, ...b.args].map((w) => shellWord(platform, w)),
+  ].join(' ');
 }

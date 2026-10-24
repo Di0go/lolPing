@@ -10,7 +10,8 @@ import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
 import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
-import { CONNECT_APPS, connectSnippet, type BridgeCommand } from '../shared/teammate/connectApps';
+import { AGENT_PRESETS } from '../shared/teammate/agents';
+import { CONNECT_APPS, connectSnippet, mcpAddLine, type BridgeCommand } from '../shared/teammate/connectApps';
 import { needsKey } from '../shared/teammate/providers';
 import { isBuiltin, PATH_MAX, type AgentProfile, type BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
@@ -288,9 +289,17 @@ function registerTeammateIpc(d: SettingsIpcDeps): void {
     const picked: unknown = await d.teammate.pickFolder().catch(() => null);
     return typeof picked === 'string' && picked !== '' && picked.length <= PATH_MAX ? picked : null;
   });
-  ipcMain.handle(SETTINGS_CH.teammateAgentSnippet, (): { json: string } | null => {
+  // By the saved profile's preset: one with an MCP file gets the JSON, one with only `<bin> mcp add` gets that line.
+  ipcMain.handle(SETTINGS_CH.teammateAgentSnippet, (_e, id: unknown): { text: string } | null => {
+    const profile = agentOf(id);
+    const preset = profile && profile.preset !== 'custom' ? AGENT_PRESETS[profile.preset] : null;
+    if (!preset) return null;
+    if (preset.mcp === 'user' && preset.userConfig === undefined) {
+      const bridge = d.teammate.bridge();
+      return bridge ? { text: mcpAddLine(preset.bin, bridge, d.platform) } : null;
+    }
     const json = d.teammate.agentSnippet();
-    return json === null ? null : { json };
+    return json === null ? null : { text: json };
   });
   // The shape comes from the app's own row, never from the window.
   ipcMain.handle(SETTINGS_CH.teammateConnectSnippet, (_e, id: unknown): { text: string } | null => {

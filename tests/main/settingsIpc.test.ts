@@ -364,8 +364,22 @@ describe('teammate IPC', () => {
     }
   });
 
-  it('gives the window the snippet for an agent that reads its own MCP file', async () => {
-    expect(await call(SETTINGS_CH.teammateAgentSnippet)).toEqual({ json: '{"mcpServers":{}}' });
+  it('gives the window the snippet for an agent that reads its own MCP file, or its mcp add line', async () => {
+    const agent = (id: string, preset: AgentProfile['preset']): AgentProfile => ({
+      id, kind: 'agent', name: id, tagColor: 3, tagColorCustom: null, preset, command: id, customArgs: [],
+      folder: { kind: 'editor', folders: [] }, timeoutS: 300,
+    });
+    const profiles = [PROFILE, agent('c', 'cursor'), agent('q', 'qoder')];
+    store.update({ teammate: { ...store.get().teammate, profiles } });
+    expect(await call(SETTINGS_CH.teammateAgentSnippet, 'c')).toEqual({ text: '{"mcpServers":{}}' });
+    // Qoder has no MCP file to name, only its own command.
+    expect(await call(SETTINGS_CH.teammateAgentSnippet, 'q')).toEqual({
+      text: 'qodercli mcp add lolping -e LOLPING_PIPE=P -- lolPing.exe bridge.js',
+    });
+    for (const bad of ['p1', 'nope', 5, null]) expect(await call(SETTINGS_CH.teammateAgentSnippet, bad)).toBeNull();
+    bridgeUp = false;
+    expect(await call(SETTINGS_CH.teammateAgentSnippet, 'q')).toBeNull();
+    bridgeUp = true;
   });
 
   it('gives the window a snippet in the shape of the app it asks for, and nothing for an unknown app', async () => {

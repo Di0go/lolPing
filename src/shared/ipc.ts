@@ -308,8 +308,11 @@ export interface SettingsApi {
   checkTeammateAgent(profileId: string): Promise<CheckAgentResult>;
   /** Shows the system folder picker; the chosen path, or null when it was cancelled. */
   pickTeammateFolder(): Promise<string | null>;
-  /** The JSON an agent that reads its own MCP file needs to add lolPing; null when it can't be made. */
-  getTeammateAgentSnippet(): Promise<{ json: string } | null>;
+  /**
+   * What the agent profile's agent needs to add lolPing: the JSON for its MCP file, or its `mcp add` line; null for
+   * an unknown or custom profile, or when it can't be made.
+   */
+  getTeammateAgentSnippet(profileId: string): Promise<{ text: string } | null>;
   /** The text to paste into the app with this CONNECT_APPS id (its config or command line); null for an unknown app. */
   getTeammateConnectSnippet(appId: string): Promise<{ text: string } | null>;
   /** Foreground app names of this session's asks, newest first: the App field of a rule offers them. */

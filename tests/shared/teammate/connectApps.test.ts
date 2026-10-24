@@ -3,7 +3,7 @@ import { strings } from '../../../src/shared/i18n';
 import type { Platform } from '../../../src/shared/platform';
 import { AGENT_PRESETS } from '../../../src/shared/teammate/agents';
 import {
-  CONNECT_APPS, connectSnippet, mcpServersJson, type BridgeCommand, type ConnectShape,
+  CONNECT_APPS, connectSnippet, mcpAddLine, mcpServersJson, type BridgeCommand, type ConnectShape,
 } from '../../../src/shared/teammate/connectApps';
 
 const BRIDGE = {
@@ -136,6 +136,13 @@ describe('connectSnippet', () => {
     ].join('\n'));
     expect(connectSnippet('gooseLine', { command: 'it\'s', args: [], env: {} }, 'mac', ENV_LABEL))
       .toBe(String.raw`'it'\''s'`);
+  });
+
+  it('makes the same mcp add line for another agent\'s own command', () => {
+    expect(mcpAddLine('qodercli', BRIDGE, 'win'))
+      .toBe(snip('claudeCodeLine', BRIDGE, 'win').replace(/^claude /, 'qodercli '));
+    expect(mcpAddLine('qodercli', { command: '/opt/lol Ping', args: ['b.js'], env: { K: 'v w' } }, 'linux'))
+      .toBe('qodercli mcp add lolping -e \'K=v w\' -- \'/opt/lol Ping\' b.js');
   });
 
   it('puts Claude Code\'s env flags before the double dash and quotes for the shell', () => {

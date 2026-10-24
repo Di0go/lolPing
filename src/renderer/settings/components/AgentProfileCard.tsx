@@ -91,10 +91,10 @@ function AgentNotes({ p }: { p: AgentProfile }) {
   const m = t.teammate.settings;
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    const snippet = await api.getTeammateAgentSnippet();
+    const snippet = await api.getTeammateAgentSnippet(p.id);
     if (snippet === null) return;
     try {
-      await navigator.clipboard.writeText(snippet.json);
+      await navigator.clipboard.writeText(snippet.text);
       setCopied(true);
     } catch {
       setCopied(false);
