@@ -93,6 +93,22 @@ describe('ContextClient', () => {
     await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
   });
 
+  it('reads the window in front', async () => {
+    const { c } = client(['ok']);
+    await expect(c.front(signal())).resolves.toEqual({
+      window: '263544', title: 'notes.txt - Notepad', box: { x: -1920, y: 40, w: 900, h: 700 }, pid: 4242,
+    });
+  });
+
+  it('is busy while a request waits', async () => {
+    const { c } = client(['lagged']);
+    expect(c.busy).toBe(false);
+    const waiting = c.foreground(signal()); // the lagged helper answers it after 300 ms
+    expect(c.busy).toBe(true);
+    await waiting;
+    expect(c.busy).toBe(false);
+  });
+
   it('passes on the helper\'s error code', async () => {
     const { c } = client(['denied']);
     await expect(c.capture({ display, spots: [], dir: tempDir() }, signal())).rejects.toMatchObject({ code: 'permission' });

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { createInterface } from 'node:readline';
 import type { Point } from '../../shared/ipc';
 import type { Rect, Shot } from '../../shared/teammate/coords';
+import type { FrontWindow } from '../../shared/teammate/stale';
 import {
   captureCommand, parseContextLine, pasteCommand, readCommand, serializeContextCommand, setFieldCommand,
   type ContextCommand, type ContextErrorCode, type ContextReply, type PasteRequest, type PasteResult, type ReadResult,
@@ -90,6 +91,18 @@ export class ContextClient {
     const r = await this.request((id) => ({ type: 'foreground', id }), 'foreground', signal);
     if (r.type !== 'foreground') throw new ContextError('bad', `unexpected reply ${r.type}`);
     return { app: r.app, title: r.title, window: r.window };
+  }
+
+  /** The window in front, read without calling into its app, so a frozen app cannot stall it. */
+  async front(signal: AbortSignal): Promise<FrontWindow> {
+    const r = await this.request((id) => ({ type: 'front', id }), 'front', signal);
+    if (r.type !== 'front') throw new ContextError('bad', `unexpected reply ${r.type}`);
+    return { window: r.window, title: r.title, box: { x: r.x, y: r.y, w: r.w, h: r.h }, pid: r.pid };
+  }
+
+  /** A request is waiting for its reply: the helper answers in order, so a poll now would wait behind it. */
+  get busy(): boolean {
+    return this.pending.size > 0;
   }
 
   /**

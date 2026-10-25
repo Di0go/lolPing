@@ -61,7 +61,7 @@ struct SetFieldRequest {
 };
 
 struct Command {
-  enum class Kind { Bad, Capture, Foreground, Ping, Shutdown, Read, Paste, SetField } kind = Kind::Bad;
+  enum class Kind { Bad, Capture, Foreground, Front, Ping, Shutdown, Read, Paste, SetField } kind = Kind::Bad;
   std::string id;
   std::string error;  // Bad: why
   CaptureRequest capture;
@@ -198,6 +198,14 @@ struct SystemText {
   bool focusSecure = false;
 };
 
+/** The window in front, read without calling into its app: its id (as foreground's), caption, box and process. */
+struct FrontWindow {
+  std::string window;
+  std::string title;
+  Rect box;
+  uint32_t pid = 0;
+};
+
 // controls, systemText, formFields and fileOf each run on their own fresh thread, which may outlive the command
 // when it runs over budget: they must not keep references to caller-owned state, and on Windows each must
 // CoInitializeEx on its thread.
@@ -208,6 +216,11 @@ struct ContextPlatform {
   std::function<bool(const Image& img, int quality, const std::string& path, Failure& fail)> writeJpeg;
   /** `windowId` names the window for later commands (the HWND in decimal on Windows); empty where there is none. */
   std::function<bool(std::string& app, std::string& title, std::string& windowId, Failure& fail)> foreground;
+  /**
+   * The window in front by foreground's id, its caption, box and process id, without calling into its app (no
+   * Accessibility or UI Automation call). Nothing in front: empty window, zero box. Optional: unset answers `bad`.
+   */
+  std::function<bool(FrontWindow& out, Failure& fail)> front;
   /** Named controls and text within `radius` of a spot; spots, radius and boxes are in request (screen) units. */
   std::function<bool(const std::vector<Point>& spots, int radius, std::vector<RawMark>& out, Failure& fail)> controls;
   /** `withAddress`: also look up the browser's address; off when the file probe of the same read looks it up. */

@@ -3,6 +3,7 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dwmapi.h>
 #include <wincodec.h>
 
 #include <cstdint>
@@ -194,6 +195,26 @@ bool foreground(std::string& app, std::string& title, std::string& windowId, Fai
   return true;
 }
 
+// The window in front for the stale watch, polled twice a second: no message to the app, no UI Automation.
+bool front(FrontWindow& out, Failure&) {
+  out = FrontWindow();
+  const HWND w = GetForegroundWindow();
+  if (!w) return true;
+  out.window = std::to_string(reinterpret_cast<uintptr_t>(w));
+  wchar_t text[512];
+  const int n = GetWindowTextW(w, text, 512);
+  out.title = utf8(std::wstring(text, n > 0 ? static_cast<size_t>(n) : 0));
+  // The frame the user sees, without the invisible resize border GetWindowRect adds on Windows 10 and 11.
+  RECT r{};
+  if (FAILED(DwmGetWindowAttribute(w, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))) && !GetWindowRect(w, &r)) r = RECT{};
+  out.box = Rect{static_cast<int>(r.left), static_cast<int>(r.top), static_cast<int>(r.right - r.left),
+                 static_cast<int>(r.bottom - r.top)};
+  DWORD pid = 0;
+  GetWindowThreadProcessId(w, &pid);
+  out.pid = static_cast<uint32_t>(pid);
+  return true;
+}
+
 }  // namespace
 
 // The text probes, in context_text_win.cpp.
@@ -211,6 +232,7 @@ ContextPlatform nativePlatform() {
   p.resize = resize;
   p.writeJpeg = writeJpeg;
   p.foreground = foreground;
+  p.front = front;
   p.controls = nearbyControls;
   p.systemText = systemTextAt;
   p.fileOf = fileBehindWindow;

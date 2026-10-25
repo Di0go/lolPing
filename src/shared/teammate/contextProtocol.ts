@@ -18,6 +18,7 @@ export type ContextCommand =
     boxes: boolean; fields: boolean; dir: string;
   }
   | { type: 'foreground'; id: string }
+  | { type: 'front'; id: string }
   | {
     type: 'paste'; id: string; window: string; text: string; click: string; field: string; mode: 'insert' | 'replace';
     asked: string;
@@ -94,6 +95,10 @@ export type ContextReply =
   | ({ type: 'read'; id: string } & ReadResult)
   /** `window` is the window's id (the HWND in decimal on Windows), or '' where the helper has none. */
   | { type: 'foreground'; id: string; app: string; title: string; window: string }
+  /** The window in front, read without calling into its app; no window and a zero box when nothing is in front. */
+  | {
+    type: 'front'; id: string; window: string; title: string; x: number; y: number; w: number; h: number; pid: number;
+  }
   /** `restored`: false when the user's clipboard could not be put back after the paste (true when left out). */
   | { type: 'pasted'; id: string; result: PasteResult; restored: boolean }
   | { type: 'set'; id: string; result: SetFieldResult }
@@ -174,6 +179,7 @@ export function setFieldCommand(id: string, req: SetFieldRequest): ContextComman
 export const serializeContextCommand = (cmd: ContextCommand): string => `${JSON.stringify(cmd)}\n`;
 
 const isPositiveInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
+const isInt = (v: unknown): v is number => Number.isInteger(v);
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
 const isErrorCode = (v: unknown): v is ContextErrorCode => v === 'capture' || v === 'permission' || v === 'bad';
 const isLayerStatus = (v: unknown): v is LayerStatus => (
@@ -377,6 +383,12 @@ export function parseContextLine(line: string): ContextReply | null {
       if (typeof o.app !== 'string' || typeof o.title !== 'string') return null;
       if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window)) return null;
       return { type: 'foreground', id, app: o.app, title: o.title, window: o.window };
+    case 'front':
+      if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window) || typeof o.title !== 'string') return null;
+      if (!isInt(o.x) || !isInt(o.y) || !isCount(o.w) || !isCount(o.h) || !isCount(o.pid)) return null;
+      return {
+        type: 'front', id, window: o.window, title: o.title, x: o.x, y: o.y, w: o.w, h: o.h, pid: o.pid,
+      };
     case 'pasted':
       if (!isPasteResult(o.result) || (o.restored !== undefined && typeof o.restored !== 'boolean')) return null;
       return { type: 'pasted', id, result: o.result, restored: o.restored ?? true };

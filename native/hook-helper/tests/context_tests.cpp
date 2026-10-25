@@ -265,6 +265,31 @@ static void test_foreground_and_pong_replies() {
   CHECK(b.at("type") == "error" && b.at("id") == "b1" && b.at("code") == "bad");
 }
 
+static void test_front_reply() {
+  Fake fake;
+  ContextPlatform p = fake.platform();
+  p.front = [](FrontWindow& out, Failure&) {
+    out.window = "263544";
+    out.title = "a \"note\".txt";
+    out.box = Rect{-1920, 40, 900, 700};
+    out.pid = 4242;
+    return true;
+  };
+  const Command c = parseCommand(R"({"type":"front","id":"w1"})");
+  CHECK(c.kind == Command::Kind::Front && c.id == "w1");
+  const auto f = fields(handleCommand(c, p).line);
+  CHECK(f.at("type") == "front" && f.at("id") == "w1" && f.at("window") == "263544");
+  CHECK(f.at("title") == "a \"note\".txt");
+  CHECK(f.at("x") == "-1920" && f.at("y") == "40" && f.at("w") == "900" && f.at("h") == "700");
+  CHECK(f.at("pid") == "4242");
+}
+
+static void test_front_without_platform_is_bad() {
+  Fake fake;  // no front hook, like macOS until its port
+  const auto f = fields(handleCommand(parseCommand(R"({"type":"front","id":"w2"})"), fake.platform()).line);
+  CHECK(f.at("type") == "error" && f.at("id") == "w2" && f.at("code") == "bad");
+}
+
 static void test_loop_answers_until_shutdown() {
   Fake fake;
   std::istringstream in("{\"type\":\"ping\",\"id\":\"1\"}\r\n\n{\"type\":\"shutdown\"}\n{\"type\":\"ping\",\"id\":\"2\"}\n");
@@ -1658,6 +1683,8 @@ int main() {
   test_capture_shows_the_area_and_the_crops();
   test_capture_failure_is_an_error_reply();
   test_foreground_and_pong_replies();
+  test_front_reply();
+  test_front_without_platform_is_bad();
   test_loop_answers_until_shutdown();
   test_parse_read_command();
   test_read_answers_every_layer_it_was_asked_for();

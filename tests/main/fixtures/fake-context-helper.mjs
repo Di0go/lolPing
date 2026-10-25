@@ -67,6 +67,9 @@ async function handle(cmd) {
     await later(300);
     reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
   }
+  else if (cmd.type === 'front') {
+    reply({ type: 'front', id: cmd.id, window: '263544', title: 'notes.txt - Notepad', x: -1920, y: 40, w: 900, h: 700, pid: 4242 });
+  }
   else if (cmd.type === 'read') read(cmd);
   else if (cmd.type === 'ping') reply({ type: 'pong', id: cmd.id });
   else if (cmd.type === 'paste') {

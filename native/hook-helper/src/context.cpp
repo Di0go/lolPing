@@ -625,6 +625,7 @@ Command parseCommand(const std::string& line) {
   Command c;
   c.id = id;
   if (type->second == "foreground") c.kind = Command::Kind::Foreground;
+  else if (type->second == "front") c.kind = Command::Kind::Front;
   else if (type->second == "ping") c.kind = Command::Kind::Ping;
   else return bad(id, "unknown type");
   return c;
@@ -710,6 +711,16 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int bud
         }
         return Reply{"{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
                      "\",\"title\":\"" + jsonEscape(title) + "\",\"window\":\"" + jsonEscape(windowId) + "\"}"};
+      }
+      case Command::Kind::Front: {
+        if (!platform.front) return Reply{formatError(cmd.id, "bad", "front is not available here")};
+        FrontWindow w;
+        Failure fail;
+        if (!platform.front(w, fail)) return Reply{formatError(cmd.id, fail.code, fail.message)};
+        return Reply{"{\"type\":\"front\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"window\":\"" + jsonEscape(w.window) +
+                     "\",\"title\":\"" + jsonEscape(w.title) + "\",\"x\":" + std::to_string(w.box.x) +
+                     ",\"y\":" + std::to_string(w.box.y) + ",\"w\":" + std::to_string(w.box.w) +
+                     ",\"h\":" + std::to_string(w.box.h) + ",\"pid\":" + std::to_string(w.pid) + "}"};
       }
       case Command::Kind::Read: return handleRead(cmd, platform, budgetMs);
       case Command::Kind::Paste: return handlePaste(cmd, platform, budgetMs);

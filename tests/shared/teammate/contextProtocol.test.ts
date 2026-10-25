@@ -78,6 +78,24 @@ describe('contextProtocol', () => {
     expect(parseContextLine(JSON.stringify({ type: 'pong', id: 'r3' }))).toEqual({ type: 'pong', id: 'r3' });
   });
 
+  it('reads a front reply', () => {
+    const front = { type: 'front', id: 'r4', window: '263544', title: 'a.ts', x: -1920, y: 40, w: 900, h: 700, pid: 4242 };
+    expect(parseContextLine(JSON.stringify(front))).toEqual(front);
+    // Nothing in front: an empty window and a zero box.
+    const none = { type: 'front', id: 'r4', window: '', title: '', x: 0, y: 0, w: 0, h: 0, pid: 0 };
+    expect(parseContextLine(JSON.stringify(none))).toEqual(none);
+  });
+
+  it('rejects a front reply without its box', () => {
+    const front = { type: 'front', id: 'r4', window: '263544', title: 'a.ts', x: 1, y: 2, w: 900, h: 700, pid: 4242 };
+    expect(parseContextLine(JSON.stringify({ ...front, w: undefined }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...front, x: '1' }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...front, h: 1.5 }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...front, pid: -1 }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...front, window: '12x' }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...front, title: 3 }))).toBeNull();
+  });
+
   it('flattens a read command', () => {
     expect(readCommand('r1', {
       spots: [{ x: 10.4, y: -20 }, { x: 3, y: 4 }], radius: 600, marks: true, text: false, file: true, boxes: true,
