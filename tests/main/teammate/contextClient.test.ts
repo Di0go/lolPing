@@ -244,6 +244,24 @@ describe('ContextClient', () => {
     await expect(paste).resolves.toEqual({ result: 'ok', restored: true });
   });
 
+  it('gives a paste the time of an aborted request the helper still runs ahead of it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { c, starts } = client(['lagged']);
+    const ac = new AbortController();
+    const fg = c.foreground(ac.signal).catch((e: unknown) => e);
+    ac.abort();
+    await fg;
+    const req = { window: '263544', text: join(tempDir(), 'pasted'), click: null, mode: 'insert' as const, asked: '' };
+    let settled = false;
+    const paste = c.paste(req, signal()).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(6100); // past a paste's own 6 s
+    expect(settled).toBe(false);
+    expect(starts()).toBe(1);
+    await expect(paste).resolves.toEqual({ result: 'ok', restored: true });
+  });
+
   it('gives a request behind a paste the paste\'s time too, so it never restarts the helper mid-paste', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { c, starts } = client(['silent', 'ok']);

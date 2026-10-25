@@ -113,8 +113,8 @@ export class ContextClient {
    * could not be put back.
    */
   async paste(req: PasteRequest, signal: AbortSignal): Promise<{ result: PasteResult; restored: boolean }> {
-    // The helper answers in order: each request still waiting ahead of the paste may take its own time first.
-    const ownMs = PASTE_TIMEOUT_MS + this.pending.size * this.timeoutMs;
+    // The helper answers in order: each request still ahead of the paste, aborted or not, may take its own time first.
+    const ownMs = PASTE_TIMEOUT_MS + this.unanswered.size * this.timeoutMs;
     const r = await this.request((id) => {
       this.pastes.add(id);
       return pasteCommand(id, req);
