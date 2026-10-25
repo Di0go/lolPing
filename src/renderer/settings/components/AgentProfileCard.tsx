@@ -1,4 +1,5 @@
 import { Button, Radio, RadioGroup, SpinButton, Textarea } from '@fluentui/react-components';
+import { Code24Regular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import type { CheckAgentResult } from '../../../shared/ipc';
 import { agentNotes, timeoutMinutes, timeoutSeconds, withFolder } from '../../../shared/teammate/agentProfiles';
@@ -7,6 +8,7 @@ import type { AgentProfile } from '../../../shared/teammate/settings';
 import { api } from '../api';
 import { useText } from '../text';
 import { DraftInput, Swatches } from './mateFields';
+import { ExpanderRow } from './rows';
 
 /** One argument per line; empty lines at the end are the textarea's trailing line break, not arguments. */
 function linesOf(text: string): string[] {
@@ -128,8 +130,8 @@ function AgentNotes({ p }: { p: AgentProfile }) {
 }
 
 /** A coding agent's profile: the command, where it runs, how long it may take, and what to know about it. */
-export function AgentProfileCard({ p, onChange, onRemove }: {
-  p: AgentProfile; onChange(patch: Partial<AgentProfile>): void; onRemove(): void;
+export function AgentProfileCard({ p, open, onChange, onRemove }: {
+  p: AgentProfile; open: boolean; onChange(patch: Partial<AgentProfile>): void; onRemove(): void;
 }) {
   const t = useText();
   const m = t.teammate.settings;
@@ -150,54 +152,55 @@ export function AgentProfileCard({ p, onChange, onRemove }: {
   };
 
   return (
-    <div className="card mate">
-      <div className="mateHead">
-        <b>{p.name || preset?.name || m.agentCustom}</b>
-        <span className="desc inline">{preset?.name ?? m.agentCustom}</span>
-        <Button size="small" appearance="subtle" onClick={onRemove}>{m.removeProfile}</Button>
-      </div>
-      <div className="mateFields">
-        <span>{m.profileName}</span>
-        <DraftInput value={p.name} maxLength={60} onSave={(name) => onChange({ name })} />
-        <span>{m.tagColor}</span>
-        <Swatches label={m.tagColor} color={p.tagColorCustom ? -1 : p.tagColor}
-          onPick={(i) => onChange({ tagColor: i, tagColorCustom: null })} />
-        <span>{m.agentCommand}</span>
-        <div className="mateRow">
-          <DraftInput key={commandReset} value={p.command} maxLength={1024} width={300} onSave={(v) => {
-            if (v.trim() === '') setCommandReset((n) => n + 1);
-            else onChange({ command: v.trim() });
-          }} />
-          <Button disabled={checking} onClick={() => void check()}>{checking ? m.checking : m.agentCheck}</Button>
-          {result ? <CheckResult r={result} /> : <span className="desc">{m.agentCheckDesc}</span>}
-        </div>
-        {preset === null ? (
-          <>
-            <span>{m.agentArgs}</span>
-            <div className="mateStack">
-              <Textarea value={args} resize="vertical" rows={3} aria-label={m.agentArgs}
-                style={{ width: '100%', fontFamily: 'monospace' }} onChange={(_, d) => setArgs(d.value)}
-                onBlur={() => {
-                  const lines = linesOf(args);
-                  if (lines.join('\n') !== saved) onChange({ customArgs: lines });
-                }} />
-              <span className="desc">{m.agentArgsDesc}</span>
-            </div>
-          </>
-        ) : null}
-        <FolderRows p={p} onChange={onChange} />
-        <span>{m.agentTimeout}</span>
-        <div className="mateRow">
-          <SpinButton min={1} max={30} step={1} value={timeoutMinutes(p.timeoutS)} style={{ width: 90 }}
-            aria-label={m.agentTimeout}
-            onChange={(_, d) => {
-              const minutes = d.value ?? Number(d.displayValue);
-              if (Number.isFinite(minutes)) onChange({ timeoutS: timeoutSeconds(minutes) });
+    <ExpanderRow icon={<Code24Regular />} title={p.name || preset?.name || m.agentCustom} defaultOpen={open}
+      description={`${preset?.name ?? m.agentCustom} · ${p.command}`}>
+      <div className="expPane">
+        <div className="mateFields">
+          <span>{m.profileName}</span>
+          <DraftInput value={p.name} maxLength={60} onSave={(name) => onChange({ name })} />
+          <span>{m.tagColor}</span>
+          <Swatches label={m.tagColor} color={p.tagColorCustom ? -1 : p.tagColor}
+            onPick={(i) => onChange({ tagColor: i, tagColorCustom: null })} />
+          <span>{m.agentCommand}</span>
+          <div className="mateRow">
+            <DraftInput key={commandReset} value={p.command} maxLength={1024} width={300} onSave={(v) => {
+              if (v.trim() === '') setCommandReset((n) => n + 1);
+              else onChange({ command: v.trim() });
             }} />
-          <span className="desc">{m.agentTimeoutUnit}</span>
+            <Button disabled={checking} onClick={() => void check()}>{checking ? m.checking : m.agentCheck}</Button>
+            {result ? <CheckResult r={result} /> : <span className="desc">{m.agentCheckDesc}</span>}
+          </div>
+          {preset === null ? (
+            <>
+              <span>{m.agentArgs}</span>
+              <div className="mateStack">
+                <Textarea value={args} resize="vertical" rows={3} aria-label={m.agentArgs}
+                  style={{ width: '100%', fontFamily: 'monospace' }} onChange={(_, d) => setArgs(d.value)}
+                  onBlur={() => {
+                    const lines = linesOf(args);
+                    if (lines.join('\n') !== saved) onChange({ customArgs: lines });
+                  }} />
+                <span className="desc">{m.agentArgsDesc}</span>
+              </div>
+            </>
+          ) : null}
+          <FolderRows p={p} onChange={onChange} />
+          <span>{m.agentTimeout}</span>
+          <div className="mateRow">
+            <SpinButton min={1} max={30} step={1} value={timeoutMinutes(p.timeoutS)} style={{ width: 90 }}
+              aria-label={m.agentTimeout}
+              onChange={(_, d) => {
+                const minutes = d.value ?? Number(d.displayValue);
+                if (Number.isFinite(minutes)) onChange({ timeoutS: timeoutSeconds(minutes) });
+              }} />
+            <span className="desc">{m.agentTimeoutUnit}</span>
+          </div>
+        </div>
+        <AgentNotes p={p} />
+        <div className="mateRow mateNote">
+          <Button appearance="subtle" onClick={onRemove}>{m.removeProfile}</Button>
         </div>
       </div>
-      <AgentNotes p={p} />
-    </div>
+    </ExpanderRow>
   );
 }

@@ -1,12 +1,12 @@
 import { Button } from '@fluentui/react-components';
-import { PlugConnected24Regular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import { CONNECT_APPS } from '../../../shared/teammate/connectApps';
 import { api } from '../api';
 import { useText } from '../text';
+import { SettingRow } from './rows';
 
 /** Apps that run agents outside lolPing: where to add lolPing, and a Copy button for the snippet that app reads. */
-export function ConnectAppsCard() {
+export function ConnectApps() {
   const t = useText();
   const m = t.teammate.settings;
   const [copied, setCopied] = useState<string | null>(null);
@@ -26,27 +26,20 @@ export function ConnectAppsCard() {
   };
 
   return (
-    <div className="card mate">
-      <div className="mateHead">
-        <span className="icon"><PlugConnected24Regular /></span>
-        <div className="lbl">
-          {m.connectTitle}
-          <span className="desc">{m.connectDesc}</span>
-        </div>
-      </div>
+    <>
+      <SettingRow icon={null} title={m.connectTitle} description={m.connectDesc}>{null}</SettingRow>
       {CONNECT_APPS.map((a) => (
-        <div key={a.id} className="mateRead">
-          <span className="icon" />
-          <div className="lbl">
-            {m.connectName[a.id]}
-            <span className="desc matePath">{a.file ? a.file[api.platform] : m.connectPage[a.page]}</span>
+        <SettingRow key={a.id} icon={null} title={m.connectName[a.id]} description={(
+          <>
+            <span className="matePath">{a.file ? a.file[api.platform] : m.connectPage[a.page]}</span>
             {failed === a.id ? <span className="weImportError">{m.connectFailed}</span> : null}
-          </div>
+          </>
+        )}>
           <Button size="small" aria-label={m.connectCopyLabel(m.connectName[a.id])} onClick={() => void copy(a.id)}>
             {copied === a.id ? m.connectCopied : m.connectCopy}
           </Button>
-        </div>
+        </SettingRow>
       ))}
-    </div>
+    </>
   );
 }

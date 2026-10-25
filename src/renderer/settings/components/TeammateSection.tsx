@@ -6,6 +6,7 @@ import {
 } from '@fluentui/react-icons';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ALL_PINGS, textureUrl, type PingId } from '../../../shared/pings';
+import { tagColorCss } from '../../../shared/roomColors';
 import { sameTrigger, triggerLabel, type Settings, type TriggerKey } from '../../../shared/settings';
 import { defaultAfterAdd, newAgentProfile } from '../../../shared/teammate/agentProfiles';
 import { AGENT_PRESET_IDS, AGENT_PRESETS, type AgentPresetId } from '../../../shared/teammate/agents';
@@ -19,10 +20,10 @@ import { api } from '../api';
 import { useText } from '../text';
 import type { Update } from '../useAppState';
 import { AgentProfileCard } from './AgentProfileCard';
-import { ConnectAppsCard } from './ConnectAppsCard';
+import { ConnectApps } from './ConnectApps';
 import { DraftInput, Swatches } from './mateFields';
 import { RulesCard } from './RulesCard';
-import { SettingRow, SwitchRow } from './rows';
+import { ExpanderRow, OnOffSwitch, SettingRow, SwitchRow } from './rows';
 import { TriggerPicker } from './TriggerPicker';
 
 /** Mirrors INSTRUCTIONS_MAX_CHARS in the main process's secret store. */
@@ -38,8 +39,8 @@ type Patch = (p: Partial<TeammateSettings>) => void;
 /** Short and unique enough for a handful of profiles; the same shape the settings file accepts. */
 const newProfileId = (): string => `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-function ProfileCard({ p, onChange, onRemove }: {
-  p: BuiltinProfile; onChange(patch: Partial<BuiltinProfile>): void; onRemove(): void;
+function ProfileCard({ p, open, onChange, onRemove }: {
+  p: BuiltinProfile; open: boolean; onChange(patch: Partial<BuiltinProfile>): void; onRemove(): void;
 }) {
   const t = useText();
   const m = t.teammate.settings;
@@ -77,68 +78,51 @@ function ProfileCard({ p, onChange, onRemove }: {
   const keyless = !needsKey(p);
 
   return (
-    <div className="card mate">
-      <div className="mateHead">
-        <b>{p.name || provider?.name}</b>
-        <span className="desc inline">{provider?.name}</span>
-        <Button size="small" appearance="subtle" onClick={onRemove}>{m.removeProfile}</Button>
-      </div>
-      <div className="mateFields">
-        <span>{m.profileName}</span>
-        <DraftInput value={p.name} maxLength={60} onSave={(name) => onChange({ name })} />
-        <span>{m.baseUrl}</span>
-        <DraftInput value={p.baseUrl} maxLength={2048} width={360}
-          onSave={(baseUrl) => onChange({ baseUrl: baseUrl.trim() })} />
-        <span>{m.key}</span>
-        <div className="mateRow">
-          <Input type="password" autoComplete="off" value={key} maxLength={KEY_MAX} style={{ width: 260 }}
-            placeholder={hasKey ? m.keySavedPlaceholder : keyless ? m.keyNotNeeded : m.keyPlaceholder}
-            onChange={(_, d) => setKey(d.value)}
-            onKeyDown={(e) => e.key === 'Enter' && key.trim() && void saveKey(key)} />
-          <Button disabled={!key.trim()} onClick={() => void saveKey(key)}>{m.saveKey}</Button>
-          {hasKey ? <Button appearance="subtle" onClick={() => void saveKey('')}>{m.removeKey}</Button> : null}
+    <ExpanderRow icon={<Bot24Regular />} title={p.name || provider?.name} defaultOpen={open}
+      description={[provider?.name, p.model].filter(Boolean).join(' · ')}>
+      <div className="expPane">
+        <div className="mateFields">
+          <span>{m.profileName}</span>
+          <DraftInput value={p.name} maxLength={60} onSave={(name) => onChange({ name })} />
+          <span>{m.baseUrl}</span>
+          <DraftInput value={p.baseUrl} maxLength={2048} width={360}
+            onSave={(baseUrl) => onChange({ baseUrl: baseUrl.trim() })} />
+          <span>{m.key}</span>
+          <div className="mateRow">
+            <Input type="password" autoComplete="off" value={key} maxLength={KEY_MAX} style={{ width: 260 }}
+              placeholder={hasKey ? m.keySavedPlaceholder : keyless ? m.keyNotNeeded : m.keyPlaceholder}
+              onChange={(_, d) => setKey(d.value)}
+              onKeyDown={(e) => e.key === 'Enter' && key.trim() && void saveKey(key)} />
+            <Button disabled={!key.trim()} onClick={() => void saveKey(key)}>{m.saveKey}</Button>
+            {hasKey ? <Button appearance="subtle" onClick={() => void saveKey('')}>{m.removeKey}</Button> : null}
+          </div>
+          {keyError ? <><span /><span className="weImportError">{keyError}</span></> : null}
+          <span />
+          <div className="mateRow">
+            <Button disabled={(!hasKey && !keyless) || checking} onClick={() => void checkKey()}>
+              {checking ? m.checking : m.checkKey}
+            </Button>
+            <span className={check && !check.ok ? 'weImportError' : 'desc'}>{check ? check.text : m.checkKeyDesc}</span>
+          </div>
+          <span>{m.model}</span>
+          <Combobox freeform value={model} placeholder={m.modelPlaceholder} style={{ width: 260 }}
+            selectedOptions={p.model ? [p.model] : []}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={() => model.trim() !== p.model && onChange({ model: model.trim() })}
+            onOptionSelect={(_, d) => {
+              if (!d.optionValue) return;
+              setModel(d.optionValue);
+              onChange({ model: d.optionValue });
+            }}>
+            {models.map((id) => <Option key={id} value={id}>{id}</Option>)}
+          </Combobox>
+          {visionGuess(p.model) === false ? <><span /><span className="weImportError">{m.modelNoVision}</span></> : null}
         </div>
-        {keyError ? <><span /><span className="weImportError">{keyError}</span></> : null}
-        <span />
-        <div className="mateRow">
-          <Button disabled={(!hasKey && !keyless) || checking} onClick={() => void checkKey()}>
-            {checking ? m.checking : m.checkKey}
-          </Button>
-          <span className={check && !check.ok ? 'weImportError' : 'desc'}>{check ? check.text : m.checkKeyDesc}</span>
+        <div className="mateRow mateNote">
+          <Button appearance="subtle" onClick={onRemove}>{m.removeProfile}</Button>
         </div>
-        <span>{m.model}</span>
-        <Combobox freeform value={model} placeholder={m.modelPlaceholder} style={{ width: 260 }}
-          selectedOptions={p.model ? [p.model] : []}
-          onChange={(e) => setModel(e.target.value)}
-          onBlur={() => model.trim() !== p.model && onChange({ model: model.trim() })}
-          onOptionSelect={(_, d) => {
-            if (!d.optionValue) return;
-            setModel(d.optionValue);
-            onChange({ model: d.optionValue });
-          }}>
-          {models.map((id) => <Option key={id} value={id}>{id}</Option>)}
-        </Combobox>
-        {visionGuess(p.model) === false ? <><span /><span className="weImportError">{m.modelNoVision}</span></> : null}
       </div>
-    </div>
-  );
-}
-
-/** One context source inside the "What the teammate reads" card: a SwitchRow without its own card. */
-function ReadRow({ icon, title, description, checked, onChange }: {
-  icon: ReactNode; title: string; description: string; checked: boolean; onChange(v: boolean): void;
-}) {
-  const t = useText();
-  return (
-    <div className="mateRead">
-      <span className="icon">{icon}</span>
-      <div className="lbl">
-        {title}
-        <span className="desc">{description}</span>
-      </div>
-      <Switch checked={checked} aria-label={title} onChange={(_, d) => onChange(d.checked)}
-        label={checked ? t.on : t.off} labelPosition="before" />
-    </div>
+    </ExpanderRow>
   );
 }
 
@@ -199,24 +183,19 @@ function InstructionsCard() {
     if (r.ok) setSaved(draft);
   };
   return (
-    <div className="card mate">
-      <div className="mateHead">
-        <span className="icon"><TextEditStyle24Regular /></span>
-        <div className="lbl">
-          {m.instructions}
-          <span className="desc">{m.instructionsDesc}</span>
+    <ExpanderRow icon={<TextEditStyle24Regular />} title={m.instructions} description={m.instructionsDesc}>
+      <div className="expPane">
+        <Textarea className="mateInstructions" value={draft} maxLength={INSTRUCTIONS_MAX} placeholder={m.instructionsPlaceholder}
+          resize="vertical" aria-label={m.instructions} onChange={(_, d) => setDraft(d.value)} />
+        <div className="mateRow">
+          <Button disabled={draft === saved} onClick={() => void save()}>
+            {draft === saved && saved ? m.instructionsSaved : m.instructionsSave}
+          </Button>
+          <span className="desc">{m.instructionsCount(draft.length, INSTRUCTIONS_MAX)}</span>
+          {error ? <span className="weImportError">{error}</span> : null}
         </div>
       </div>
-      <Textarea className="mateInstructions" value={draft} maxLength={INSTRUCTIONS_MAX} placeholder={m.instructionsPlaceholder}
-        resize="vertical" aria-label={m.instructions} onChange={(_, d) => setDraft(d.value)} />
-      <div className="mateRow">
-        <Button disabled={draft === saved} onClick={() => void save()}>
-          {draft === saved && saved ? m.instructionsSaved : m.instructionsSave}
-        </Button>
-        <span className="desc">{m.instructionsCount(draft.length, INSTRUCTIONS_MAX)}</span>
-        {error ? <span className="weImportError">{error}</span> : null}
-      </div>
-    </div>
+    </ExpanderRow>
   );
 }
 
@@ -233,26 +212,20 @@ function PermissionsCard({ s, patch }: { s: TeammateSettings; patch: Patch }) {
       : m.permissionLine(profile.name, m.permissionActions[k.action]);
     return [{ key, text }];
   });
+  if (rows.length === 0) {
+    return <SettingRow icon={<ShieldKeyhole24Regular />} title={m.permissions} description={m.permissionsEmpty}>{null}</SettingRow>;
+  }
   return (
-    <div className="card mate">
-      <div className="mateHead">
-        <span className="icon"><ShieldKeyhole24Regular /></span>
-        <div className="lbl">
-          {m.permissions}
-          {rows.length === 0 ? <span className="desc">{m.permissionsEmpty}</span> : null}
-        </div>
-      </div>
+    <ExpanderRow icon={<ShieldKeyhole24Regular />} title={m.permissions} description={m.permissionsCount(rows.length)}>
       {rows.map((r) => (
-        <div key={r.key} className="mateRead">
-          <span className="icon" />
-          <div className="lbl">{r.text}</div>
+        <SettingRow key={r.key} icon={null} title={r.text}>
           <Button size="small" appearance="subtle" aria-label={m.permissionRemoveLabel(r.text)}
             onClick={() => patch({ permissions: s.permissions.filter((p) => p !== r.key) })}>
             {m.permissionRemove}
           </Button>
-        </div>
+        </SettingRow>
       ))}
-    </div>
+    </ExpanderRow>
   );
 }
 
@@ -283,10 +256,10 @@ function HistoryRows({ s, patch, secrets }: { s: TeammateSettings; patch: Patch;
   const description = !secrets ? m.secretsUnavailable : h.paused ? m.historyPaused : m.historyDesc;
   const keepLabel = (d: number | null) => (d === null ? m.keepForever : m.keepDays(d));
   return (
-    <>
-      <SwitchRow icon={<History24Regular />} title={m.history} description={description} dim={!secrets}
-        disabled={!secrets} checked={h.on && secrets} onChange={(on) => patch({ history: { ...h, on } })} />
-      <SettingRow icon={<History24Regular />} title={m.keepFor} dim={!h.on || !secrets}>
+    <ExpanderRow icon={<History24Regular />} title={m.history} description={description} dim={!secrets}
+      control={<OnOffSwitch checked={h.on && secrets} disabled={!secrets} label={m.history}
+        onChange={(on) => patch({ history: { ...h, on } })} />}>
+      <SettingRow icon={null} title={m.keepFor} dim={!h.on || !secrets}>
         <Dropdown style={{ minWidth: 170 }} value={keepLabel(h.keepDays)} selectedOptions={[String(h.keepDays)]}
           onOptionSelect={(_, d) => {
             const days = KEEP_DAYS.find((k) => String(k) === d.optionValue);
@@ -313,7 +286,7 @@ function HistoryRows({ s, patch, secrets }: { s: TeammateSettings; patch: Patch;
           {cleared ? m.historyCleared : m.historyClearFailed}
         </div>
       )}
-    </>
+    </ExpanderRow>
   );
 }
 
@@ -350,6 +323,8 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
   const profileName = (id: string | null) => mate.profiles.find((p) => p.id === id)?.name ?? m.noProfile;
   const [secrets, setSecrets] = useState(true);
   const [screenAccess, setScreenAccess] = useState<boolean | null>(null);
+  /** The profile just added starts open; the others start closed. */
+  const [added, setAdded] = useState<string | null>(null);
   useEffect(() => {
     // Read again when the window regains focus: the user comes back from System Settings.
     const load = () => void api.getTeammateStatus().then((st) => {
@@ -368,10 +343,12 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
       id: newProfileId(), kind: 'builtin', name: preset.name, tagColor: mate.tagColor, tagColorCustom: null,
       provider: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, model: '',
     };
+    setAdded(profile.id);
     patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
   };
   const addAgent = (preset: AgentPresetId | 'custom') => {
     const profile = newAgentProfile({ id: newProfileId(), preset, customName: m.agentCustom, tagColor: mate.tagColor });
+    setAdded(profile.id);
     patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
   };
   const changeProfile = (id: string, p: Partial<BuiltinProfile>) =>
@@ -387,6 +364,14 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
       deepProfile: mate.deepProfile === id ? null : mate.deepProfile,
     });
   };
+  const reads: { key: keyof TeammateSettings['context']; icon: ReactNode; title: string; description: string }[] = [
+    { key: 'marks', icon: <ScanText24Regular />, title: m.readMarks, description: m.readMarksDesc },
+    { key: 'systemText', icon: <TextField24Regular />, title: m.readSystemText, description: m.readSystemTextDesc },
+    { key: 'files', icon: <DocumentText24Regular />, title: m.readFiles, description: m.readFilesDesc },
+    { key: 'webPdfs', icon: <Globe24Regular />, title: m.readWebPdfs, description: m.readWebPdfsDesc },
+    { key: 'clipboardForForms', icon: <ClipboardPaste24Regular />, title: m.readFormPaste, description: m.readFormPasteDesc },
+  ];
+  const readsOn = reads.filter((r) => mate.context[r.key]).length;
   const patchIntent = (id: PingId, o: IntentOverride | null) => {
     const intents = { ...mate.intents };
     if (o) intents[id] = o;
@@ -436,8 +421,10 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         </div>
       </div>
       {mate.profiles.map((p) => (p.kind === 'agent'
-        ? <AgentProfileCard key={p.id} p={p} onChange={(x) => changeAgent(p.id, x)} onRemove={() => removeProfile(p.id)} />
-        : <ProfileCard key={p.id} p={p} onChange={(x) => changeProfile(p.id, x)} onRemove={() => removeProfile(p.id)} />))}
+        ? <AgentProfileCard key={p.id} p={p} open={p.id === added} onChange={(x) => changeAgent(p.id, x)}
+          onRemove={() => removeProfile(p.id)} />
+        : <ProfileCard key={p.id} p={p} open={p.id === added} onChange={(x) => changeProfile(p.id, x)}
+          onRemove={() => removeProfile(p.id)} />))}
       {mate.profiles.length > 0 ? (
         <>
           <SettingRow icon={<Bot24Regular />} title={m.defaultProfile} description={m.defaultProfileDesc}>
@@ -459,64 +446,59 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         </>
       ) : null}
 
-      <SwitchRow icon={<Keyboard24Regular />} title={m.askKeySame}
-        description={same ? m.askKeySameNote : undefined}
-        checked={same} onChange={(on) => patch({ askTrigger: on ? 'same' : ownAskKey })} />
-      {same ? null : (
-        <SettingRow icon={<Keyboard24Regular />} title={m.askKey} description={m.askKeyDesc}>
-          <TriggerPicker value={mate.askTrigger === 'same' ? s.trigger : mate.askTrigger}
-            blocked={[s.emoteTrigger, s.trigger]}
-            onChange={(k) => {
-              if (k !== 'off') patch({ askTrigger: k });
-            }} />
+      <ExpanderRow icon={<Keyboard24Regular />} title={m.askKey} description={m.askKeyDesc}
+        control={<span>{same ? m.askKeySame : askLabel}</span>}>
+        <SwitchRow icon={<Keyboard24Regular />} title={m.askKeySame}
+          description={same ? m.askKeySameNote : undefined}
+          checked={same} onChange={(on) => patch({ askTrigger: on ? 'same' : ownAskKey })} />
+        {same ? null : (
+          <SettingRow icon={<Keyboard24Regular />} title={m.askKey}>
+            <TriggerPicker value={mate.askTrigger === 'same' ? s.trigger : mate.askTrigger}
+              blocked={[s.emoteTrigger, s.trigger]}
+              onChange={(k) => {
+                if (k !== 'off') patch({ askTrigger: k });
+              }} />
+          </SettingRow>
+        )}
+        <SwitchRow icon={<CursorClick24Regular />} title={m.askClick(askLabel)} description={m.askClickDesc}
+          checked={mate.askClick} onChange={(askClick) => patch({ askClick })} />
+      </ExpanderRow>
+      <ExpanderRow icon={<Person24Regular />} title={m.tagName} description={m.tagNameDesc}
+        control={(
+          <span className="tagPreview">
+            <span className="tagDot" style={{ background: tagColorCss(mate.tagColor, mate.tagColorCustom) }} />
+            {mate.tagName}
+          </span>
+        )}>
+        <SettingRow icon={<Person24Regular />} title={m.profileName}>
+          <DraftInput value={mate.tagName} maxLength={TAG_NAME_MAX} width={140} onSave={(tagName) => patch({ tagName })} />
         </SettingRow>
-      )}
-      <SwitchRow icon={<CursorClick24Regular />} title={m.askClick(askLabel)} description={m.askClickDesc}
-        checked={mate.askClick} onChange={(askClick) => patch({ askClick })} />
-      <SettingRow icon={<Person24Regular />} title={m.tagName} description={m.tagNameDesc}>
-        <DraftInput value={mate.tagName} maxLength={TAG_NAME_MAX} width={140} onSave={(tagName) => patch({ tagName })} />
-      </SettingRow>
-      <SettingRow icon={<Color24Regular />} title={m.tagColor}>
-        <Swatches label={m.tagColor} color={mate.tagColorCustom ? -1 : mate.tagColor}
-          onPick={(i) => patch({ tagColor: i, tagColorCustom: null })} />
-      </SettingRow>
+        <SettingRow icon={<Color24Regular />} title={m.tagColor}>
+          <Swatches label={m.tagColor} color={mate.tagColorCustom ? -1 : mate.tagColor}
+            onPick={(i) => patch({ tagColor: i, tagColorCustom: null })} />
+        </SettingRow>
+      </ExpanderRow>
 
-      <div className="card mate">
-        <div className="mateHead">
-          <span className="icon"><Eye24Regular /></span>
-          <div className="lbl">{m.reads}</div>
-        </div>
-        <ReadRow icon={<ScanText24Regular />} title={m.readMarks} description={m.readMarksDesc}
-          checked={mate.context.marks} onChange={(marks) => patch({ context: { ...mate.context, marks } })} />
-        <ReadRow icon={<TextField24Regular />} title={m.readSystemText} description={m.readSystemTextDesc}
-          checked={mate.context.systemText}
-          onChange={(systemText) => patch({ context: { ...mate.context, systemText } })} />
-        <ReadRow icon={<DocumentText24Regular />} title={m.readFiles} description={m.readFilesDesc}
-          checked={mate.context.files} onChange={(files) => patch({ context: { ...mate.context, files } })} />
-        <ReadRow icon={<Globe24Regular />} title={m.readWebPdfs} description={m.readWebPdfsDesc}
-          checked={mate.context.webPdfs} onChange={(webPdfs) => patch({ context: { ...mate.context, webPdfs } })} />
-        <ReadRow icon={<ClipboardPaste24Regular />} title={m.readFormPaste} description={m.readFormPasteDesc}
-          checked={mate.context.clipboardForForms}
-          onChange={(clipboardForForms) => patch({ context: { ...mate.context, clipboardForForms } })} />
-      </div>
-
-      <div className="card mate">
-        <div className="mateHead">
-          <span className="icon"><Sparkle24Regular /></span>
-          <div className="lbl">
-            {m.intents}
-            <span className="desc">{m.intentsDesc}</span>
-          </div>
-        </div>
-        {ALL_PINGS.map((p) => (
-          <IntentRow key={p.id} id={p.id} override={mate.intents[p.id]} patch={(o) => patchIntent(p.id, o)} />
+      <ExpanderRow icon={<Eye24Regular />} title={m.reads} description={m.readsOn(readsOn, reads.length)}>
+        {reads.map((r) => (
+          <SwitchRow key={r.key} icon={r.icon} title={r.title} description={r.description} checked={mate.context[r.key]}
+            onChange={(v) => patch({ context: { ...mate.context, [r.key]: v } })} />
         ))}
-      </div>
+      </ExpanderRow>
+      <ExpanderRow icon={<Sparkle24Regular />} title={m.intents} description={m.intentsDesc}>
+        <div className="expPane">
+          {ALL_PINGS.map((p) => (
+            <IntentRow key={p.id} id={p.id} override={mate.intents[p.id]} patch={(o) => patchIntent(p.id, o)} />
+          ))}
+        </div>
+      </ExpanderRow>
       <InstructionsCard />
       <PermissionsCard s={mate} patch={patch} />
-      <SwitchRow icon={<PlugConnected24Regular />} title={m.agentsPing} description={m.agentsPingDesc}
-        checked={mate.agentsCanPing} onChange={(agentsCanPing) => patch({ agentsCanPing })} />
-      <ConnectAppsCard />
+      <ExpanderRow icon={<PlugConnected24Regular />} title={m.agentsPing} description={m.agentsPingDesc}
+        control={<OnOffSwitch checked={mate.agentsCanPing} label={m.agentsPing}
+          onChange={(agentsCanPing) => patch({ agentsCanPing })} />}>
+        <ConnectApps />
+      </ExpanderRow>
 
       <SwitchRow icon={<Emoji24Regular />} title={m.emotes} description={m.emotesDesc}
         checked={mate.emotes} onChange={(emotes) => patch({ emotes })} />

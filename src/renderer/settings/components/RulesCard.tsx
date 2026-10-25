@@ -7,6 +7,7 @@ import type { AppRule, TeammateSettings } from '../../../shared/teammate/setting
 import { api } from '../api';
 import { useText } from '../text';
 import { DraftInput } from './mateFields';
+import { ExpanderRow } from './rows';
 
 /** App names without repeats (ignoring case), the first spelling kept. */
 function uniqueApps(...lists: readonly (readonly string[])[]): string[] {
@@ -128,37 +129,33 @@ export function RulesCard({ s, patch }: { s: TeammateSettings; patch(p: Partial<
   };
 
   return (
-    <div className="card mate">
-      <div className="mateHead">
-        <span className="icon"><AppsListDetail24Regular /></span>
-        <div className="lbl">
-          {m.rules}
-          <span className="desc">{s.rules.length === 0 ? `${m.rulesDesc} ${m.rulesEmpty}` : m.rulesDesc}</span>
+    <ExpanderRow icon={<AppsListDetail24Regular />} title={m.rules}
+      description={s.rules.length === 0 ? `${m.rulesDesc} ${m.rulesEmpty}` : m.rulesDesc}>
+      <div className="expPane">
+        {s.rules.map((r, i) => (
+          <RuleRow key={i} rule={r} index={i} count={s.rules.length} profiles={s.profiles} suggestions={suggestions}
+            change={(p) => setRules(s.rules.map((x, j) => (j === i ? { ...x, ...p } : x)))}
+            move={(by) => setRules(moveRule(s.rules, i, by))}
+            remove={() => setRules(s.rules.filter((_, j) => j !== i))} />
+        ))}
+        <div className="mateRule">
+          <div className="mateRow">
+            <Combobox freeform value={draft} placeholder={m.ruleAppPlaceholder} style={{ width: 260 }}
+              aria-label={m.ruleApp} selectedOptions={[]} maxLength={200}
+              onChange={(e) => setDraft(e.target.value)}
+              onOptionSelect={(_, d) => d.optionValue && setDraft(d.optionValue)}>
+              {suggestions.map((a) => <Option key={a} value={a}>{a}</Option>)}
+            </Combobox>
+            <Button disabled={draft.trim() === '' || fallback === null} onClick={() => {
+              if (fallback === null) return;
+              setRules(addRule(s.rules, draft, fallback));
+              setDraft('');
+            }}>{m.ruleAdd}</Button>
+            <Button onClick={() => void suggest()}>{m.ruleSuggest}</Button>
+          </div>
+          {note ? <span className="desc" role="status">{note}</span> : null}
         </div>
       </div>
-      {s.rules.map((r, i) => (
-        <RuleRow key={i} rule={r} index={i} count={s.rules.length} profiles={s.profiles} suggestions={suggestions}
-          change={(p) => setRules(s.rules.map((x, j) => (j === i ? { ...x, ...p } : x)))}
-          move={(by) => setRules(moveRule(s.rules, i, by))}
-          remove={() => setRules(s.rules.filter((_, j) => j !== i))} />
-      ))}
-      <div className="mateRule">
-        <div className="mateRow">
-          <Combobox freeform value={draft} placeholder={m.ruleAppPlaceholder} style={{ width: 260 }}
-            aria-label={m.ruleApp} selectedOptions={[]} maxLength={200}
-            onChange={(e) => setDraft(e.target.value)}
-            onOptionSelect={(_, d) => d.optionValue && setDraft(d.optionValue)}>
-            {suggestions.map((a) => <Option key={a} value={a}>{a}</Option>)}
-          </Combobox>
-          <Button disabled={draft.trim() === '' || fallback === null} onClick={() => {
-            if (fallback === null) return;
-            setRules(addRule(s.rules, draft, fallback));
-            setDraft('');
-          }}>{m.ruleAdd}</Button>
-          <Button onClick={() => void suggest()}>{m.ruleSuggest}</Button>
-        </div>
-        {note ? <span className="desc" role="status">{note}</span> : null}
-      </div>
-    </div>
+    </ExpanderRow>
   );
 }

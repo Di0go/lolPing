@@ -32,6 +32,13 @@ export function featureVisible(id: FeatureId, platform: Platform): boolean {
   return !(id === 'teammate' && platform === 'linux');
 }
 
+/** The Features page's rows on this platform: each top-level feature with the features that require it, in list order. */
+export function featureGroups(platform: Platform): { id: FeatureId; parts: FeatureId[] }[] {
+  const visible = FEATURES.filter(({ id }) => featureVisible(id, platform));
+  return visible.filter((f) => f.requires === undefined)
+    .map(({ id }) => ({ id, parts: visible.filter((f) => f.requires === id).map((f) => f.id) }));
+}
+
 /** The room features this setup has switched off, as a room presence announces them. */
 export function roomFeaturesOff(s: { features: Features }): RoomFeatureOff[] {
   return [...(featureOn(s, 'roomText') ? [] : ['text' as const]), ...(featureOn(s, 'roomVotes') ? [] : ['votes' as const])];

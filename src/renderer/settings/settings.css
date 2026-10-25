@@ -38,6 +38,25 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .desc.inline { display: inline; margin-left: 6px; }
 .card .ctl { display: flex; align-items: center; gap: 10px; }
 .value { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+/* Expander: the header is a row of its own; the rows inside sit flat under it, indented to the header's text and with
+   their controls lined up with the header's, left of the chevron. */
+.card.expander { display: block; padding: 0; }
+.card.expander:hover { background: var(--card); }
+.expHead { display: flex; align-items: center; gap: 16px; min-height: 68px; padding: 12px 12px 12px 20px; box-sizing: border-box; border-radius: 4px; }
+.expHead:hover { background: var(--card-hover); }
+.expChevron { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; }
+.expChevron:hover { background: var(--nav-sel); }
+.expChevron:focus-visible { outline: 2px solid var(--colorStrokeFocus2); }
+.expChevron svg { transition: transform var(--durationNormal) var(--curveEasyEase); }
+.expander.open .expChevron svg { transform: rotate(180deg); }
+.expBody { border-top: 1px solid var(--stroke); }
+.expBody > .card { min-height: 56px; margin: 0; padding: 10px 60px 10px 60px; border: 0; border-radius: 0; background: transparent; }
+.expBody > .card:hover { background: transparent; }
+.expBody > * + *, .expBody > * + .card { border-top: 1px solid var(--stroke); }
+/* Free content inside an expander (a form, a list) instead of rows. */
+.expPane { padding: 12px 60px 14px; }
+.expPane > :first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.desc .weImportError { display: block; }
 /* Fluent draws a tick per step on the rail; with 38-100 steps they merge into a dark dashed line. */
 .card .fui-Slider__rail::before { background-image: none; }
 .status { min-height: 76px; }
@@ -173,14 +192,12 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .mateNote { margin-top: 8px; }
 .mateRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .mateIntent { display: grid; grid-template-columns: 150px auto 150px 1fr auto; gap: 8px 12px; align-items: start; padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 10px; }
-.mateRead { display: flex; align-items: center; gap: 16px; padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 10px; }
-.mateRead .icon { display: flex; width: 24px; }
-.mateRead .lbl { flex: 1; min-width: 0; }
 .mateIntentName { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .mateIntentName img { width: 24px; height: 24px; }
 .mateRule { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--stroke); }
 .mateRule .mateFields { margin-top: 8px; }
 .mateInstructions { display: flex; width: 100%; margin: 12px 0 8px; }
+.tagPreview { display: flex; align-items: center; gap: 8px; }
 /* Updates */
 .card.update .lbl { display: flex; flex-direction: column; gap: 4px; }
 .card.update.failed { border-color: #ff9c48; }
