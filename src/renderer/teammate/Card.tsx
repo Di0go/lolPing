@@ -5,12 +5,15 @@ import {
 import {
   Checkmark16Regular, Copy16Regular, Dismiss16Regular, History16Regular, Send16Regular,
 } from '@fluentui/react-icons';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import {
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject,
+} from 'react';
 import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type CardState, type MateAction, type MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
 import { cardButtons, copyText, footerText, PutGuard, putLabel } from './cardText';
 import { dragHandle } from './drag';
+import { HEIGHT_TARGET } from './easedHeight';
 import { renderMarkdown } from './markdown';
 import { stagger, useMotion } from './motion';
 import { NameTag } from './NameTag';
@@ -28,6 +31,10 @@ const useStyles = makeStyles({
     boxSizing: 'border-box',
     padding: '10px 6px 8px 12px',
     rowGap: '8px',
+    transitionProperty: 'height',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': { transitionProperty: 'none' },
   },
   /** While the answer streams, a thin bar runs along the card's top edge. */
   progress: { position: 'absolute', top: 0, left: 0, right: 0 },
@@ -63,6 +70,25 @@ const useStyles = makeStyles({
   reply: { marginRight: '6px' },
   footer: { color: tokens.colorNeutralForeground3, paddingRight: '6px' },
 });
+
+/**
+ * The height the card should ease to: its content's, up to its maximum. The body shrinks when the card is held
+ * shorter than its content, so the content's height is the card's plus what the body scrolls past.
+ */
+function useContentHeight(card: RefObject<HTMLElement | null>, body: RefObject<HTMLElement | null>): number | undefined {
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  // After every render: the text streams in without the card's own box changing, so nothing else would notice.
+  useLayoutEffect(() => {
+    const c = card.current;
+    const b = body.current;
+    if (!c || !b) return;
+    const max = parseFloat(getComputedStyle(c).maxHeight);
+    const natural = c.offsetHeight - b.clientHeight + b.scrollHeight;
+    const next = Number.isFinite(max) ? Math.min(natural, max) : natural;
+    setHeight((h) => (h === next ? h : next));
+  });
+  return height;
+}
 
 /** The model's Markdown, sanitised; web links become `link` actions and code blocks get a Copy button. */
 function Markdown({ md, t, act, className }: { md: string; t: Ui; act: (a: MateAction) => void; className?: string }) {
@@ -113,6 +139,8 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
   const [reply, setReply] = useState('');
   const [copied, setCopied] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const height = useContentHeight(cardRef, bodyRef);
   // Entries the card opened with rise in one after another; each one added later rises as it comes (keys are stable).
   const opened = useRef(s.entries.length).current;
   // Answers that shimmered while they waited: their text rises in when it arrives.
@@ -199,7 +227,12 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
   };
   return (
     <div className={sf.frame}>
-      <FluentCard className={mergeClasses(sf.surface, st.card, m.grow, leave)}>
+      <FluentCard
+        ref={cardRef}
+        className={mergeClasses(sf.surface, st.card, m.grow, leave)}
+        style={height === undefined ? undefined : { height }}
+        {...{ [HEIGHT_TARGET]: height }}
+      >
         {s.streaming && <ProgressBar className={st.progress} thickness="medium" shape="square" aria-hidden />}
         <div className={st.head} {...drag}>
           <NameTag tag={s.tag} thinking={s.streaming} thinkingLabel={t.thinking} />

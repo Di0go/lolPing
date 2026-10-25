@@ -6,6 +6,7 @@ import type { MateAction, MateLeave, MateState, MateView } from '../../shared/te
 import { Bubble } from './Bubble';
 import { Card } from './Card';
 import { Consent } from './Consent';
+import { HEIGHT_TARGET, heightStep } from './easedHeight';
 import { FormPreview } from './FormPreview';
 import { History } from './History';
 import { Words } from './Words';
@@ -34,12 +35,47 @@ function Sized({ children }: { children: ReactNode }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    let sent = { width: 0, height: 0 };
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const send = (width: number, height: number): void => {
+      if (width === sent.width && height === sent.height) return;
+      sent = { width, height };
+      api.size(sent);
+    };
     // offsetWidth/Height ignore the scale animations, so a growing card doesn't resize its window mid-animation.
-    const report = (): void => api.size({ width: el.offsetWidth, height: el.offsetHeight });
+    const measure = (): { width: number; height: number; eased: boolean } => {
+      // A card that eases its height says where it ends; the window follows that, not each frame of the ease.
+      const card = el.querySelector<HTMLElement>(`[${HEIGHT_TARGET}]`);
+      const ahead = card ? Number(card.getAttribute(HEIGHT_TARGET)) - card.offsetHeight : 0;
+      return { width: el.offsetWidth, height: el.offsetHeight + (Number.isFinite(ahead) ? ahead : 0), eased: !!card };
+    };
+    const report = (): void => {
+      const { width, height, eased } = measure();
+      const reduced = !eased || matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const step = heightStep(sent.height, height, reduced);
+      send(width, step.window);
+      if (step.settleMs === 0) {
+        clearTimeout(settle);
+        settle = undefined;
+      } else if (settle === undefined) {
+        settle = setTimeout(() => {
+          settle = undefined;
+          const now = measure();
+          send(now.width, now.height);
+        }, step.settleMs);
+      }
+    };
     const observer = new ResizeObserver(report);
     observer.observe(el);
+    // The card's target moves before its box does, so the window grows ahead of the ease.
+    const target = new MutationObserver(report);
+    target.observe(el, { subtree: true, attributes: true, attributeFilter: [HEIGHT_TARGET] });
     report();
-    return () => observer.disconnect();
+    return () => {
+      clearTimeout(settle);
+      observer.disconnect();
+      target.disconnect();
+    };
   }, []);
   return <div ref={ref} style={{ width: 'max-content' }}>{children}</div>;
 }

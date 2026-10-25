@@ -2,7 +2,7 @@ import {
   Body1Strong, Button, Caption1, makeStyles, mergeClasses, SearchBox, Subtitle1, Text, tokens,
 } from '@fluentui/react-components';
 import { Delete16Regular } from '@fluentui/react-icons';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Strings } from '../../shared/i18n';
 import type { HistoryState, MateAction } from '../../shared/teammateIpc';
 import { groupByDay, type Day } from './historyDays';
@@ -26,6 +26,8 @@ const useStyles = makeStyles({
   },
   search: { maxWidth: '360px' },
   day: { marginTop: '8px', color: tokens.colorNeutralForeground3 },
+  /** A row waits unseen until it scrolls into view, where it slides in. */
+  unseen: { opacity: 0 },
   row: {
     display: 'flex',
     alignItems: 'center',
@@ -59,6 +61,30 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
   const [query, setQuery] = useState(s.query);
   const sent = useRef(s.query);
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
+  // Rows that have scrolled into view, each with its place in the group that arrived together (for the stagger).
+  const [seen, setSeen] = useState<ReadonlyMap<string, number>>(new Map());
+  const watcher = useRef<IntersectionObserver | null>(null);
+  const reduced = useMemo(() => matchMedia('(prefers-reduced-motion: reduce)').matches, []);
+
+  const watch = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    // The page scrolls inside the body (see teammate.css), so rows are in view when they reach the body's box.
+    watcher.current ??= new IntersectionObserver((entries) => {
+      const arrived = entries.filter((e) => e.isIntersecting).map((e) => e.target);
+      if (arrived.length === 0) return;
+      for (const target of arrived) watcher.current?.unobserve(target);
+      setSeen((prev) => {
+        const next = new Map(prev);
+        arrived.forEach((target, i) => {
+          const id = target instanceof HTMLElement ? target.dataset.row : undefined;
+          if (id !== undefined && !next.has(id)) next.set(id, i);
+        });
+        return next;
+      });
+    }, { root: document.body });
+    watcher.current.observe(el);
+  }, []);
+  useEffect(() => () => watcher.current?.disconnect(), []);
 
   useEffect(() => {
     if (query === sent.current) return;
@@ -79,8 +105,7 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
     setRemoving((r) => new Set(r).add(id));
     setTimeout(() => act({ t: 'delete', id }), DELETE_MS);
   };
-  // Rows count on through the days, so the whole list arrives one row after another.
-  let row = 0;
+  const shown = (id: string): boolean => reduced || seen.has(id);
 
   return (
     <div className={st.page}>
@@ -107,12 +132,17 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
           )}
           {groups.map((g) => (
             <section key={String(g.day)}>
-              <Body1Strong className={mergeClasses(st.day, m.rise)} style={stagger(row)}>{dayName(g.day)}</Body1Strong>
+              <Body1Strong className={mergeClasses(st.day, m.rise)}>{dayName(g.day)}</Body1Strong>
               {g.threads.map((th) => (
                 <div
                   key={th.id}
-                  className={mergeClasses(st.row, removing.has(th.id) ? m.slideOut : m.slideIn)}
-                  style={removing.has(th.id) ? undefined : stagger(row++)}
+                  ref={shown(th.id) ? undefined : watch}
+                  data-row={th.id}
+                  className={mergeClasses(
+                    st.row,
+                    removing.has(th.id) ? m.slideOut : shown(th.id) ? m.slideIn : st.unseen,
+                  )}
+                  style={removing.has(th.id) || !shown(th.id) ? undefined : stagger(seen.get(th.id) ?? 0)}
                 >
                   <div className={st.text}>
                     <Text weight="semibold" className={st.ellipsis}>{th.title}</Text>
