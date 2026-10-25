@@ -271,7 +271,7 @@ describe('AskController visitors', () => {
 
   it('refuses while an ask is running', async () => {
     const h = harness({ holdAsk: true });
-    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    h.ctl.ask([{ intent: 'danger', phys: CURSOR, displayId: 1 }]);
     expect(h.ctl.running).toBe(true);
     const r = await h.ctl.visitorCall({ name: 'x' }, 'ping', ping);
     expect(r.isError).toBe(true);
@@ -371,7 +371,7 @@ describe('AskController visitors', () => {
 
   it('refuses while the user\'s own answer is on screen and leaves it as it is', async () => {
     const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
-    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    h.ctl.ask([{ intent: 'danger', phys: CURSOR, displayId: 1 }]);
     await vi.advanceTimersByTimeAsync(0);
     expect(h.ctl.running).toBe(false);
     expect(h.bubbles.at(-1)?.line).toBe('Mine.');
@@ -391,7 +391,7 @@ describe('AskController visitors', () => {
 
   it('draws again once the user\'s answer has gone', async () => {
     const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
-    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    h.ctl.ask([{ intent: 'danger', phys: CURSOR, displayId: 1 }]);
     await vi.advanceTimersByTimeAsync(0);
     expect((await h.ctl.visitorCall({ name: 'x' }, 'ping', ping)).isError).toBe(true);
     h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
@@ -413,7 +413,7 @@ describe('AskController visitors', () => {
 
   it('refuses while the answer\'s Paste button is up, and draws once its bubble\'s time runs out', async () => {
     const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
-    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    h.ctl.ask([{ intent: 'danger', phys: CURSOR, displayId: 1 }]);
     await vi.advanceTimersByTimeAsync(0);
     h.actions.emit('put', 'paste');
     expect(h.bubbles.at(-1)?.put).toBe('paste');
@@ -429,7 +429,7 @@ describe('AskController visitors', () => {
 
   it('refuses while the answer\'s bubble is hidden for a paste that brings it back if it fails', async () => {
     const h = harness({ teammate: { profiles: [fast], defaultProfile: 'fast' } });
-    h.ctl.ask({ intent: 'danger', phys: CURSOR, displayId: 1 });
+    h.ctl.ask([{ intent: 'danger', phys: CURSOR, displayId: 1 }]);
     await vi.advanceTimersByTimeAsync(0);
     h.actions.emit('put', 'paste');
     h.ctl.hideBubbleForPut();

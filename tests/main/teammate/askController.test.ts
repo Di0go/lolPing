@@ -9,8 +9,9 @@ import { strings } from '../../../src/shared/i18n';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/settings';
 import type { Spot } from '../../../src/shared/teammate/askMachine';
 import type { SystemTextLayer } from '../../../src/shared/teammate/contextProtocol';
-import { zoomRect, type Rect } from '../../../src/shared/teammate/coords';
+import { receiptPoint, zoomRect, type Rect } from '../../../src/shared/teammate/coords';
 import type { ThreadRecord } from '../../../src/shared/teammate/history';
+import { intentFor } from '../../../src/shared/teammate/intents';
 import { bubbleMs } from '../../../src/shared/teammate/line';
 import { DEFAULT_TEAMMATE, type AgentProfile, type BuiltinProfile, type TeammateSettings } from '../../../src/shared/teammate/settings';
 import type { ActionCall, ToolDef } from '../../../src/shared/teammate/tools';
@@ -318,7 +319,7 @@ describe('AskController', () => {
       ])],
     });
     // The user's own ping is drawn by the overlay at release; the controller adds only the teammate's marks.
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
 
     const drawn = h.log.filter((e) => e[0] === 'ping' || e[0] === 'bubble');
@@ -354,7 +355,7 @@ describe('AskController', () => {
 
   it('shows plain text as the line when the model calls no tools', async () => {
     const h = harness({ steps: [answers([], 'The sum in B4 counts row 3 twice.')] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.bubbles().map((b) => b.line)).toEqual(['The sum in B4 counts row 3 twice.']);
     expect(h.pings('missing')).toEqual([]);
@@ -364,7 +365,7 @@ describe('AskController', () => {
     const h = harness({
       steps: [answers([call('say', { text: 'Line 3 divides by zero.' }), call('ping', { type: 'danger', spot: 1 }, 'p')])],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.requests).toHaveLength(1); // another round for a card answer would double the wait
     expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Line 3 divides by zero.', more: true }));
@@ -380,7 +381,7 @@ describe('AskController', () => {
       return new Promise((resolve) => { finish = resolve; });
     };
     const h = harness({ steps: [slow] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.ctl.running).toBe(true);
     expect(h.bubbles().map((b) => b.line)).toEqual(['Line 3 divides by zero.']);
@@ -400,7 +401,7 @@ describe('AskController', () => {
       return new Promise((resolve) => { finish = resolve; });
     };
     const h = harness({ steps: [slow] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     await vi.advanceTimersByTimeAsync(bubbleMs('Short.') + 5_000);
     expect(h.of('bubbleHidden')).toHaveLength(0);
@@ -415,7 +416,7 @@ describe('AskController', () => {
 
   it('gives a bubble the user dragged its reading time again', async () => {
     const h = harness({ steps: [answers([call('say', { text: 'Short.' }), call('answer', { markdown: 'More.' })])] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     await vi.advanceTimersByTimeAsync(bubbleMs('Short.') - 100);
     h.ctl.onDragged('bubble');
@@ -432,7 +433,7 @@ describe('AskController', () => {
   it('takes the line from the card answer when the model gives only that', async () => {
     const markdown = '- **B4** counts row 3 twice. It should skip it.\n- C2 is empty.';
     const h = harness({ steps: [answers([call('answer', { markdown })])] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.requests).toHaveLength(1);
     expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({
@@ -446,7 +447,7 @@ describe('AskController', () => {
 
   it('asks only once when the model only wrote text', async () => {
     const h = harness({ steps: [answers([], 'The sum in B4 counts row 3 twice.')] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.requests).toHaveLength(1);
     expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'The sum in B4 counts row 3 twice.', more: true }));
@@ -461,11 +462,11 @@ describe('AskController', () => {
       });
     };
     const h = harness({ steps: [first, hangs({ accept: false })] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.pings('omw')).toHaveLength(1);
 
-    h.ctl.ask(spot('missing', 2000, 1200));
+    h.ctl.ask([spot('missing', 2000, 1200)]);
     await flush();
     expect(h.signals[0].aborted).toBe(true);
     expect(h.tickets).toHaveLength(2);
@@ -484,7 +485,7 @@ describe('AskController', () => {
   it('says set me up first without a profile or key', async () => {
     for (const setup of [{ teammate: { profiles: [], defaultProfile: null } }, { key: null }]) {
       const h = harness(setup);
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       expect(h.adapters).toEqual([]);
       expect(h.of('capture')).toEqual([]);
@@ -500,7 +501,7 @@ describe('AskController', () => {
       customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
     };
     const h = harness({ teammate: { profiles: [agent], defaultProfile: 'ag' } });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.adapters).toEqual([]);
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.agent.noBridge]);
@@ -509,7 +510,7 @@ describe('AskController', () => {
 
   it('fails with a line when nothing is received in 10 s', async () => {
     const h = harness({ steps: [hangs({ accept: false })] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     await vi.advanceTimersByTimeAsync(9_999);
     expect(h.pings()).toEqual([]);
@@ -525,7 +526,7 @@ describe('AskController', () => {
 
   it('times out when the helper never says which window is in front', async () => {
     const h = harness({ foregroundHangs: true });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     await vi.advanceTimersByTimeAsync(59_999);
     expect(h.ctl.running).toBe(true);
@@ -538,7 +539,7 @@ describe('AskController', () => {
   it('tells the foreground app of each ask, for the rules card', async () => {
     const apps: string[] = [];
     const h = harness({ seenApp: (app) => apps.push(app) });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(apps).toEqual(['notepad.exe']);
   });
@@ -554,7 +555,7 @@ describe('AskController', () => {
         },
       ],
     });
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
 
     // The look area's centre in the overview (600, 375) is (1200, 750) on the display.
@@ -577,7 +578,7 @@ describe('AskController', () => {
         answers([call('say', { text: 'B3 is empty.' })]),
       ],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.requests).toHaveLength(2);
     const asked = h.requests[1].turns[2];
@@ -589,7 +590,7 @@ describe('AskController', () => {
   it('asks only once more when the model keeps answering with pings alone', async () => {
     const pingOnly = answers([call('ping', { type: 'danger', spot: 1 }, 'p')]);
     const h = harness({ steps: [pingOnly, pingOnly, pingOnly] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.requests).toHaveLength(2);
   });
@@ -600,9 +601,9 @@ describe('AskController', () => {
         answers([call('say', { text: 'First answer.' })]), answers([call('say', { text: 'More detail.' })]),
       ],
     });
-    h.ctl.ask(spot('missing'));
+    h.ctl.ask([spot('missing')]);
     await flush();
-    h.ctl.ask(spot('push', 1010, 805));
+    h.ctl.ask([spot('push', 1010, 805)]);
     await flush();
 
     expect(h.bubbles().map((b) => [b.line, b.thread])).toEqual([
@@ -627,19 +628,19 @@ describe('AskController', () => {
         answers([call('say', { text: 'A plan.' }), call('answer', { markdown: '## Risks' })]),
       ],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cardOpens.at(-1)?.focus).toBe(true);
 
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     expect(h.cardOpens.at(-1)?.focus).toBe(false);
   });
 
   it('opens the card where the user dragged the bubble', async () => {
     const h = harness({ steps: [answers([call('say', { text: 'A typo.' }), call('answer', { markdown: 'More.' })])] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.dragBubble({ x: 700, y: 300 });
     h.ctl.onTeammateAction('bubble', { t: 'more' });
@@ -654,7 +655,7 @@ describe('AskController', () => {
         call('answer', { markdown: '## Risks\n- cost' }),
       ])],
     });
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     expect(h.adapters).toEqual(['deep']);
     const card = h.cards().at(-1);
@@ -675,13 +676,13 @@ describe('AskController', () => {
       },
       steps: [answers([call('say', { text: 'A typo.' })]), answers([call('say', { text: 'Fine.' })])],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.adapters).toEqual(['code']);
     expect(h.requests[0].model).toBe('code-model');
 
     // The rule names Danger only: another intent in the same window goes the default way.
-    h.ctl.ask(spot('push'));
+    h.ctl.ask([spot('push')]);
     await flush();
     expect(h.adapters).toEqual(['code', 'fast']);
   });
@@ -696,7 +697,7 @@ describe('AskController', () => {
       steps: [answer(), answer(), answer()],
     });
     const routes = async (intent: Spot['intent']) => {
-      h.ctl.ask(spot(intent));
+      h.ctl.ask([spot(intent)]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'more' });
       return h.cards().at(-1)?.footer.route;
@@ -708,7 +709,7 @@ describe('AskController', () => {
 
   it('clears everything on pause', async () => {
     const h = harness({ steps: [hangs({ accept: true })] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.pings('omw')).toHaveLength(1);
 
@@ -729,7 +730,7 @@ describe('AskController', () => {
     const h = harness({
       steps: [answers([ping(300, 3), ping(100, 1), ping(200, 2), call('say', { text: 'Three steps.' })])],
     });
-    h.ctl.ask(spot('assist'));
+    h.ctl.ask([spot('assist')]);
     await flush();
     // Lowest order first; overview x 100 is physical 200, overlay 100.
     expect(h.pings('assist').map((p) => p.x)).toEqual([100]);
@@ -759,7 +760,7 @@ describe('AskController', () => {
 
     it('spawns every ping and emote to stay, like the receipt', async () => {
       const h = withCard();
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       expect(h.pings('danger')).toEqual([expect.objectContaining({ keep: true })]);
       expect(h.of('emote')).toEqual([expect.objectContaining({ slug: 'facepalm', keep: true })]);
@@ -767,7 +768,7 @@ describe('AskController', () => {
 
     it('keeps the teammate pings while the card is open', async () => {
       const h = withCard();
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'more' });
       await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -779,7 +780,7 @@ describe('AskController', () => {
       const h = harness({
         steps: [answers([call('say', { text: 'Short.' }), call('ping', { type: 'danger', x: 600, y: 400 })])],
       });
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       await vi.advanceTimersByTimeAsync(bubbleMs('Short.') + 1_000); // the bubble is long gone
       expect(h.of('bubbleHidden')).toHaveLength(1);
@@ -792,7 +793,7 @@ describe('AskController', () => {
 
     it('fades the pings when the card closes after that', async () => {
       const h = withCard();
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'more' });
       await vi.advanceTimersByTimeAsync(60_000);
@@ -806,7 +807,7 @@ describe('AskController', () => {
 
     it('waits out the 15 s when the card closes before that', async () => {
       const h = withCard();
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'more' });
       await vi.advanceTimersByTimeAsync(5_000);
@@ -819,7 +820,7 @@ describe('AskController', () => {
 
     it('holds a fade that was already waiting when the card opens', async () => {
       const h = withCard();
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       await vi.advanceTimersByTimeAsync(10_000);
       h.ctl.onTeammateAction('bubble', { t: 'more' });
@@ -834,9 +835,9 @@ describe('AskController', () => {
           hangs({ accept: true }),
         ],
       });
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
-      h.ctl.ask(spot('danger', 1200, 900));
+      h.ctl.ask([spot('danger', 1200, 900)]);
       await flush();
       expect(h.of('clear')).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -845,7 +846,7 @@ describe('AskController', () => {
 
     it('clears the pings on a pause even with the card open', async () => {
       const h = withCard();
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'more' });
       h.ctl.cancel('pause');
@@ -856,7 +857,7 @@ describe('AskController', () => {
 
     it('keeps the missing ping of a failed ask for the same time', async () => {
       const h = harness({ steps: [hangs({ accept: false })] });
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       await vi.advanceTimersByTimeAsync(10_000); // not received
       expect(h.pings('missing')).toEqual([expect.objectContaining({ keep: true })]);
@@ -876,7 +877,7 @@ describe('AskController', () => {
         call('say', { text: 'Here.' }),
       ])],
     });
-    h.ctl.ask(spot('generic'));
+    h.ctl.ask([spot('generic')]);
     await flush();
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.pings('generic')).toEqual([{ displayId: 1, x: 500, y: 400, id: 'generic', keep: true, tag: TAG }]);
@@ -884,7 +885,7 @@ describe('AskController', () => {
 
   it('shows only the dots on a tag for a Do it ask, and is silent when the receipt sound is off', async () => {
     const h = harness({ teammate: { receiptSound: false }, steps: [hangs({ accept: true })] });
-    h.ctl.ask(spot('omw'));
+    h.ctl.ask([spot('omw')]);
     await flush();
     expect(h.pings('omw')).toEqual([
       expect.objectContaining({ tagOnly: true, thinking: true, keep: true, silent: true }),
@@ -896,7 +897,7 @@ describe('AskController', () => {
     const h = harness({
       steps: [answers([call('say', { text: long })]), answers([call('say', { text: 'B9 is 8.2.' })])],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.bubbles()).toEqual([expect.objectContaining({ line: 'The cell adds row 3 twice.', more: true })]);
 
@@ -916,7 +917,7 @@ describe('AskController', () => {
   it('fails a provider that never answers even when the clock runs a few ms behind the timers', async () => {
     for (const accept of [false, true]) {
       const h = harness({ skewAfterCapture: 5, steps: [hangs({ accept })] });
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       await vi.advanceTimersByTimeAsync(accept ? 60_000 : 10_000);
       expect(h.signals[0].aborted).toBe(true);
@@ -934,12 +935,12 @@ describe('AskController', () => {
         answers([call('say', { text: 'Even more.' })]),
       ],
     });
-    h.ctl.ask(spot('missing'));
+    h.ctl.ask([spot('missing')]);
     await flush();
-    h.ctl.ask(spot('push', 1010, 805));
+    h.ctl.ask([spot('push', 1010, 805)]);
     await flush();
     h.ctl.cancel('pause'); // a pause clears the screen but not the thread
-    h.ctl.ask(spot('push', 1500, 900));
+    h.ctl.ask([spot('push', 1500, 900)]);
     await flush();
     expect(h.bubbles().map((b) => b.thread)).toEqual([null, 'First answer.', 'First answer.']);
     const turn = h.requests[2].turns[0];
@@ -952,10 +953,10 @@ describe('AskController', () => {
     const h = harness({ steps: [answers([call('say', { text: 'Back to it.' })])] });
     const picked: ThreadRecord = {
       id: 'old', title: 'Old thread', started: 0, lastActivity: 0, app: '', windowTitle: '', profile: 'fast',
-      entries: [{ at: 0, intent: 'missing', words: null, line: 'Long ago.', markdown: '', thumb: '' }],
+      entries: [{ at: 0, intent: 'missing', words: null, line: 'Long ago.', markdown: '', thumb: '', spots: 1 }],
     };
     h.ctl.continueThread(picked);
-    h.ctl.ask(spot('push'));
+    h.ctl.ask([spot('push')]);
     await flush();
     expect(h.bubbles().map((b) => b.thread)).toEqual(['Old thread']);
     expect(h.appends.map((a) => a.threadId)).toEqual(['old']);
@@ -965,7 +966,7 @@ describe('AskController', () => {
     const h = harness({ steps: [answers([call('say', { text: 'Still there.' })])] });
     const picked: ThreadRecord = {
       id: 'old', title: 'Old thread', started: 0, lastActivity: 0, app: '', windowTitle: '', profile: 'fast',
-      entries: [{ at: 0, intent: 'missing', words: null, line: 'Long ago.', markdown: '', thumb: '' }],
+      entries: [{ at: 0, intent: 'missing', words: null, line: 'Long ago.', markdown: '', thumb: '', spots: 1 }],
     };
     h.ctl.showThread(picked, { x: 100, y: 100 });
     expect(h.cards()).toEqual([expect.objectContaining({
@@ -993,7 +994,7 @@ describe('AskController', () => {
       key: null, teammate: { profiles: [local] }, steps: [answers([call('say', { text: 'Local answer.' })])],
       onAdapter: (key) => keys.push(key),
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(keys).toEqual(['']);
     expect(h.bubbles().map((b) => b.line)).toEqual(['Local answer.']);
@@ -1005,14 +1006,14 @@ describe('AskController', () => {
       historyOff: true,
       steps: [answers([call('say', { text: 'First.' })]), answers([call('say', { text: 'Second.' })])],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     const held = h.ctl.currentThread()?.id;
     expect(held).toBeDefined();
     h.ctl.forgetThread('another-id');
     expect(h.ctl.currentThread()?.id).toBe(held);
     h.ctl.forgetThread(); // History was cleared
-    h.ctl.ask(spot('push'));
+    h.ctl.ask([spot('push')]);
     await flush();
     expect(h.appends.map((a) => a.threadId)).toEqual([null, null]);
   });
@@ -1020,7 +1021,7 @@ describe('AskController', () => {
   it('looks once per ask and stops after 6 rounds', async () => {
     const look = (n: number) => answers([call('look', { x: 500, y: 300, w: 200, h: 150 }, `l${n}`)]);
     const h = harness({ steps: [1, 2, 3, 4, 5, 6, 7].map(look) });
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     expect(h.requests).toHaveLength(6);
     expect(h.of('capture')).toHaveLength(2); // the ask's own capture and the first look
@@ -1031,9 +1032,9 @@ describe('AskController', () => {
 
   it('offers look only to Show me how and Whole picture', async () => {
     const h = harness({ steps: [answers([call('say', { text: 'A.' })]), answers([call('say', { text: 'B.' })])] });
-    h.ctl.ask(spot('missing'));
+    h.ctl.ask([spot('missing')]);
     await flush();
-    h.ctl.ask(spot('assist', 1300, 900));
+    h.ctl.ask([spot('assist', 1300, 900)]);
     await flush();
     expect(h.requests[0].tools.map((d) => d.name)).not.toContain('look');
     expect(h.requests[1].tools.map((d) => d.name)).toContain('look');
@@ -1048,7 +1049,7 @@ describe('AskController', () => {
       },
       steps: [answers([call('say', { text: 'A table.' })])],
     });
-    h.ctl.ask(spot('missing'));
+    h.ctl.ask([spot('missing')]);
     await flush();
     expect(h.of('framed')).toEqual([{
       area: { x: 100, y: 100, w: 1700, h: 1100 }, crops: [{ x: 584, y: 584, w: 932, h: 432 }],
@@ -1059,9 +1060,66 @@ describe('AskController', () => {
     expect(text).toContain('spot 1 is at x=847, y=636 in the overview.');
   });
 
+  it('captures one close-up per spot and lists every spot to the model', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Both prices are off.' })])] });
+    const spots = [spot('missing', 1000, 800), spot('missing', 2000, 1200), spot('danger', 1500, 900)];
+    h.ctl.ask(spots);
+    await flush();
+    expect(h.of('capture')).toEqual([spots.map((s) => s.phys)]);
+    expect(h.of('framed')).toEqual([{ area: DISPLAY, crops: spots.map((s) => zoomRect(DISPLAY, s.phys)) }]);
+    const req = h.requests[0];
+    const first = req.turns[0];
+    const parts = first.role === 'user' ? first.parts : [];
+    const text = parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('\n');
+    expect(text).toContain('spot 1 is at x=500, y=400 in the overview.');
+    expect(text).toContain('spot 2 is at x=1000, y=600 in the overview.');
+    expect(text).toContain('spot 3 is at x=750, y=450 in the overview.');
+    expect(text).toContain('The user marked 3 spots, in this order.');
+    expect(parts.filter((p) => 'image' in p)).toHaveLength(4); // the overview and a close-up of each spot
+    expect(JSON.stringify(req.tools)).toContain('The user marked 3 spots.');
+    // The last spot's intent decides the question.
+    expect(req.system).toContain("The task: What's wrong.");
+    expect(h.ctl.currentThread()?.entries.map((e) => e.spots)).toEqual([3]);
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    expect(h.cards().at(-1)?.entries[0].label).toBe(`${intentFor(DEFAULT_TEAMMATE, 'danger', 'en').label} · 3 spots`);
+  });
+
+  it('places the receipt and bubble at the last spot', async () => {
+    const h = harness({
+      steps: [
+        answers([call('say', { text: 'Both.' }), call('answer', { markdown: 'More.' })]), hangs({ accept: true }),
+      ],
+    });
+    const last = spot('missing', 2000, 1200);
+    h.ctl.ask([spot('missing', 1000, 800), last]);
+    await flush();
+    const receipt = receiptPoint(last.phys, DISPLAY);
+    expect(h.pings('omw')).toEqual([expect.objectContaining({ x: receipt.x / 2, y: receipt.y / 2 })]);
+    expect(h.popupsAt).toEqual([{ x: receipt.x / 2 + 24, y: receipt.y / 2 - 24 }]);
+    // A reply from the card asks at the last spot alone.
+    h.ctl.onTeammateAction('bubble', { t: 'more' });
+    h.ctl.onTeammateAction('card', { t: 'reply', text: 'and the third?' });
+    await flush();
+    expect(h.of('capture')).toEqual([[{ x: 1000, y: 800 }, last.phys], [last.phys]]);
+  });
+
+  it('lets the model point at spot 2', async () => {
+    const h = harness({
+      steps: [answers([
+        call('ping', { type: 'generic', spot: 2 }, 'a'),
+        call('ping', { type: 'generic', spot: 3 }, 'b'),
+        call('say', { text: 'This one.' }),
+      ])],
+    });
+    h.ctl.ask([spot('missing', 1000, 800), spot('missing', 2000, 1200)]);
+    await flush();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.pings('generic')).toEqual([{ displayId: 1, x: 1000, y: 600, id: 'generic', keep: true, tag: TAG }]);
+  });
+
   it('lets the overlays and windows back into captures when a capture throws', async () => {
     const h = harness({ captureThrows: true });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.of('overlaysExcluded')).toEqual([true, false]);
     expect(h.of('windowsExcluded')).toEqual([true, false]);
@@ -1070,7 +1128,7 @@ describe('AskController', () => {
 
   it('shows the line on the primary display when no display is under the spot', async () => {
     const h = harness({ noDisplay: true });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.capture]);
     expect(h.popupsAt).toEqual([PRIMARY]);
@@ -1083,7 +1141,7 @@ describe('AskController', () => {
         throw new ProviderError('images', 'image input is not supported', 400);
       }],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.images]);
     expect(h.pings()).toEqual([expect.objectContaining({ id: 'missing' })]);
@@ -1105,7 +1163,7 @@ describe('AskController', () => {
         },
       ],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.of('emote')).toHaveLength(1);
     const last = second[second.length - 1];
@@ -1123,11 +1181,11 @@ describe('AskController', () => {
     it('offers each ask the action tools of its kind', async () => {
       const said = answers([call('say', { text: 'Ok.' })]);
       const h = harness({ steps: [said, said, said] });
-      h.ctl.ask(spot('missing'));
+      h.ctl.ask([spot('missing')]);
       await flush();
-      h.ctl.ask(spot('enemyvision', 1300, 900));
+      h.ctl.ask([spot('enemyvision', 1300, 900)]);
       await flush();
-      h.ctl.ask(spot('omw', 1500, 900));
+      h.ctl.ask([spot('omw', 1500, 900)]);
       await flush();
       const names = h.requests.map((r) => r.tools.map((d) => d.name));
       expect(names[0]).toEqual(expect.arrayContaining(['open']));
@@ -1146,9 +1204,9 @@ describe('AskController', () => {
         { id: '42.7.2', kind: 'text', label: 'Password', group: '', value: 'hunter2', secure: true, required: false },
       ].map((f) => JSON.stringify({ ...f, options: [] })).join('\n');
       const h = harness({ steps: [said, said], screen: { fields } });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
-      h.ctl.ask(spot('missing', 1500, 900));
+      h.ctl.ask([spot('missing', 1500, 900)]);
       await flush();
       expect(h.requests[0].tools.map((d) => d.name)).toContain('fill');
       const first = h.requests[0].turns[0];
@@ -1178,7 +1236,7 @@ describe('AskController', () => {
           },
         ],
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       expect(h.taken).toEqual([
         { tool: 'paste', text: 'Friday works.', mode: 'insert' },
@@ -1208,7 +1266,7 @@ describe('AskController', () => {
           },
         ],
       });
-      h.ctl.ask(spot('missing'));
+      h.ctl.ask([spot('missing')]);
       await flush();
       expect(h.taken).toEqual([]);
       expect(results(second).map((r) => r.content)).toEqual([
@@ -1233,7 +1291,7 @@ describe('AskController', () => {
           },
         ],
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       expect(h.taken).toEqual([{ tool: 'paste', text: 'one', mode: 'insert' }]);
       expect(results(second).map((r) => r.id)).toEqual(['p1', 'p2', 'f']);
@@ -1258,7 +1316,7 @@ describe('AskController', () => {
           fields,
         },
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       expect(h.taken).toEqual([{ tool: 'paste', text: 'Friday works.', mode: 'replace' }]);
       expect(h.takenRuns).toEqual([{
@@ -1275,7 +1333,7 @@ describe('AskController', () => {
       }]);
       // A new ask, or a pause, drops whatever is still waiting for consent.
       const before = h.runnerCancels();
-      h.ctl.ask(spot('danger', 1500, 900));
+      h.ctl.ask([spot('danger', 1500, 900)]);
       expect(h.runnerCancels()).toBe(before + 1);
       h.ctl.cancel('pause');
       expect(h.runnerCancels()).toBe(before + 2);
@@ -1286,7 +1344,7 @@ describe('AskController', () => {
         recordActions: true,
         steps: [answers([call('say', { text: 'Ok.' }), call('paste', { text: 'Friday works.', mode: 'insert' })])],
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       h.runner.emit('put', 'paste');
       h.runner.emit('asking', true);
@@ -1305,7 +1363,7 @@ describe('AskController', () => {
         recordActions: true,
         steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       expect(h.bubbles().at(-1)?.put).toBeNull();
       // The runner took the paste: the bubble offers it.
@@ -1346,7 +1404,7 @@ describe('AskController', () => {
         steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
       });
       const closed = harness(steps());
-      closed.ctl.ask(spot('omw'));
+      closed.ctl.ask([spot('omw')]);
       await flush();
       closed.runner.emit('put', 'paste');
       closed.ctl.onTeammateAction('bubble', { t: 'dismiss' });
@@ -1355,7 +1413,7 @@ describe('AskController', () => {
       expect(closed.of('bubble')).toHaveLength(shown);
 
       const ran = harness(steps());
-      ran.ctl.ask(spot('omw'));
+      ran.ctl.ask([spot('omw')]);
       await flush();
       await vi.advanceTimersByTimeAsync(bubbleMs('Ok.'));
       expect(ran.of('bubbleHidden')).toHaveLength(1);
@@ -1365,7 +1423,7 @@ describe('AskController', () => {
 
       // Hidden for the paste, then closed by the user before the reply: it stays closed.
       const both = harness(steps());
-      both.ctl.ask(spot('omw'));
+      both.ctl.ask([spot('omw')]);
       await flush();
       both.ctl.hideBubbleForPut();
       both.ctl.cancel('pause');
@@ -1379,7 +1437,7 @@ describe('AskController', () => {
         recordActions: true,
         steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'more' });
       h.ctl.hideCardForPut();
@@ -1392,7 +1450,7 @@ describe('AskController', () => {
         recordActions: true,
         steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
       });
-      user.ctl.ask(spot('omw'));
+      user.ctl.ask([spot('omw')]);
       await flush();
       user.ctl.onTeammateAction('bubble', { t: 'more' });
       user.ctl.onTeammateAction('card', { t: 'close' });
@@ -1406,7 +1464,7 @@ describe('AskController', () => {
         recordActions: true,
         steps: [answers([call('paste', { text: 'Friday works.', mode: 'insert' }), call('say', { text: 'Ok.' })])],
       });
-      h.ctl.ask(spot('omw'));
+      h.ctl.ask([spot('omw')]);
       await flush();
       await vi.advanceTimersByTimeAsync(bubbleMs('Ok.') - 500);
       h.runner.emit('put', 'ready');
@@ -1418,7 +1476,7 @@ describe('AskController', () => {
 
     it('sends no put click for an answer that has no action', async () => {
       const h = harness({ recordActions: true, steps: [answers([call('say', { text: 'Ok.' })])] });
-      h.ctl.ask(spot('enemyvision'));
+      h.ctl.ask([spot('enemyvision')]);
       await flush();
       h.ctl.onTeammateAction('bubble', { t: 'put' });
       expect(h.putClicks).toEqual([]);
@@ -1435,7 +1493,7 @@ describe('AskController', () => {
         done: ['Copied 1 line'],
         steps: [answers([call('copy', { text: 'Friday works.' }), call('say', { text: 'Copied your reply.' })])],
       });
-      h.ctl.ask(spot('enemyvision'));
+      h.ctl.ask([spot('enemyvision')]);
       await flush();
       expect(h.dones).toEqual([{ at: expect.any(Number), done: ['Copied 1 line'] }]);
       expect(JSON.stringify(h.dones)).not.toContain('Friday works.');
@@ -1449,7 +1507,7 @@ describe('AskController', () => {
 
       // Nothing done: the entry has no list.
       const quiet = harness({ recordActions: true, steps: [answers([call('say', { text: 'Ok.' })])] });
-      quiet.ctl.ask(spot('enemyvision'));
+      quiet.ctl.ask([spot('enemyvision')]);
       await flush();
       expect(quiet.dones).toEqual([{ at: expect.any(Number), done: undefined }]);
     });
@@ -1458,7 +1516,7 @@ describe('AskController', () => {
       const h = harness({
         steps: [answers([call('copy', { text: 'x' }, 'c'), call('say', { text: 'Grabbed it.' }, 's')])],
       });
-      h.ctl.ask(spot('enemyvision'));
+      h.ctl.ask([spot('enemyvision')]);
       await flush();
       expect(h.bubbles().some((b) => JSON.stringify(b).includes('Grabbed it.'))).toBe(true);
       expect(toolNames(h)).toContain('copy');
@@ -1467,7 +1525,7 @@ describe('AskController', () => {
 
   it('removes the run folder even when the ask is cancelled while the capture runs', async () => {
     const h = harness({ captureHangs: true });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.dirs).toHaveLength(1);
     expect(h.dirs[0].startsWith('tmp')).toBe(true);
@@ -1480,7 +1538,7 @@ describe('AskController', () => {
 
   it('removes the run folder after an answer', async () => {
     const h = harness({ steps: [answers([call('say', { text: 'Fine.' })])] });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.dirs).toHaveLength(1);
     expect([...h.disk]).toEqual([]);
@@ -1491,7 +1549,7 @@ describe('AskController', () => {
       teammate: { profiles: [{ ...profile('fast'), model: 'deepseek-chat' }] },
       steps: [answers([call('say', { text: 'Fine.' })])],
     });
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     expect(h.of('capture')).toHaveLength(1);
     const req = h.requests[0];
@@ -1510,7 +1568,7 @@ describe('AskController', () => {
         call('answer', { markdown: 'Save writes the file.' }),
       ])],
     });
-    h.ctl.ask(spot('assist'));
+    h.ctl.ask([spot('assist')]);
     await flush();
     expect(h.pings('assist')).toEqual([{ displayId: 1, x: 500, y: 365, id: 'assist', keep: true, tag: TAG }]);
     const first = h.requests[0].turns[0];
@@ -1528,7 +1586,7 @@ describe('AskController', () => {
         call('answer', { markdown: 'Nothing changed yet.' }),
       ])],
     });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.pings('danger')).toEqual([{ displayId: 1, x: 500, y: 365, id: 'danger', keep: true, tag: TAG }]);
     const first = h.requests[0].turns[0];
@@ -1550,11 +1608,11 @@ describe('AskController', () => {
       const first = h.requests[n].turns[0];
       return first.role === 'user' ? first.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('\n') : '';
     };
-    h.ctl.ask(spot('missing'));
+    h.ctl.ask([spot('missing')]);
     await flush();
     expect(h.requests[0].tools.map((d) => d.name)).not.toContain('read_file');
     expect(text(0)).not.toContain('Chapter one');
-    h.ctl.ask(spot('allin', 1300, 900));
+    h.ctl.ask([spot('allin', 1300, 900)]);
     await flush();
     expect(h.requests[1].tools.map((d) => d.name)).toContain('read_file');
     expect(text(1)).toContain('p. 1:\nChapter one');
@@ -1583,7 +1641,7 @@ describe('AskController', () => {
         reads(null, [call('say', { text: 'Read it.' }), call('answer', { markdown: 'All of it.' })]),
       ],
     });
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     expect(h.requests[0].tools.map((d) => d.name)).toContain('read_file');
     expect(read).toHaveLength(3);
@@ -1618,7 +1676,7 @@ describe('AskController', () => {
       ],
     });
     // Whole picture reads the file; the controls only snap its pings, so they are not named.
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards().at(-1)?.footer.used).toEqual([
@@ -1626,14 +1684,14 @@ describe('AskController', () => {
     ]);
 
     // Show me how lists the controls in its prompt and reads no file.
-    h.ctl.ask(spot('assist', 700, 500));
+    h.ctl.ask([spot('assist', 700, 500)]);
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards().at(-1)?.footer.used).toEqual(['screen', 'selection', 'text on screen', 'address', 'controls']);
 
     // The system text is too slow: the file is still read, and the footer says some context was skipped.
     h.screen.system = 'slow';
-    h.ctl.ask(spot('allin', 1300, 900));
+    h.ctl.ask([spot('allin', 1300, 900)]);
     await flush();
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards().at(-1)?.footer.used).toEqual(['screen', 'paper.pdf p. 1–6', 'some context was skipped']);
@@ -1656,7 +1714,7 @@ describe('AskController', () => {
         },
       ],
     });
-    h.ctl.ask(spot('allin'));
+    h.ctl.ask([spot('allin')]);
     await flush();
     const first = h.requests[0].turns[0];
     const prompt = first.role === 'user' ? first.parts.flatMap((p) => ('text' in p ? [p.text] : [])).join('') : '';
@@ -1666,7 +1724,7 @@ describe('AskController', () => {
 
   it('fails an ask whose gathering hangs at the total deadline', async () => {
     const h = harness({ screen: { system: 'hangs' } });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     await vi.advanceTimersByTimeAsync(59_999);
     expect(h.ctl.running).toBe(true);

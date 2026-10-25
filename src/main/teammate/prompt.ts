@@ -219,6 +219,14 @@ export function systemPrompt(ctx: AskContext): string {
 
 const spotNumber = (n: number): string => `spot ${n + 1}`;
 
+/** Each spot's place in the overview; with several, that they make one question. */
+const spotLines = (spots: AskContext['spots']): string[] => [
+  ...spots.map((p, i) => `${spotNumber(i)} is at x=${p.x}, y=${p.y} in the overview.`),
+  ...(spots.length > 1
+    ? [`The user marked ${spots.length} spots, in this order. The question is about all of them together.`]
+    : []),
+];
+
 /**
  * Show me how places numbered pings on the exact controls to use, so only it gets the marks list and the rule to aim
  * at the exact element. Other asks point roughly and answer without a closer look.
@@ -253,7 +261,7 @@ function screenLines(ctx: AskContext): (string | null)[] {
   const { overview } = ctx.shot;
   return [
     `The overview image is ${overview.w} x ${overview.h} pixels.`,
-    ...ctx.spots.map((p, i) => `${spotNumber(i)} is at x=${p.x}, y=${p.y} in the overview.`),
+    ...spotLines(ctx.spots),
     ctx.spots.length > 0
       ? 'Each zoom image after the overview is a sharper crop of the part of the window around the spot with the same '
         + 'number, in order.'
@@ -341,7 +349,7 @@ export function agentAsk(ctx: AskContext, images: { overview: string; zooms: str
   const { overview } = ctx.shot;
   const screen = [
     `The overview image is ${images.overview}, ${overview.w} x ${overview.h} pixels.`,
-    ...ctx.spots.map((p, i) => `${spotNumber(i)} is at x=${p.x}, y=${p.y} in the overview.`),
+    ...spotLines(ctx.spots),
     ...images.zooms.map((z, i) => `${z} is a sharper crop of the part of the window around ${spotNumber(i)}.`),
   ];
   // A resumed session remembers the thread; any other gets the earlier answers, as text.

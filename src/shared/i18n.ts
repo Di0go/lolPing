@@ -150,6 +150,11 @@ interface MateAskText {
     /** The working folder (a fixed one, or where the thread's session was) is gone. */
     noFolder: (name: string) => string;
   };
+  /** A spot refused while the ask key is held: a fifth one, or one on another display than the first. */
+  spotsFull: string;
+  spotsDisplay: string;
+  /** How many spots an ask was about, after its label on the card. */
+  spots: (n: number) => string;
 }
 
 const enMateAsk: MateAskText = {
@@ -198,6 +203,9 @@ const enMateAsk: MateAskText = {
     addLolPing: (where) => ` Check that lolPing is in ${where ?? 'its MCP settings'}.`,
     noFolder: (name) => `The folder ${name} isn’t there any more.`,
   },
+  spotsFull: 'Up to 4 spots per ask',
+  spotsDisplay: 'Spots in one ask stay on one screen',
+  spots: (n) => `${n} spots`,
 };
 
 /** The apps Connect an app lists: product names as they are, the words between them in the language. */
@@ -1222,6 +1230,9 @@ const zh: Strings = {
         noFolder: (name) => `文件夹 ${name} 已经不在了。`,
         addLolPing: (where) => (where === null ? '请检查它的 MCP 设置里是否加了 lolPing。' : `请检查 ${where} 里是否加了 lolPing。`),
       },
+      spotsFull: '一次最多 4 处',
+      spotsDisplay: '一次提问的几处要在同一块屏幕上',
+      spots: (n) => `${n} 处`,
     },
     settings: {
       profiles: '配置',

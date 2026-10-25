@@ -14,7 +14,7 @@ import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
 import { overviewToPhysical, physicalToOverview, receiptPoint, type Rect, type Shot } from '../../shared/teammate/coords';
 import type { FormField } from '../../shared/teammate/doRules';
 import { editorFolder } from '../../shared/teammate/editorFolder';
-import { frameAsk, type Framing } from '../../shared/teammate/framing';
+import { frameSpots } from '../../shared/teammate/framing';
 import { isSessionId, type ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
@@ -146,6 +146,8 @@ interface Run {
   abort: AbortController;
   deadlines: Timer[];
   ended: boolean;
+  /** Every spot of the ask, in order; `spot` is the last, which decides the question and where the answer sits. */
+  spots: Spot[];
   spot: Spot;
   receipt: Point;
   display: { id: number; rect: Rect } | null;
@@ -221,6 +223,11 @@ const entryPair = (
   { kind: 'answer', label: tagName, line, markdown },
 ];
 
+/** An ask's label on the card; one about several spots says how many. */
+const askLabel = (label: string, spots: number, lang: Lang): string => (
+  spots > 1 ? `${label} · ${strings(lang).teammate.ask.spots(spots)}` : label
+);
+
 /** One thing the answer used, as the card footer names it. */
 function usedLabel(u: UsedItem, lang: Lang): string {
   const t = strings(lang).teammate.ask;
@@ -244,7 +251,7 @@ function failureOf(err: unknown): AskFailure {
 
 /** The same `file` and intent decide the tools and the prompt's rules for them, so the two never disagree. */
 const toolsFor = (run: Run, ctx: AskContext): ToolDef[] => toolDefs({
-  emotes: run.emotes, spots: 1, file: ctx.file !== null, look: canLook(run.intent.def.id),
+  emotes: run.emotes, spots: run.spots.length, file: ctx.file !== null, look: canLook(run.intent.def.id),
   kind: run.intent.def.kind, form: (ctx.fields?.length ?? 0) > 0, selection: (ctx.system?.selection ?? '') !== '',
 });
 
@@ -362,7 +369,10 @@ export class AskController extends EventEmitter {
     return this.run !== null;
   }
 
-  ask(spot: Spot, words?: { text: string; newThread: boolean }): void {
+  /** `spots`: one or more, in order; the last decides the question, and the receipt, bubble and card sit at it. */
+  ask(spots: readonly Spot[], words?: { text: string; newThread: boolean }): void {
+    const spot = spots.at(-1);
+    if (!spot) return;
     // An agent's unprompted marks aren't the teammate's: asking on one doesn't continue a thread.
     const prev = this.shown?.visitor ? null : this.shown;
     const settings = this.deps.settings();
@@ -370,7 +380,7 @@ export class AskController extends EventEmitter {
     const lang = this.deps.lang();
     const intent = intentFor(t, spot.intent, lang);
     const machine = new AskMachine(this.deps.now, { receiveMs: RECEIVE_MS, totalMs: TOTAL_MS });
-    machine.addSpot(spot);
+    for (const s of spots) machine.addSpot(s);
 
     this.stopRun();
     this.deps.actions?.cancel(); // a consent card or form preview of the last answer goes, and nothing of it runs
@@ -390,7 +400,7 @@ export class AskController extends EventEmitter {
     const display = this.deps.overlay.displayAt(spot.phys);
 
     const run: Run = {
-      machine, abort: new AbortController(), deadlines: [], ended: false, spot, display,
+      machine, abort: new AbortController(), deadlines: [], ended: false, spots: [...spots], spot, display,
       receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
@@ -473,10 +483,10 @@ export class AskController extends EventEmitter {
         break;
       // An agent's card has neither: they would ask the user's own teammate about the agent's answer.
       case 'reply':
-        if (run && !run.visitor) this.ask({ ...run.spot, intent: 'generic' }, { text: a.text, newThread: false });
+        if (run && !run.visitor) this.ask([{ ...run.spot, intent: 'generic' }], { text: a.text, newThread: false });
         break;
       case 'deep':
-        if (run && !run.visitor) this.ask({ ...run.spot, intent: 'allin' });
+        if (run && !run.visitor) this.ask([{ ...run.spot, intent: 'allin' }]);
         break;
       case 'put':
         // The click is the consent; the runner checks it belongs to the action it has for this ask.
@@ -608,9 +618,9 @@ export class AskController extends EventEmitter {
     const phys = this.deps.cursor?.();
     const display = phys ? this.deps.overlay.displayAt(phys) : null;
     if (!phys || !display || !this.viewed) return;
-    if (a.t === 'deep') return this.ask({ intent: 'allin', phys, displayId: display.id });
+    if (a.t === 'deep') return this.ask([{ intent: 'allin', phys, displayId: display.id }]);
     this.thread = this.viewed;
-    this.ask({ intent: 'generic', phys, displayId: display.id }, { text: a.text, newThread: false });
+    this.ask([{ intent: 'generic', phys, displayId: display.id }], { text: a.text, newThread: false });
   }
 
   /**
@@ -641,10 +651,11 @@ export class AskController extends EventEmitter {
     const t = this.deps.settings().teammate;
     const lang = this.deps.lang();
     const point = receiptPoint(cursor, display.rect);
+    const spot: Spot = { intent: 'generic', phys: cursor, displayId: display.id };
     return {
       machine: new AskMachine(this.deps.now, { receiveMs: RECEIVE_MS, totalMs: TOTAL_MS }),
       abort: new AbortController(), deadlines: [], ended: true,
-      spot: { intent: 'generic', phys: cursor, displayId: display.id }, receipt: point, display,
+      spots: [spot], spot, receipt: point, display,
       intent: intentFor(t, 'generic', lang), words: null, thread: null, autoCard: true, lang,
       tag: this.visitorTag(client), emotes: t.emotes, profile: null, route: '', agent: null, visitor: { point },
       folder: '', cwd: null, session: null, agentRun: null, shot: null, app: '', title: '', window: '', thumb: '',
@@ -744,13 +755,14 @@ export class AskController extends EventEmitter {
     // The context comes first: the boxes around the spot decide what the capture shows.
     await this.files.makeDir(run.dir);
     const allin = run.intent.def.id === 'allin';
+    const phys = run.spots.map((s) => s.phys);
     const layers = await gather({ context: deps.context, ...deps.readers }, {
-      settings: t.context, spots: [run.spot.phys], dir: run.dir, allin, title: run.title,
+      settings: t.context, spots: phys, dir: run.dir, allin, title: run.title,
       act: run.intent.def.kind === 'act',
     }, signal);
     if (!this.alive(run)) return null;
-    const framing = frameAsk(run.intent.def.id, layers.boxes[0] ?? [], display, run.spot.phys);
-    const cap = await this.capture(run, [run.spot.phys], framing);
+    const framing = frameSpots(run.intent.def.id, layers.boxes, display, phys);
+    const cap = await this.capture(run, phys, framing);
     if (!this.alive(run)) return null;
     const shot: Shot = { area: framing.area, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
     run.shot = shot;
@@ -761,14 +773,14 @@ export class AskController extends EventEmitter {
     run.screenMarks = layers.marks;
     run.system = layers.system;
     run.fields = layers.fields;
-    run.box = layers.boxes[0]?.[0] ?? null;
+    run.box = layers.boxes[run.spots.length - 1]?.[0] ?? null; // under the last spot, where the answer sits
     run.doc = layers.doc;
     // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
     run.used = aimsExactly(run.intent.def.id) ? layers.used : layers.used.filter((u) => u.kind !== 'marks');
     run.skipped = layers.skipped;
     const ctx: AskContext = {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
-      shot, spots: [physicalToOverview(shot, run.spot.phys)], overviewJpeg, zoomJpegs, thread: run.thread,
+      shot, spots: phys.map((p) => physicalToOverview(shot, p)), overviewJpeg, zoomJpegs, thread: run.thread,
       instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
       file: layers.file, fields: layers.fields,
     };
@@ -930,15 +942,14 @@ export class AskController extends EventEmitter {
    * Overlays and teammate windows stay out of the grab; a count, so an older ask's capture can't let them back in.
    * Without a framing the overview is the whole display and each close-up a fixed crop around its spot.
    */
-  private async capture(run: Run, spots: Point[], framing?: Framing): Promise<Capture> {
+  private async capture(run: Run, spots: Point[], framing?: { area: Rect; crops: Rect[] }): Promise<Capture> {
     const rect = run.display?.rect;
     if (!rect) throw new ContextError('capture', 'no display under the spot');
     try {
       this.excluded += 1;
       if (this.excluded === 1) this.exclude(true);
       await this.files.makeDir(run.dir);
-      const framed = framing ? { area: framing.area, crops: [framing.crop] } : {};
-      return await this.deps.context.capture({ display: rect, spots, dir: run.dir, ...framed }, run.abort.signal);
+      return await this.deps.context.capture({ display: rect, spots, dir: run.dir, ...framing }, run.abort.signal);
     } finally {
       this.excluded -= 1;
       if (this.excluded === 0) this.exclude(false);
@@ -1065,7 +1076,8 @@ export class AskController extends EventEmitter {
   private target(run: Run, at: Target): Point | null {
     if (run.visitor) return run.visitor.point;
     // The model numbers the user's spots from 1; a pixel point snaps onto the control or text line under it.
-    return run.shot ? resolveTarget(at, { spots: [run.spot.phys], marks: run.screenMarks, shot: run.shot }) : null;
+    const spots = run.spots.map((s) => s.phys);
+    return run.shot ? resolveTarget(at, { spots, marks: run.screenMarks, shot: run.shot }) : null;
   }
 
   private placePing(run: Run, c: Extract<ToolCall, { tool: 'ping' }>): void {
@@ -1165,6 +1177,7 @@ export class AskController extends EventEmitter {
     const entry = {
       at: this.deps.now(), intent: run.spot.intent, words: run.words, line: run.said,
       markdown: run.markdown.join('\n\n'), thumb: run.thumb, ...(done.length > 0 ? { done } : {}),
+      spots: run.spots.length,
     };
     const agent = run.session ? { agent: run.session } : {};
     const meta = {
@@ -1283,7 +1296,8 @@ export class AskController extends EventEmitter {
   private cardState(run: Run, streaming: boolean): CardState {
     const t = strings(run.lang).teammate;
     const entries = run.thread ? this.threadEntries(run.thread, run.lang, run.tag.name) : [];
-    const pair = entryPair(run.intent.label, run.words, run.said, run.markdown.join('\n\n'), run.tag.name);
+    const label = askLabel(run.intent.label, run.spots.length, run.lang);
+    const pair = entryPair(label, run.words, run.said, run.markdown.join('\n\n'), run.tag.name);
     // An agent's card has no ask above its answer: nobody asked.
     entries.push(...(run.visitor ? pair.slice(1) : pair));
     return {
@@ -1307,7 +1321,7 @@ export class AskController extends EventEmitter {
   private threadEntries(thread: ThreadRecord, lang: Lang, tagName: string): CardState['entries'] {
     const s = this.deps.settings().teammate;
     return thread.entries.flatMap((e) =>
-      entryPair(intentFor(s, e.intent, lang).label, e.words, e.line, e.markdown, tagName));
+      entryPair(askLabel(intentFor(s, e.intent, lang).label, e.spots, lang), e.words, e.line, e.markdown, tagName));
   }
 
   private popupAt(run: Run): Point {

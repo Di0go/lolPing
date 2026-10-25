@@ -158,7 +158,7 @@ describe('an agent answering an ask', () => {
     });
     await server.start();
     try {
-      controller.ask({ intent: 'danger', phys: { x: 1000, y: 800 }, displayId: 1 });
+      controller.ask([{ intent: 'danger', phys: { x: 1000, y: 800 }, displayId: 1 }]);
       await until(() => !controller.running, 'the ask to end');
       expect(bubbles.map((b) => b.line)).toEqual(['Hello through the bridge.']);
       expect(pings).toEqual(['omw', 'danger']);

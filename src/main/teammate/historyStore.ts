@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isPingId, type PingId } from '../../shared/pings';
-import { isSessionId, prune, type ThreadRecord } from '../../shared/teammate/history';
+import { isSessionId, prune, spotCount, type ThreadRecord } from '../../shared/teammate/history';
 import { renameWithRetry } from '../settingsStore';
 import type { Crypto } from './secrets';
 
@@ -41,7 +41,10 @@ function parseEntry(raw: unknown): Entry | null {
   if (!isString(x.line) || !isString(x.markdown) || !isString(x.thumb)) return null;
   // Entries written before actions existed have no `done`.
   if (x.done !== undefined && !(Array.isArray(x.done) && x.done.every(isString))) return null;
-  const e: Entry = { at: x.at, intent: x.intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb };
+  const e: Entry = {
+    at: x.at, intent: x.intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb,
+    spots: spotCount(x.spots),
+  };
   return Array.isArray(x.done) ? { ...e, done: x.done as string[] } : e;
 }
 

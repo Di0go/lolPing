@@ -39,7 +39,7 @@ function ctx(over: Partial<AskContext> = {}): AskContext {
 }
 
 const entry = (at: number, line: string): ThreadRecord['entries'][number] => ({
-  at, intent: 'missing', words: null, line, markdown: '', thumb: jpeg(9).toString('base64'),
+  at, intent: 'missing', words: null, line, markdown: '', thumb: jpeg(9).toString('base64'), spots: 1,
 });
 const thread = (entries: ThreadRecord['entries']): ThreadRecord => ({
   id: 't', title: 't', started: 0, lastActivity: 0, app: 'a', windowTitle: 'w', profile: 'p', entries,
@@ -130,6 +130,21 @@ describe('teammate prompt', () => {
     expect(b2).toContain('spot 2 is at x=30, y=40');
     expect(images.map((p) => ('image' in p ? [p.image.mime, p.image.data[2]] : null)))
       .toEqual([['image/jpeg', 1], ['image/jpeg', 2], ['image/jpeg', 3]]);
+  });
+
+  it('tells the model the spots go together', () => {
+    const together = 'The user marked 3 spots, in this order. The question is about all of them together.';
+    const three = ctx({ spots: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] });
+    const t = firstTurn(three);
+    const body = t.role === 'user' && 'text' in t.parts[0] ? t.parts[0].text : '';
+    expect(body).toContain(`spot 3 is at x=50, y=60 in the overview.\n${together}`);
+    const md = agentAsk(three, { overview: 'overview.jpg', zooms: ['zoom-1.jpg', 'zoom-2.jpg', 'zoom-3.jpg'] });
+    expect(md).toContain(`spot 3 is at x=50, y=60 in the overview.\n${together}`);
+    // One spot reads as before.
+    const one = firstTurn(ctx());
+    const single = one.role === 'user' && 'text' in one.parts[0] ? one.parts[0].text : '';
+    expect(single).not.toContain('The user marked');
+    expect(agentAsk(ctx(), { overview: 'overview.jpg', zooms: ['zoom-1.jpg'] })).not.toContain('The user marked');
   });
 
   it('drops the oldest thread turns past the budget', () => {

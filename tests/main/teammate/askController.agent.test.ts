@@ -229,7 +229,7 @@ afterEach(() => {
 describe('AskController with an agent', () => {
   it('starts the agent with the ask written into its folder and one fixed prompt line', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.started).toHaveLength(1);
     const { spec, profile, env } = h.started[0];
@@ -254,7 +254,7 @@ describe('AskController with an agent', () => {
 
   it('marks the ask received at its agent\'s first tools/list, not at a probe connection', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     // dsh's probe connects and leaves without listing: nothing reaches the controller, so no receipt.
     await vi.advanceTimersByTimeAsync(9_000);
@@ -276,7 +276,7 @@ describe('AskController with an agent', () => {
 
   it('fails when the agent lists no tools within 10 s of starting, and stops it', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     await vi.advanceTimersByTimeAsync(9_999);
     expect(h.ctl.running).toBe(true);
@@ -288,7 +288,7 @@ describe('AskController with an agent', () => {
   it('says where to add lolPing when an agent that reads its own MCP settings does not connect', async () => {
     const lines = async (preset: AgentProfile['preset'], lang: 'en' | 'zh-CN' = 'en'): Promise<string | undefined> => {
       const h = harness({ teammate: { profiles: [agent({ preset, name: 'Mine' })], defaultProfile: 'cc' }, lang });
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       await vi.advanceTimersByTimeAsync(10_000);
       return h.lines().at(-1);
@@ -307,7 +307,7 @@ describe('AskController with an agent', () => {
 
   it('draws an agent\'s say, ping and answer like a model\'s', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     const said = await h.ctl.agentCall(h.token(), 'say', { text: 'Line 3 divides by zero.' });
@@ -333,7 +333,7 @@ describe('AskController with an agent', () => {
 
   it('answers a look with the zoom as base64, once per ask', async () => {
     const h = harness();
-    h.ctl.ask(spot('assist'));
+    h.ctl.ask([spot('assist')]);
     await flush();
     expect(h.ctl.agentTools(h.token())?.map((d) => d.name)).toContain('look');
     const look = await h.ctl.agentCall(h.token(), 'look', { x: 100, y: 100, w: 200, h: 100 });
@@ -348,13 +348,13 @@ describe('AskController with an agent', () => {
 
   it('offers the consent tool only to a preset that routes its permission prompts to lolPing', async () => {
     const claude = harness();
-    claude.ctl.ask(spot('danger'));
+    claude.ctl.ask([spot('danger')]);
     await flush();
     expect(claude.ctl.agentTools(claude.token())?.map((d) => d.name)).toContain('consent');
 
     for (const profile of [agent({ preset: 'dsh' }), agent({ preset: 'custom' })]) {
       const h = harness({ teammate: { profiles: [profile] } });
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       expect(h.ctl.agentTools(h.token())?.map((d) => d.name), profile.preset).not.toContain('consent');
       const r = await h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Write', input: {} });
@@ -365,7 +365,7 @@ describe('AskController with an agent', () => {
 
   it('asks the user for a permission prompt and answers allow with the input', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     const input = { file_path: 'src/app.ts', old_string: 'teh', new_string: 'the' };
@@ -381,7 +381,7 @@ describe('AskController with an agent', () => {
 
   it('answers deny when the user declines', async () => {
     const h = harness({ consent: 'deny' });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     const r = await h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Bash', input: { command: 'rm -rf x' } });
@@ -391,7 +391,7 @@ describe('AskController with an agent', () => {
 
   it('refuses a permission prompt whose tool name no permission key can hold, without asking', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     for (const args of [{ tool_name: 'Ed:it', input: {} }, { tool_name: 'Edit' }, 'Edit', null]) {
@@ -404,7 +404,7 @@ describe('AskController with an agent', () => {
 
   it('answers deny to a permission prompt still waiting when the ask ends', async () => {
     const h = harness({ consent: 'wait' });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     const pending = h.ctl.agentCall(h.token(), 'consent', { tool_name: 'Write', input: { file_path: 'a.md' } });
@@ -419,11 +419,11 @@ describe('AskController with an agent', () => {
 
   it('refuses calls from an ask that was replaced', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     const first = h.token();
     h.ctl.agentTools(first);
-    h.ctl.ask(spot('danger', 2000, 1200));
+    h.ctl.ask([spot('danger', 2000, 1200)]);
     await flush();
     expect(h.started).toHaveLength(2);
     expect(h.started[0].kills).toBe(1);
@@ -437,7 +437,7 @@ describe('AskController with an agent', () => {
 
   it('stops the agent when the ask is cancelled', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.cancel('user');
     await flush();
@@ -447,7 +447,7 @@ describe('AskController with an agent', () => {
 
   it('fails with the agent\'s error line when it exits before answering', async () => {
     const h = harness();
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     h.started[0].exit({ code: 1, error: 'Not logged in · Please run /login' });
@@ -456,13 +456,13 @@ describe('AskController with an agent', () => {
     expect(h.pings.map((p) => p.id)).toEqual(['omw', 'missing']);
     expect(h.appends).toEqual([]);
 
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.started[1].exit({ code: 1, error: 'e'.repeat(300) });
     await flush();
     expect(h.lines().at(-1)).toBe(`Claude Code: ${'e'.repeat(200)}`);
 
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.started[2].exit({ code: 0 });
     await flush();
@@ -471,7 +471,7 @@ describe('AskController with an agent', () => {
 
   it('fails at once when the command is not found', async () => {
     const h = harness({ startThrows: new AgentStartError('notFound', "Couldn't find claude") });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.lines()).toEqual(['Couldn’t start claude: not found']);
     expect(h.pings.map((p) => p.id)).toEqual(['missing']);
@@ -480,18 +480,18 @@ describe('AskController with an agent', () => {
 
   it('says it couldn\'t start the agent when spawning fails', async () => {
     const h = harness({ startThrows: new AgentStartError('spawn', 'EACCES') });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.lines()).toEqual(['Couldn’t start claude']);
   });
 
   it('says the working folder is gone when it is', async () => {
     const h = harness({ startThrows: new AgentStartError('noFolder', 'no folder') });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     expect(h.lines()).toEqual(['The folder lolPing isn’t there any more.']);
     const zh = harness({ startThrows: new AgentStartError('noFolder', 'no folder'), lang: 'zh-CN' });
-    zh.ctl.ask(spot('danger'));
+    zh.ctl.ask([spot('danger')]);
     await flush();
     expect(zh.lines()).toEqual(['文件夹 lolPing 已经不在了。']);
   });
@@ -499,7 +499,7 @@ describe('AskController with an agent', () => {
   it('asks for a restart when lolPing\'s agent connection isn\'t open', async () => {
     for (const opts of [{ bridgeDown: true }, { noAgents: true }]) {
       const h = harness(opts);
-      h.ctl.ask(spot('danger'));
+      h.ctl.ask([spot('danger')]);
       await flush();
       expect(h.started).toEqual([]);
       expect(h.lines()).toEqual(['lolPing couldn’t open its agent connection. Restart lolPing.']);
@@ -509,7 +509,7 @@ describe('AskController with an agent', () => {
 
   it('times out after the profile\'s timeout, not 60 s', async () => {
     const h = harness({ teammate: { profiles: [agent({ timeoutS: 120 })], defaultProfile: 'cc' } });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     await vi.advanceTimersByTimeAsync(60_000);
@@ -522,7 +522,7 @@ describe('AskController with an agent', () => {
 
   it('keeps an agent\'s answer when it outlives its timeout', async () => {
     const h = harness({ teammate: { profiles: [agent({ timeoutS: 120 })], defaultProfile: 'cc' } });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     await h.ctl.agentCall(h.token(), 'say', { text: 'Line 3 divides by zero.' });
@@ -540,7 +540,7 @@ describe('AskController with an agent', () => {
 
   it('keeps the session of an agent that outlives its timeout, so the thread resumes it', async () => {
     const h = harness({ teammate: { profiles: [agent({ timeoutS: 120 })], defaultProfile: 'cc' } });
-    h.ctl.ask(spot('danger'));
+    h.ctl.ask([spot('danger')]);
     await flush();
     h.ctl.agentTools(h.token());
     h.started[0].session = 'sess-late';
@@ -555,12 +555,12 @@ describe('AskController with an agent', () => {
   it('resumes the thread\'s agent session in the folder it was recorded in', async () => {
     const thread = (profileId: string): ThreadRecord => ({
       id: 'th1', title: 'Earlier', started: 0, lastActivity: 0, app: 'Code.exe', windowTitle: '', profile: 'My Claude',
-      entries: [{ at: 0, intent: 'danger', words: null, line: 'Earlier line.', markdown: '', thumb: '' }],
+      entries: [{ at: 0, intent: 'danger', words: null, line: 'Earlier line.', markdown: '', thumb: '', spots: 1 }],
       agent: { profileId, session: 'sess-9', cwd: 'D:\\old' },
     });
     const h = harness();
     h.ctl.continueThread(thread('cc'));
-    h.ctl.ask(spot('push'));
+    h.ctl.ask([spot('push')]);
     await flush();
     expect(h.started[0].spec.resume).toBe('sess-9');
     expect(h.started[0].cwd).toBe('D:\\old');
@@ -575,7 +575,7 @@ describe('AskController with an agent', () => {
     // Another profile's session isn't this agent's to resume.
     const other = harness();
     other.ctl.continueThread(thread('someone-else'));
-    other.ctl.ask(spot('push'));
+    other.ctl.ask([spot('push')]);
     await flush();
     expect(other.started[0].spec.resume).toBeNull();
     expect(other.started[0].cwd).toBe('C:\\code\\lolPing');
@@ -593,7 +593,7 @@ describe('AskController with an agent', () => {
     };
 
     const named = harness(folders(['C:\\code\\other', 'C:\\code\\lolPing']));
-    named.ctl.ask(spot('danger'));
+    named.ctl.ask([spot('danger')]);
     await flush();
     expect(named.started[0].cwd).toBe('C:\\code\\lolPing');
     expect(await footer(named)).toBe('Folder: lolPing');
@@ -601,13 +601,13 @@ describe('AskController with an agent', () => {
     const first = harness({
       ...folders(['C:\\code\\other', 'C:\\code\\lolPing']), foreground: { ...VSCODE, title: 'x' },
     });
-    first.ctl.ask(spot('danger'));
+    first.ctl.ask([spot('danger')]);
     await flush();
     expect(first.started[0].cwd).toBe('C:\\code\\other');
     expect(await footer(first)).toBe('Folder: other (first in the list)');
 
     const home = harness(folders([]));
-    home.ctl.ask(spot('danger'));
+    home.ctl.ask([spot('danger')]);
     await flush();
     expect(home.started[0].cwd).toBe('C:\\Users\\a');
     expect(await footer(home)).toBe('Folder: home');
@@ -615,7 +615,7 @@ describe('AskController with an agent', () => {
 
   it('says Do it went to the first agent in the footer', async () => {
     const h = harness({ teammate: { profiles: [builtin, agent()], defaultProfile: 'fast' } });
-    h.ctl.ask(spot('omw'));
+    h.ctl.ask([spot('omw')]);
     await flush();
     expect(h.started).toHaveLength(1);
     h.ctl.agentTools(h.token());

@@ -24,6 +24,7 @@ const entry = (line: string, words: string | null = null) => ({
   line,
   markdown: line,
   thumb: 'AAAA',
+  spots: 1,
 });
 const DAY = 86_400_000;
 
@@ -194,6 +195,17 @@ describe('HistoryStore', () => {
     const fresh = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000);
     const old = await fresh.append(null, entry('x'), meta);
     expect('done' in old.entries[0]).toBe(false);
+  });
+
+  it('keeps each ask\'s spot count, and reads an entry written before spots as one spot', async () => {
+    const d = join(root(), 'history');
+    const crypto = fakeCrypto();
+    const store = new HistoryStore(d, crypto, () => 1000);
+    const t = await store.append(null, { ...entry('three spots'), spots: 3 }, meta);
+    expect((await new HistoryStore(d, crypto, () => 1000).get(t.id))?.entries[0].spots).toBe(3);
+    const { spots: _dropped, ...old } = t.entries[0];
+    writeFileSync(join(d, t.id + '.thread'), crypto.encryptString(JSON.stringify({ ...t, entries: [old] })));
+    expect((await new HistoryStore(d, crypto, () => 1000).get(t.id))?.entries[0].spots).toBe(1);
   });
 
   it('rejects a stored entry whose done list is not text', async () => {

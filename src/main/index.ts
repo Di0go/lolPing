@@ -20,7 +20,7 @@ import type { RoomState } from '../shared/room';
 import type { VoteKind } from '../shared/roomProtocol';
 import { formatRoomCode, parseRoomCode } from '../shared/roomCode';
 import { sameTagRgb, tagWire } from '../shared/roomColors';
-import { overlaySettings, soundLevel, type Settings } from '../shared/settings';
+import { overlaySettings, separateAskKey, soundLevel, type Settings } from '../shared/settings';
 import type { Spot } from '../shared/teammate/askMachine';
 import { rememberApp } from '../shared/teammate/appRules';
 import type { ThreadRecord } from '../shared/teammate/history';
@@ -59,6 +59,7 @@ import { findExecutable, userPath, withPath } from './teammate/agents/command';
 import { launchTerminal } from './teammate/agents/openInTerminal';
 import { AgentRunner, isExecutable, killProcessTree, searchPath } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
+import { AskGesture } from './teammate/askGesture';
 import { ContextClient } from './teammate/contextClient';
 import { installedEditors } from './teammate/editors';
 import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
@@ -584,6 +585,7 @@ function start(): void {
     if (!on) {
       overlays.dropKeptPings();
       mate?.controller.cancel('pause');
+      gesture.cancel();
       closeWords();
     }
     const t = text();
@@ -669,13 +671,17 @@ function start(): void {
       if (capturing || textOpen || wordsOpen) syncSuspended();
       panels.hideRoster(); // a restarted helper lost the panel key's up, so a shown roster would stay up
     } else if (ev.type === 'error') console.warn('[helper]', ev.code ?? '', ev.message);
-    else overlays.handle(ev);
+    else if (ev.type === 'triggerUp') {
+      // Only the key that asks sends the spots held so far; the emote key's up, or the ping key's outside it, doesn't.
+      if (ev.wheel === 'ask' || (ev.wheel === 'ping' && asksOnPing())) gesture.keyUp();
+    } else overlays.handle(ev);
   });
   bridge.on('status', (s: HelperStatus) => {
     // A helper that is starting or has stopped can no longer send the cancel that dismisses a wheel left on screen.
     if (s !== 'running') {
       overlays.cancelWheel();
       mate?.controller.cancel('helper');
+      gesture.cancel(); // its key-up will never come
     }
     if (s === 'noAccess' && IS_MAC) {
       // Allowed but still refused is an entry left over from an earlier build. Otherwise wait for the user to allow it.
@@ -689,7 +695,7 @@ function start(): void {
   bridge.on('log', (line: string) => console.log('[helper]', line));
 
   // The teammate: built when its feature is switched on, taken down when it is switched off or the app quits.
-  let wordsSpot: Spot | null = null;
+  let wordsSpots: Spot[] | null = null;
   let historyQuery = '';
   /** The agent profile whose Open in just failed; the History window says so until its next action. */
   let historyOpenFailed: string | null = null;
@@ -709,7 +715,7 @@ function start(): void {
   }
   function closeWords(): void {
     mate?.windows.hideWords(); // closes without an action, so the suspend is released here
-    wordsSpot = null;
+    wordsSpots = null;
     if (!wordsOpen) return;
     wordsOpen = false;
     syncSuspended();
@@ -788,11 +794,15 @@ function start(): void {
     const m = mate;
     if (!m) return;
     if (view === 'words') {
-      const spot = wordsSpot;
-      wordsSpot = null;
+      const spots = wordsSpots;
+      wordsSpots = null;
       wordsOpen = false;
       syncSuspended();
-      if (action.t === 'ask' && spot) m.controller.ask(spot, { text: action.text, newThread: action.newThread });
+      const last = spots?.at(-1);
+      if (action.t !== 'ask' || !spots || !last) return;
+      // The words are the question, whatever slice the held spots were released on.
+      const asked = [...spots.slice(0, -1), { ...last, intent: 'generic' as const }];
+      m.controller.ask(asked, { text: action.text, newThread: action.newThread });
       return;
     }
     if (view === 'history') {
@@ -941,6 +951,7 @@ function start(): void {
     closeWords();
     mate = null;
     m.controller.cancel('user');
+    gesture.cancel();
     m.agents.killAll(); // also on quitting: no agent, nor anything it started, outlives lolPing
     m.controller.removeAllListeners();
     m.actions.removeAllListeners();
@@ -980,16 +991,15 @@ function start(): void {
     }
     pushMateTray();
   };
-  overlays.on('askRelease', (r: AskRelease) => {
-    mate?.controller.ask({ intent: r.id, phys: r.phys, displayId: r.displayId });
-  });
-  overlays.on('askClick', (c: AskClick) => {
+  /** Opens the words box at the last spot; the ask goes with every spot when the words are sent. */
+  function openWords(spots: Spot[]): void {
     const m = mate;
-    if (!m) return;
+    const last = spots.at(-1);
+    if (!m || !last) return;
     const current = m.controller.currentThread();
     try {
-      // Showing a box cancels one still open from an earlier gesture, which clears the spot: set it after.
-      m.windows.showWords(overlays.toDip(c.phys) ?? overlays.primaryDip(), {
+      // Showing a box cancels one still open from an earlier gesture, which clears the spots: set them after.
+      m.windows.showWords(overlays.toDip(last.phys) ?? overlays.primaryDip(), {
         view: 'words', lang: mateLang(), tag: mateTag(), thread: current?.title ?? null,
         continueByDefault: wordsContinuesByDefault(current, Date.now()),
       });
@@ -997,9 +1007,46 @@ function start(): void {
       console.warn('[teammate] words box:', err);
       return;
     }
-    wordsSpot = { intent: 'generic', phys: c.phys, displayId: c.displayId };
+    wordsSpots = spots;
     wordsOpen = true;
     syncSuspended();
+  }
+  /** The ping wheel is the ask wheel: its key's up sends the held spots. */
+  const asksOnPing = (): boolean => featureOn(settings, 'teammate') && settings.teammate.askTrigger === 'same';
+  const gesture = new AskGesture({
+    now: Date.now,
+    timer: (ms, fn) => {
+      const timer = setTimeout(() => {
+        try {
+          fn();
+        } catch (err) {
+          console.warn('[teammate]', err);
+        }
+      }, ms);
+      return () => clearTimeout(timer);
+    },
+    // A mouse button's up isn't reported, so with one each release asks alone.
+    held: () => {
+      const key = separateAskKey(settings) ?? settings.trigger;
+      return key !== 'mouse4' && key !== 'mouse5';
+    },
+    ask: (spots) => mate?.controller.ask(spots),
+    words: openWords,
+    note: (spot, why) => {
+      const at = overlays.toLocal(spot.phys);
+      if (!at) return;
+      const t = strings(mateLang(), PLATFORM).teammate.ask;
+      overlays.spawnText({
+        ...at, text: why === 'full' ? t.spotsFull : t.spotsDisplay, owner: 'mate', style: settings.roomTextStyle,
+        tag: mateTag(),
+      });
+    },
+  });
+  overlays.on('askRelease', (r: AskRelease) => {
+    gesture.release({ intent: r.id, phys: r.phys, displayId: r.displayId });
+  });
+  overlays.on('askClick', (c: AskClick) => {
+    gesture.click({ intent: 'generic', phys: c.phys, displayId: c.displayId });
   });
   syncMate();
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prune } from '../../../src/shared/teammate/history';
+import { prune, spotCount } from '../../../src/shared/teammate/history';
 
 const DAY = 86_400_000;
 const NOW = 100 * DAY;
@@ -22,5 +22,14 @@ describe('prune', () => {
     ];
     expect(prune(index, NOW, { keepDays: null, maxThreads: 5 })).toEqual([]);
     expect(prune(index, NOW, { keepDays: null, maxThreads: 1 })).toEqual(['ancient']);
+  });
+});
+
+describe('spotCount', () => {
+  it('reads an ask without a spot count as one spot', () => {
+    expect(spotCount(undefined)).toBe(1);
+    expect(spotCount(3)).toBe(3);
+    // Anything an ask can't have been made with reads as one spot too.
+    for (const bad of [0, 5, 2.5, '3', null]) expect(spotCount(bad)).toBe(1);
   });
 });
