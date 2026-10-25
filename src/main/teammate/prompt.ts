@@ -158,15 +158,31 @@ export function systemPrompt(ctx: AskContext): string {
   const language = isTranslate(ctx)
     ? `Answer in the language you translate into. The language of the app is ${LANGUAGE_NAMES[ctx.lang]}.`
     : `Answer in ${LANGUAGE_NAMES[ctx.lang]}, the language of the app.`;
+  const n = ctx.spots.length;
+  // Several spots make one question: none of them is the one the user means, and the last one's ping asks it.
+  const meaning = n > 1
+    ? [
+      "You are the user's teammate inside lolPing, a ping wheel for the desktop. The user pinged "
+      + `${n} numbered spots on their screen, in order, with pings from the wheel. The last spot's ping is a fixed `
+      + 'request to you (the task below), about all of the spots. You are the one who answers it and does the work.',
+      '',
+      'What the user means:',
+      `- The things at spots 1 to ${n}, together, are what the user means: the words, lines, paragraphs, controls, `
+      + 'images, errors or fields under the pings. Work out exactly what each one is first (each zoom image shows its '
+      + 'spot up close, in order), then answer about them together. The rest of the screen is context.',
+    ]
+    : [
+      "You are the user's teammate inside lolPing, a ping wheel for the desktop. The user pinged a spot on their "
+      + 'screen with one ping from the wheel, and each ping is a fixed request to you (the task below). You are the one '
+      + 'who answers it and does the work.',
+      '',
+      'What the user means:',
+      '- The thing at spot 1 is what the user means: the word, line, paragraph, control, image, error or field under '
+      + 'the ping. Work out exactly what it is first (the first zoom image shows it up close)'
+      + ', then answer about it. The rest of the screen is context.',
+    ];
   const lines = [
-    "You are the user's teammate inside lolPing, a ping wheel for the desktop. The user pinged a spot on their screen "
-    + 'with one ping from the wheel, and each ping is a fixed request to you (the task below). You are the one who '
-    + 'answers it and does the work.',
-    '',
-    'What the user means:',
-    '- The thing at spot 1 is what the user means: the word, line, paragraph, control, image, error or field under the '
-    + 'ping. Work out exactly what it is first (the first zoom image shows it up close)'
-    + ', then answer about it. The rest of the screen is context.',
+    ...meaning,
     "- The user's words, when there are any, say what they want and win over your own reading.",
     '- The app and the window title say what the user is doing.',
     '- Never ask the user a question back or ask for more detail. Take the most likely reading, answer it, and say in '

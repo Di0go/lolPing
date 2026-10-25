@@ -147,6 +147,31 @@ describe('teammate prompt', () => {
     expect(agentAsk(ctx(), { overview: 'overview.jpg', zooms: ['zoom-1.jpg'] })).not.toContain('The user marked');
   });
 
+  it('keeps the one-spot system prompt as it was', () => {
+    expect(systemPrompt(ctx()).startsWith([
+      "You are the user's teammate inside lolPing, a ping wheel for the desktop. The user pinged a spot on their "
+      + 'screen with one ping from the wheel, and each ping is a fixed request to you (the task below). You are the one '
+      + 'who answers it and does the work.',
+      '',
+      'What the user means:',
+      '- The thing at spot 1 is what the user means: the word, line, paragraph, control, image, error or field under '
+      + 'the ping. Work out exactly what it is first (the first zoom image shows it up close), then answer about it. '
+      + 'The rest of the screen is context.',
+      "- The user's words, when there are any, say what they want and win over your own reading.",
+    ].join('\n'))).toBe(true);
+  });
+
+  it('asks about every spot of a multi-spot ask together, without singling out spot 1', () => {
+    const s = systemPrompt(ctx({ spots: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] }));
+    expect(s).toContain('The user pinged 3 numbered spots on their screen, in order');
+    expect(s).toContain("The last spot's ping is a fixed request to you (the task below), about all of the spots.");
+    expect(s).toContain('- The things at spots 1 to 3, together, are what the user means');
+    expect(s).toContain('each zoom image shows its spot up close, in order');
+    expect(s).not.toContain('spot 1 is what the user means');
+    expect(s).not.toContain('with one ping');
+    expect(s).not.toContain('the first zoom image');
+  });
+
   it('drops the oldest thread turns past the budget', () => {
     const entries = Array.from({ length: 20 }, (_, i) => entry(i, `line ${i}`));
     const t = firstTurn(ctx({ thread: thread(entries) }));
