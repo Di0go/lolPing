@@ -138,7 +138,7 @@ export class OverlayManager extends EventEmitter {
 
   handle(ev: HelperEvent): void {
     // A wheel or a click is placed from screen coordinates, so stale display info would clip or misplace it.
-    if (ev.type === 'wheelOpen' || ev.type === 'click') this.refreshDisplays();
+    if (ev.type === 'wheelOpen' || ev.type === 'click' || ev.type === 'askWords') this.refreshDisplays();
     switch (ev.type) {
       case 'wheelOpen': {
         const p = physicalToLocal(ev.x, ev.y, this.maps);
@@ -179,6 +179,12 @@ export class OverlayManager extends EventEmitter {
           break;
         }
         this.placeOwnPing(this.settings.clickPingId, p);
+        break;
+      }
+      case 'askWords': {
+        // A double tap of the ask key is an ask click that has no button to press.
+        const p = physicalToLocal(ev.x, ev.y, this.maps);
+        if (p) this.emit('askClick', { displayId: p.displayId, x: p.x, y: p.y, phys: { x: ev.x, y: ev.y } } satisfies AskClick);
         break;
       }
       case 'cancel':

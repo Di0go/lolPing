@@ -13,7 +13,7 @@ import { AGENT_PRESET_IDS, AGENT_PRESETS, type AgentPresetId } from '../../../sh
 import { parsePermissionKey } from '../../../shared/teammate/doRules';
 import { needsKey, PROVIDERS, visionGuess, type ProviderId } from '../../../shared/teammate/providers';
 import {
-  INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, isBuiltin, TAG_NAME_MAX, type AgentProfile, type BuiltinProfile,
+  canDoubleTap, INTENT_INSTRUCTION_MAX, INTENT_LABEL_MAX, isBuiltin, TAG_NAME_MAX, type AgentProfile, type BuiltinProfile,
   type IntentOverride, type TeammateSettings,
 } from '../../../shared/teammate/settings';
 import { api } from '../api';
@@ -462,6 +462,10 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
         )}
         <SwitchRow icon={<CursorClick24Regular />} title={m.askClick(askLabel)} description={m.askClickDesc}
           checked={mate.askClick} onChange={(askClick) => patch({ askClick })} />
+        {canDoubleTap(mate.askTrigger === 'same' ? s.trigger : mate.askTrigger) ? (
+          <SwitchRow icon={<CursorClick24Regular />} title={m.askDoubleTap(askLabel)} description={m.askDoubleTapDesc}
+            checked={mate.askDoubleTap} onChange={(askDoubleTap) => patch({ askDoubleTap })} />
+        ) : null}
       </ExpanderRow>
       <ExpanderRow icon={<Person24Regular />} title={m.tagName} description={m.tagNameDesc}
         control={(

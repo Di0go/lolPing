@@ -260,6 +260,16 @@ describe('OverlayManager ask wheel', () => {
     });
   });
 
+  it('opens the words box at the pointer on a double tap', () => {
+    askOn();
+    const clicked = vi.fn();
+    mgr.on('askClick', clicked);
+    mgr.handle({ type: 'askWords', x: 1920 + 30, y: 40 });
+    expect(clicked).toHaveBeenCalledExactlyOnceWith({ displayId: 2, x: 30, y: 40, phys: { x: 1920 + 30, y: 40 } });
+    expect(sent(0)).toEqual([]);
+    expect(sent(1)).toEqual([]);
+  });
+
   it('reports an ask click without sharing it or drawing a ping', () => {
     askOn();
     const shared = vi.fn();
