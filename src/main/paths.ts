@@ -3,18 +3,25 @@ import { join } from 'node:path';
 import { platformOf, type Platform } from '../shared/platform';
 import { APP_SCHEME } from './appProtocol';
 
-export type Page = 'overlay' | 'settings' | 'text' | 'panel';
+export type Page = 'overlay' | 'settings' | 'text' | 'panel' | 'teammate';
 
 export const PLATFORM: Platform = platformOf(process.platform);
 export const IS_MAC = PLATFORM === 'mac';
 export const IS_LINUX = PLATFORM === 'linux';
 
 const HELPER_FILE = PLATFORM === 'win' ? 'hook-helper.exe' : 'hook-helper';
+const CONTEXT_HELPER_FILE = PLATFORM === 'win' ? 'context-helper.exe' : 'context-helper';
 
 export const helperExePath = (): string =>
   app.isPackaged
     ? join(process.resourcesPath, HELPER_FILE)
     : join(app.getAppPath(), 'native', 'hook-helper', 'build', HELPER_FILE);
+
+/** The teammate's screen capture helper. Not built on Linux, where the teammate is hidden. */
+export const contextHelperPath = (): string =>
+  app.isPackaged
+    ? join(process.resourcesPath, CONTEXT_HELPER_FILE)
+    : join(app.getAppPath(), 'native', 'hook-helper', 'build', CONTEXT_HELPER_FILE);
 
 /** Files from build/ that ship as extraResources (the macOS menu bar icon). */
 export const buildResourcePath = (file: string): string =>

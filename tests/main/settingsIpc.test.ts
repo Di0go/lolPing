@@ -6,9 +6,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmoteLibrary } from '../../src/main/emoteLibrary';
 import { registerSettingsIpc, type SettingsIpcDeps } from '../../src/main/settingsIpc';
 import { SettingsStore } from '../../src/main/settingsStore';
+import { SecretStore, type Crypto } from '../../src/main/teammate/secrets';
+import { ProviderError } from '../../src/main/teammate/providers/types';
 import { strings } from '../../src/shared/i18n';
 import { SETTINGS_CH } from '../../src/shared/ipc';
 import { MOD } from '../../src/shared/keys';
+import type { AgentProfile, BuiltinProfile } from '../../src/shared/teammate/settings';
 import type { UpdateState } from '../../src/shared/update';
 
 const h = vi.hoisted(() => ({
@@ -72,6 +75,16 @@ describe('settings IPC', () => {
     expect(await call(SETTINGS_CH.set, { panelKey: 0x51 })).toMatchObject({ ok: true });
     expect(await call(SETTINGS_CH.set, { emoteTrigger: { vk: 0x51 } })).toMatchObject({ ok: false });
     expect(store.get().emoteTrigger).not.toEqual({ vk: 0x51 });
+  });
+
+  it('refuses a ping or emote key on the teammate ask key and says why', async () => {
+    const s = store.get();
+    store.update({ features: { ...s.features, teammate: true }, teammate: { ...s.teammate, askTrigger: 'mouse4' } });
+    const reason = strings('en').teammate.settings.askKeyClash;
+    expect(await call(SETTINGS_CH.set, { trigger: 'mouse4' })).toMatchObject({ ok: false, error: reason });
+    expect(await call(SETTINGS_CH.set, { emoteTrigger: 'mouse4' })).toMatchObject({ ok: false, error: reason });
+    expect(store.get().trigger).not.toBe('mouse4');
+    expect(store.get().teammate.askTrigger).toBe('mouse4');
   });
 
   it('setSettings ignores customEmotes from the window', async () => {
@@ -246,5 +259,218 @@ describe('update IPC', () => {
     registerWith(fakeUpdate(AVAILABLE, 'file:///C:/Windows/System32/calc.exe'));
     await call(SETTINGS_CH.updateOpenRelease);
     expect(h.opened).toEqual(['https://github.com/darrenprx/lolPing/releases/latest']);
+  });
+});
+
+describe('teammate IPC', () => {
+  const KEY = 'sk-secret-123456';
+  const PROFILE: BuiltinProfile = {
+    id: 'p1', kind: 'builtin', name: 'GPT', tagColor: 3, tagColorCustom: null, provider: 'openai', protocol: 'openai',
+    baseUrl: 'https://api.openai.com/v1', model: '',
+  };
+  /** A reversible stand-in for safeStorage. */
+  const crypto: Crypto = {
+    isEncryptionAvailable: () => true,
+    encryptString: (text) => Buffer.from(Buffer.from(text, 'utf8').map((b) => b ^ 0x5a)),
+    decryptString: (b) => Buffer.from(b.map((x) => x ^ 0x5a)).toString('utf8'),
+  };
+
+  let secrets: SecretStore | null;
+  let listModels: (key: string) => Promise<string[]>;
+  let historyOps: string[];
+  let clearFails = false;
+  let checked: string[];
+  let picked: unknown;
+  let bridgeUp = true;
+
+  function registerTeammate(): void {
+    h.handlers.clear();
+    historyOps = [];
+    checked = [];
+    registerSettingsIpc({
+      store, library, text: () => strings('en'), platform: 'win', room: {},
+      teammate: {
+        secrets: () => secrets,
+        adapter: (_p: BuiltinProfile, key: string) => ({ listModels: () => listModels(key) }),
+        usage: () => ({ month: '2026-10', input: 10, output: 2 }),
+        checkAgent: async (p: AgentProfile) => {
+          checked.push(p.command);
+          return { ok: true, version: '1.0' };
+        },
+        pickFolder: async () => picked,
+        agentSnippet: () => '{"mcpServers":{}}',
+        bridge: () => (bridgeUp ? { command: 'lolPing.exe', args: ['bridge.js'], env: { LOLPING_PIPE: 'P' } } : null),
+        recentApps: () => ['Code', 'chrome'],
+        editors: async () => ['Code', 'idea64'],
+        history: async (op: string) => {
+          historyOps.push(op);
+          return op !== 'clear' || !clearFails;
+        },
+      },
+    } as unknown as SettingsIpcDeps);
+  }
+
+  beforeEach(() => {
+    secrets = new SecretStore(join(mkdtempSync(join(tmpdir(), 'lolping-ipc-secrets-')), 'secrets'), crypto);
+    listModels = async () => ['gpt-4o', 'gpt-4o-mini'];
+    clearFails = false;
+    store.update({
+      features: { ...store.get().features, teammate: true }, teammate: { ...store.get().teammate, profiles: [PROFILE] },
+    });
+    registerTeammate();
+  });
+
+  it('never returns a key to the settings window', async () => {
+    expect(await call(SETTINGS_CH.teammateSetKey, 'p1', KEY)).toEqual({ ok: true });
+    expect(secrets?.key('p1')).toBe(KEY);
+    const seen: unknown[] = [
+      await call(SETTINGS_CH.teammateHasKey, 'p1'),
+      await call(SETTINGS_CH.teammateCheckKey, 'p1'),
+      await call(SETTINGS_CH.teammateInstructions),
+      await call(SETTINGS_CH.teammateUsage),
+      await call(SETTINGS_CH.get),
+    ];
+    expect(seen[0]).toBe(true);
+    expect(seen[1]).toEqual({ ok: true, models: ['gpt-4o', 'gpt-4o-mini'] });
+    // Some providers repeat the key they refused in their error message.
+    listModels = async (key) => {
+      throw new ProviderError('auth', `Incorrect API key provided: ${key}`, 401);
+    };
+    const refused = await call(SETTINGS_CH.teammateCheckKey, 'p1');
+    expect(refused).toMatchObject({ ok: false, error: 'auth' });
+    seen.push(refused);
+    for (const result of seen) expect(JSON.stringify(result) ?? '').not.toContain(KEY);
+  });
+
+  it('checks an agent by the command saved in its profile, never one sent by the window', async () => {
+    const agent: AgentProfile = {
+      id: 'a1', kind: 'agent', name: 'Claude Code', tagColor: 3, tagColorCustom: null, preset: 'claude', command: 'claude',
+      customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
+    };
+    store.update({ teammate: { ...store.get().teammate, profiles: [PROFILE, agent] } });
+    expect(await call(SETTINGS_CH.teammateCheckAgent, 'a1')).toEqual({ ok: true, version: '1.0' });
+    expect(await call(SETTINGS_CH.teammateCheckAgent, { id: 'a1', command: 'calc' })).toMatchObject({ ok: false });
+    expect(await call(SETTINGS_CH.teammateCheckAgent, 'p1')).toMatchObject({ ok: false }); // a provider profile
+    expect(await call(SETTINGS_CH.teammateCheckAgent, 'nope')).toMatchObject({ ok: false });
+    expect(checked).toEqual(['claude']);
+  });
+
+  it('gives the window only a plain folder path from the picker', async () => {
+    picked = 'C:\\work\\app';
+    expect(await call(SETTINGS_CH.teammatePickFolder)).toBe('C:\\work\\app');
+    for (const bad of [null, '', 5, { path: 'x' }, 'x'.repeat(1025)]) {
+      picked = bad;
+      expect(await call(SETTINGS_CH.teammatePickFolder)).toBeNull();
+    }
+  });
+
+  it('gives the window the snippet for an agent that reads its own MCP file, or its mcp add line', async () => {
+    const agent = (id: string, preset: AgentProfile['preset']): AgentProfile => ({
+      id, kind: 'agent', name: id, tagColor: 3, tagColorCustom: null, preset, command: id, customArgs: [],
+      folder: { kind: 'editor', folders: [] }, timeoutS: 300,
+    });
+    const profiles = [PROFILE, agent('c', 'cursor'), agent('q', 'qoder')];
+    store.update({ teammate: { ...store.get().teammate, profiles } });
+    expect(await call(SETTINGS_CH.teammateAgentSnippet, 'c')).toEqual({ text: '{"mcpServers":{}}' });
+    // Qoder has no MCP file to name, only its own command.
+    expect(await call(SETTINGS_CH.teammateAgentSnippet, 'q')).toEqual({
+      text: 'qodercli mcp add lolping -e LOLPING_PIPE=P -- lolPing.exe bridge.js',
+    });
+    for (const bad of ['p1', 'nope', 5, null]) expect(await call(SETTINGS_CH.teammateAgentSnippet, bad)).toBeNull();
+    bridgeUp = false;
+    expect(await call(SETTINGS_CH.teammateAgentSnippet, 'q')).toBeNull();
+    bridgeUp = true;
+  });
+
+  it('gives the window a snippet in the shape of the app it asks for, and nothing for an unknown app', async () => {
+    const zed = await call(SETTINGS_CH.teammateConnectSnippet, 'zed');
+    expect(JSON.parse((zed as { text: string }).text)).toEqual({
+      context_servers: { lolping: { command: { path: 'lolPing.exe', args: ['bridge.js'], env: { LOLPING_PIPE: 'P' } } } },
+    });
+    const goose = await call(SETTINGS_CH.teammateConnectSnippet, 'goose');
+    expect(goose).toEqual({
+      text: ['\'lolPing.exe\' \'bridge.js\'', '', 'Environment variables:', 'LOLPING_PIPE=P'].join('\n'),
+    });
+    for (const bad of ['nope', 5, null, { id: 'zed' }]) expect(await call(SETTINGS_CH.teammateConnectSnippet, bad)).toBeNull();
+    bridgeUp = false;
+    expect(await call(SETTINGS_CH.teammateConnectSnippet, 'zed')).toBeNull();
+    bridgeUp = true;
+  });
+
+  it('lists the apps asked from and the editors installed', async () => {
+    expect(await call(SETTINGS_CH.teammateRecentApps)).toEqual(['Code', 'chrome']);
+    expect(await call(SETTINGS_CH.teammateEditors)).toEqual(['Code', 'idea64']);
+  });
+
+  it('validates teammate payloads', async () => {
+    for (const [id, key] of [[1, KEY], ['nope', KEY], ['p1', 42], ['p1', 'x'.repeat(5000)], [null, null]]) {
+      expect(await call(SETTINGS_CH.teammateSetKey, id, key)).toEqual({ ok: false });
+    }
+    expect(secrets?.key('p1')).toBeNull();
+    expect(await call(SETTINGS_CH.teammateHasKey, { id: 'p1' })).toBe(false);
+    expect(await call(SETTINGS_CH.teammateCheckKey, 'nope')).toMatchObject({ ok: false, error: 'other' });
+    expect(await call(SETTINGS_CH.teammateCheckKey, 'p1')).toMatchObject({ ok: false, error: 'auth' }); // no key yet
+    for (const raw of [5, null, 'x'.repeat(2001)]) {
+      expect(await call(SETTINGS_CH.teammateSetInstructions, raw)).toEqual({ ok: false });
+    }
+    expect(await call(SETTINGS_CH.teammateInstructions)).toBe('');
+    expect(await call(SETTINGS_CH.teammateSetInstructions, 'Call me Sam.')).toEqual({ ok: true });
+    expect(await call(SETTINGS_CH.teammateInstructions)).toBe('Call me Sam.');
+    for (const op of ['format', null, { op: 'clear' }]) await call(SETTINGS_CH.teammateHistory, op);
+    expect(historyOps).toEqual([]);
+    expect(await call(SETTINGS_CH.teammateHistory, 'clear')).toBe(true);
+    expect(historyOps).toEqual(['clear']);
+    clearFails = true;
+    expect(await call(SETTINGS_CH.teammateHistory, 'clear')).toBe(false);
+    expect(await call(SETTINGS_CH.teammateHistory, 'format')).toBe(false);
+
+    secrets = null; // the feature is off: nothing is stored
+    expect(await call(SETTINGS_CH.teammateSetKey, 'p1', KEY)).toEqual({ ok: false, error: 'unavailable' });
+    expect(await call(SETTINGS_CH.teammateHasKey, 'p1')).toBe(false);
+    expect(await call(SETTINGS_CH.teammateInstructions)).toBe('');
+  });
+});
+
+describe('teammate IPC without keys', () => {
+  it('checks a local server with no key, and says whether keys, history and screen capture are available', async () => {
+    const keys: string[] = [];
+    const local: BuiltinProfile = {
+      id: 'local', kind: 'builtin', name: 'Ollama', tagColor: 3, tagColorCustom: null, provider: 'ollama',
+      protocol: 'openai', baseUrl: 'http://localhost:11434/v1', model: '',
+    };
+    let available = true;
+    const secrets = {
+      available: () => available, key: () => null, hasKey: () => false,
+      setKey: async () => undefined, instructions: () => '', setInstructions: async () => undefined,
+    };
+    let on = true;
+    let screen: boolean | null = null;
+    let opened = 0;
+    store.update({ teammate: { ...store.get().teammate, profiles: [local] } });
+    h.handlers.clear();
+    registerSettingsIpc({
+      store, library, text: () => strings('en'), platform: 'win', room: {},
+      teammate: {
+        secrets: () => (on ? secrets : null),
+        adapter: (_p: BuiltinProfile, key: string) => ({ listModels: async () => (keys.push(key), ['llama3.2']) }),
+        usage: () => ({ month: '2026-10', input: 0, output: 0 }),
+        history: async () => true,
+        screenAccess: () => screen,
+        openScreenRecording: () => { opened += 1; },
+      },
+    } as unknown as SettingsIpcDeps);
+    expect(await call(SETTINGS_CH.teammateCheckKey, 'local')).toEqual({ ok: true, models: ['llama3.2'] });
+    expect(keys).toEqual(['']);
+
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: true, screenAccess: null });
+    available = false;
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false, screenAccess: null });
+    on = false;
+    expect(await call(SETTINGS_CH.teammateStatus)).toEqual({ secretsAvailable: false, screenAccess: null });
+
+    screen = false; // macOS without Screen Recording
+    expect(await call(SETTINGS_CH.teammateStatus)).toMatchObject({ screenAccess: false });
+    await call(SETTINGS_CH.teammateOpenScreen);
+    expect(opened).toBe(1);
   });
 });

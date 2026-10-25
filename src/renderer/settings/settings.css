@@ -1,20 +1,33 @@
-:root { --card: rgba(255,255,255,.05); --card-hover: rgba(255,255,255,.08); --stroke: rgba(255,255,255,.07); --text3: rgba(255,255,255,.55); --nav-sel: rgba(255,255,255,.06); }
+:root { --card: rgba(255,255,255,.05); --card-hover: rgba(255,255,255,.08); --stroke: rgba(255,255,255,.07); --text3: rgba(255,255,255,.55); --nav-sel: rgba(255,255,255,.06);
+  --nav-press: rgba(255,255,255,.04); --card-press: rgba(255,255,255,.03); --scroll-thumb: rgba(255,255,255,.35); --scroll-thumb-hover: rgba(255,255,255,.55); }
 @media (prefers-color-scheme: light) {
-  :root { --card: rgba(255,255,255,.7); --card-hover: rgba(249,249,249,.9); --stroke: rgba(0,0,0,.06); --text3: rgba(0,0,0,.5); --nav-sel: rgba(0,0,0,.04); }
+  :root { --card: rgba(255,255,255,.7); --card-hover: rgba(249,249,249,.9); --stroke: rgba(0,0,0,.06); --text3: rgba(0,0,0,.5); --nav-sel: rgba(0,0,0,.04);
+    --nav-press: rgba(0,0,0,.025); --card-press: rgba(249,249,249,.5); --scroll-thumb: rgba(0,0,0,.35); --scroll-thumb-hover: rgba(0,0,0,.5); }
 }
 html, body, #root { margin: 0; height: 100%; background: transparent; }
 body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; overflow: hidden; }
 .app { display: grid; grid-template-rows: 40px 1fr; grid-template-columns: 240px 1fr; height: 100%; }
 .titlebar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding-left: 16px; font-size: 12px; -webkit-app-region: drag; }
 .titlebar img { width: 16px; height: 16px; }
-nav.side { padding: 4px 8px; display: flex; flex-direction: column; gap: 3px; }
+nav.side { position: relative; padding: 4px 8px; display: flex; flex-direction: column; gap: 3px; }
 .brand { display: flex; align-items: center; gap: 12px; padding: 8px 10px 16px; }
 .brand img { width: 40px; height: 40px; }
 .brand b { display: block; font-size: 16px; }
 .navItem { position: relative; display: flex; align-items: center; gap: 14px; height: 36px; padding: 0 12px; border-radius: 4px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: default; }
 .navItem:hover, .navItem.sel { background: var(--nav-sel); }
-.navItem.sel::before { content: ""; position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: var(--colorBrandForeground1); }
+.navItem:active { background: var(--nav-press); }
+/* One selection bar for the whole nav: App.tsx moves it, stretching over the gap like WinUI's NavigationView. */
+.navBar { position: absolute; z-index: 1; left: 8px; top: 0; width: 3px; height: 16px; border-radius: 2px; background: var(--colorBrandForeground1); pointer-events: none; }
 main.content { overflow: auto; padding: 4px 28px 28px 20px; }
+/* Fluent scroll bars on Windows and Linux: a thin rounded thumb that widens under the pointer, no arrows, no track.
+   Chromium's default bar ignores the dark theme. macOS keeps its own overlay bars. */
+:root:not([data-platform="mac"]) ::-webkit-scrollbar { width: 12px; height: 12px; background: transparent; }
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-button, :root:not([data-platform="mac"]) ::-webkit-scrollbar-corner { display: none; }
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb {
+  min-height: 40px; border: 4px solid transparent; border-radius: 6px; background: var(--scroll-thumb) padding-box;
+}
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb:hover { border-width: 3px; background-color: var(--scroll-thumb-hover); }
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb:active { background-color: var(--colorNeutralForeground2); }
 .pageTitle { font: 600 28px/36px "Segoe UI Variable Display", "Segoe UI"; margin: 6px 0 18px; }
 .section { margin: 22px 0 8px; font-weight: 600; font-size: 14px; }
 .card { display: flex; align-items: center; gap: 16px; min-height: 68px; padding: 12px 20px; border-radius: 4px; margin-bottom: 3px; box-sizing: border-box; background: var(--card); border: 1px solid var(--stroke); }
@@ -27,6 +40,25 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .desc.inline { display: inline; margin-left: 6px; }
 .card .ctl { display: flex; align-items: center; gap: 10px; }
 .value { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+/* Expander: the header is a row of its own; the rows inside sit flat under it, indented to the header's text and with
+   their controls lined up with the header's, left of the chevron. */
+.card.expander { display: block; padding: 0; }
+.card.expander:hover { background: var(--card); }
+.expHead { display: flex; align-items: center; gap: 16px; min-height: 68px; padding: 12px 12px 12px 20px; box-sizing: border-box; border-radius: 4px; }
+.expHead:hover { background: var(--card-hover); }
+.expChevron { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; }
+.expChevron:hover { background: var(--nav-sel); }
+.expChevron:focus-visible { outline: 2px solid var(--colorStrokeFocus2); }
+.expChevron svg { transition: transform var(--durationNormal) var(--curveEasyEase); }
+.expander.open .expChevron svg { transform: rotate(180deg); }
+.expBody { border-top: 1px solid var(--stroke); }
+.expBody > .card { min-height: 56px; margin: 0; padding: 10px 60px 10px 60px; border: 0; border-radius: 0; background: transparent; }
+.expBody > .card:hover { background: transparent; }
+.expBody > * + *, .expBody > * + .card { border-top: 1px solid var(--stroke); }
+/* Free content inside an expander (a form, a list) instead of rows. */
+.expPane { padding: 12px 60px 14px; }
+.expPane > :first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.desc .weImportError { display: block; }
 /* Fluent draws a tick per step on the rail; with 38-100 steps they merge into a dark dashed line. */
 .card .fui-Slider__rail::before { background-image: none; }
 .status { min-height: 76px; }
@@ -41,13 +73,14 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .weBody { display: grid; grid-template-columns: 300px 1fr; gap: 24px; align-items: center; margin-top: 14px; }
 .weWheel { position: relative; }
 .weWheel svg { position: absolute; inset: 0; }
-.weWedge { fill: rgba(10,14,22,.78); stroke: rgba(200,170,110,.35); stroke-width: 1; transition: fill .12s; }
+.weWedge { fill: rgba(10,14,22,.78); stroke: rgba(200,170,110,.35); stroke-width: 1; transition: fill var(--durationFast) var(--curveEasyEase); }
 .weWedge.hot { fill: rgba(60,120,170,.55); }
 .weSlot { position: absolute; width: 56px; height: 56px; margin: -28px 0 0 -28px; display: grid; place-items: center; border-radius: 50%; cursor: grab; }
-.weSlot img { width: 46px; height: 46px; pointer-events: none; transition: transform .12s; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+.weSlot img { width: 46px; height: 46px; pointer-events: none; transition: transform var(--durationFast) var(--curveDecelerateMid); filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
 .weSlot:hover img, .weSlot.hot img { transform: scale(1.15); }
 .weCenter { position: absolute; left: 50%; top: 50%; width: 92px; height: 92px; margin: -46px 0 0 -46px; border-radius: 50%; display: grid; place-items: center; align-content: center;
-  background: radial-gradient(circle, rgba(20,26,38,.95), rgba(10,14,22,.9)); border: 1px solid rgba(200,170,110,.35); cursor: grab; transition: box-shadow .12s; }
+  background: radial-gradient(circle, rgba(20,26,38,.95), rgba(10,14,22,.9)); border: 1px solid rgba(200,170,110,.35); cursor: grab;
+  transition: box-shadow var(--durationFast) var(--curveEasyEase), opacity var(--durationNormal) var(--curveEasyEase); }
 .weCenter img { width: 40px; height: 40px; pointer-events: none; }
 .weCenter span { font-size: 10px; font-weight: 600; letter-spacing: .08em; color: #1fa9e0; pointer-events: none; }
 .weCenter.hot { box-shadow: 0 0 0 3px var(--colorBrandStroke1); }
@@ -61,7 +94,7 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .weCell > .weTile { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .weTile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 2px 6px; border-radius: 6px; font-size: 11px; line-height: 14px; text-align: center;
   user-select: none; cursor: grab; background: var(--colorNeutralBackground1); border: 1px solid var(--colorNeutralStroke1); color: var(--colorNeutralForeground2); }
-.weTile:hover { background: var(--colorNeutralBackground1Hover); }
+.weTile:hover { background: var(--colorNeutralBackground1Hover); transform: translateY(-1px); }
 .weTile:active { transform: scale(.97); }
 .weTile.picked { outline: 2px solid var(--colorBrandStroke1); outline-offset: -1px; }
 .weTile img { width: 34px; height: 34px; pointer-events: none; }
@@ -101,6 +134,7 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .weImportError { font-size: 12px; line-height: 16px; color: #ff9c48; overflow-wrap: anywhere; }
 .weHint { min-height: 16px; margin-top: 10px; font-size: 12px; line-height: 16px; color: var(--text3); }
 @media (max-width: 860px) { .weBody { grid-template-columns: 1fr; justify-items: center; } }
+.rowNote { margin: 1px 0 4px; padding: 0 20px 0 60px; font-size: 12px; line-height: 16px; color: var(--text3); }
 .rowError { margin: 1px 0 4px; padding: 0 20px 0 60px; font-size: 12px; line-height: 16px; color: #ff9c48; }
 .keys { display: flex; align-items: center; gap: 4px; }
 .keys kbd { font: 600 12px "Segoe UI"; padding: 3px 8px; border-radius: 4px; background: var(--colorBrandBackground); color: var(--colorNeutralForegroundOnBrand); }
@@ -149,6 +183,28 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .roomWaiting { padding: 8px 0 10px 20px; }
 .displays { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums; }
 .roomNote { margin: 8px 2px 0; }
+/* Teammate */
+.card.mate { display: block; }
+.card.mate:hover { background: var(--card); }
+.mateHead { display: flex; align-items: center; gap: 16px; }
+.mateHead .lbl { flex: 1; }
+.mateHead b { flex: 1; }
+.mateFields { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; align-items: center; margin-top: 12px; }
+.mateStack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.matePath { overflow-wrap: anywhere; }
+.mateNote { margin-top: 8px; }
+.mateRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.mateIntent { display: grid; grid-template-columns: 150px auto 150px 1fr auto; gap: 8px 12px; align-items: start; padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 10px; }
+.mateIntentName { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.mateIntentName img { width: 24px; height: 24px; }
+.mateRule { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--stroke); }
+.mateRule .mateFields { margin-top: 8px; }
+.mateInstructions { display: flex; width: 100%; margin: 12px 0 8px; }
+.tagPreview { display: flex; align-items: center; gap: 8px; }
+/* First-run card: the page's own rows inside a dialog, so the expander panes lose their wide side padding. */
+.firstRunStep { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.firstRunIntro { margin: 0 0 10px; }
+[role="dialog"] .expPane { padding-left: 20px; padding-right: 20px; }
 /* Updates */
 .card.update .lbl { display: flex; flex-direction: column; gap: 4px; }
 .card.update.failed { border-color: #ff9c48; }
@@ -159,3 +215,42 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 [data-platform="linux"] .app { grid-template-rows: 1fr; }
 [data-platform="linux"] .titlebar { display: none; }
 [data-platform="linux"] body { font-family: system-ui, sans-serif; }
+
+/* Motion, on Fluent's duration and curve tokens. Nothing waits on it: content is in the page at once and only its
+   arrival animates, so the fills are `backwards` (a dimmed row still ends at its dimmed opacity). */
+@keyframes lpRise { from { opacity: 0; transform: translateY(8px); } }
+@keyframes lpFade { from { opacity: 0; } }
+@keyframes lpPop { 0% { opacity: 0; transform: scale(.6); } 70% { opacity: 1; transform: scale(1.06); } }
+@keyframes lpFlyout { from { opacity: 0; transform: translateY(-4px) scale(.97); } }
+/* `translate`, not `transform`: Fluent places its popups with an inline transform. */
+@keyframes lpDrop { from { opacity: 0; translate: 0 var(--lp-drop, -8px); } }
+@keyframes lpBreathe { 50% { opacity: .45; } }
+/* Rows and notes rise in when they appear; on the first paint the page's rows and nav items follow one another. */
+main.content > *, .member, .mateRule, .mateStack > .mateRow { animation: lpRise var(--durationGentle) var(--curveDecelerateMax) backwards; }
+.entering .navItem, .entering .brand { animation: lpFade var(--durationSlow) var(--curveEasyEase) backwards; }
+.entering main.content > *, .entering .navItem, .entering .brand { animation-delay: calc(min(sibling-index(), 16) * 22ms); }
+.rowError, .rowNote, .weImportError, .roomError, .weHint, .mateNote { animation: lpFade var(--durationNormal) var(--curveEasyEase) backwards; }
+.keys kbd, .weSlot img, .weCenter img, .weWhere, .weNew, .badge, .dot, .tagPreview .tagDot { animation: lpPop var(--durationNormal) var(--curveDecelerateMid) backwards; }
+.fxPicker { transform-origin: top left; animation: lpFlyout var(--durationNormal) var(--curveDecelerateMax) backwards; }
+.fui-Listbox { animation: lpDrop var(--durationNormal) var(--curveDecelerateMax) backwards; }
+.fui-Listbox[data-popper-placement^="top"] { --lp-drop: 8px; }
+.keyListen { animation: lpBreathe 1.6s var(--curveEasyEase) infinite; }
+/* Hover and press: colours fade, pressed things give a little. */
+.card, .expHead, .navItem, .expChevron, .weTile, .weRemove, .weTool, .fxCell, .swatch, .badge {
+  transition: background-color var(--durationFaster) var(--curveEasyEase), border-color var(--durationFaster) var(--curveEasyEase),
+    color var(--durationFaster) var(--curveEasyEase), opacity var(--durationNormal) var(--curveEasyEase),
+    box-shadow var(--durationFast) var(--curveEasyEase), transform var(--durationFast) var(--curveDecelerateMid);
+}
+.expHead:active { background: var(--card-press); }
+.navItem svg { transition: transform var(--durationFast) var(--curveDecelerateMid); }
+.navItem:active svg { transform: scale(.88); }
+.expChevron:active { transform: scale(.92); }
+.swatch:hover { transform: scale(1.12); }
+.swatch:active { transform: scale(.9); }
+.weRemove:active, .weTool:active, .fxCell:active { transform: scale(.9); }
+.dot { transition: background-color var(--durationSlow) var(--curveEasyEase), box-shadow var(--durationSlow) var(--curveEasyEase); }
+/* Windows' "Animation effects" off and macOS's Reduce motion: everything here lands at once. Fluent's own motion
+   (the expanders, switches, buttons) follows the same setting by itself. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}

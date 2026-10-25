@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { configCommand, parseHelperLine, serializeCommand } from '../../src/shared/protocol';
 import { DEFAULT_FEATURES } from '../../src/shared/features';
-import { DEFAULT_SETTINGS } from '../../src/shared/settings';
+import { DEFAULT_SETTINGS, type Settings } from '../../src/shared/settings';
+import type { AskTrigger } from '../../src/shared/teammate/settings';
 
 describe('parseHelperLine', () => {
   it('parses every event type', () => {
@@ -30,6 +31,27 @@ describe('parseHelperLine', () => {
     }
   });
 
+  it('reads the ask wheel and triggerUp', () => {
+    expect(parseHelperLine('{"type":"wheelOpen","x":1,"y":2,"wheel":"ask"}')).toEqual({ type: 'wheelOpen', x: 1, y: 2, wheel: 'ask' });
+    expect(parseHelperLine('{"type":"click","x":1,"y":2,"wheel":"ask"}')).toEqual({ type: 'click', x: 1, y: 2, wheel: 'ask' });
+    for (const wheel of ['ping', 'emote', 'ask'] as const) {
+      expect(parseHelperLine(`{"type":"triggerUp","wheel":"${wheel}"}`)).toEqual({ type: 'triggerUp', wheel });
+    }
+    for (const line of ['{"type":"triggerUp"}', '{"type":"triggerUp","wheel":"ASK"}', '{"type":"triggerUp","wheel":1}']) {
+      expect(parseHelperLine(line), line).toBeNull();
+    }
+  });
+
+  it('reads askWords and scroll', () => {
+    expect(parseHelperLine('{"type":"askWords","x":10,"y":-20}')).toEqual({ type: 'askWords', x: 10, y: -20 });
+    expect(parseHelperLine('{"type":"scroll","x":3,"y":4}')).toEqual({ type: 'scroll', x: 3, y: 4 });
+    for (const type of ['askWords', 'scroll']) {
+      for (const rest of ['', ',"x":1', ',"y":2', ',"x":1.5,"y":2', ',"x":"1","y":2', ',"x":null,"y":2']) {
+        expect(parseHelperLine(`{"type":"${type}"${rest}}`), `${type}${rest}`).toBeNull();
+      }
+    }
+  });
+
   it('rejects malformed lines', () => {
     for (const line of ['', 'nope', '42', 'null', '{"type":"wheelOpen","x":1}', '{"type":"click","x":1.5,"y":2}',
       '{"type":"toggled"}', '{"type":"panel"}', '{"type":"panel","show":"yes"}', '{"type":"mystery"}', '{"x":1,"y":2}']) {
@@ -42,7 +64,8 @@ describe('commands', () => {
   it('builds a flat config command for named triggers', () => {
     expect(configCommand(DEFAULT_SETTINGS, true)).toEqual({
       type: 'config', trigger: 'alt', triggerVk: 0, clickPing: false, gameCheck: true,
-      emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false, dragThresholdPx: 8,
+      emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false, askTrigger: 'off', askTriggerVk: 0, askClick: false,
+      askDoubleTap: false, dragThresholdPx: 8,
       toggleMods: 3, toggleVk: 0x50, textMods: 2, textVk: 0, panelVk: 0, enabled: true,
     });
   });
@@ -79,6 +102,53 @@ describe('commands', () => {
   it('sends no emote key while emotes are off', () => {
     const c = configCommand({ ...DEFAULT_SETTINGS, emoteClick: true, features: { ...DEFAULT_FEATURES, emotes: false } }, true);
     expect(c).toMatchObject({ emoteTrigger: 'off', emoteTriggerVk: 0, emoteClick: false });
+  });
+
+  it('sends the ask key only while the teammate is on and not sharing the ping key', () => {
+    const on = { ...DEFAULT_FEATURES, teammate: true };
+    const teammate = { ...DEFAULT_SETTINGS.teammate, askTrigger: 'win' as const, askClick: true };
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate }, true))
+      .toMatchObject({ askTrigger: 'off', askTriggerVk: 0, askClick: false });
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate, features: on }, true))
+      .toMatchObject({ trigger: 'alt', askTrigger: 'win', askTriggerVk: 0, askClick: true });
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...teammate, askTrigger: { vk: 0x47 }, askClick: false }, features: on }, true))
+      .toMatchObject({ askTrigger: 'vk', askTriggerVk: 0x47, askClick: false });
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...teammate, askTrigger: 'same' }, features: on }, true))
+      .toMatchObject({ trigger: 'alt', askTrigger: 'off', askTriggerVk: 0, askClick: false });
+  });
+
+  it('sends double tap only for a modifier ask key', () => {
+    const on = { ...DEFAULT_FEATURES, teammate: true };
+    const ask = (askTrigger: AskTrigger, askDoubleTap = true) =>
+      configCommand({ ...DEFAULT_SETTINGS, teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger, askDoubleTap }, features: on }, true);
+    for (const k of ['alt', 'ctrl', 'shift', 'win'] as const) expect(ask(k), k).toMatchObject({ askDoubleTap: true });
+    for (const k of ['capslock', 'mouse4', 'mouse5', { vk: 0x47 }] as const) {
+      expect(ask(k), JSON.stringify(k)).toMatchObject({ askDoubleTap: false });
+    }
+    expect(ask('win', false)).toMatchObject({ askDoubleTap: false });
+    // The teammate off: the helper never taps.
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'win', askDoubleTap: true } }, true))
+      .toMatchObject({ askDoubleTap: false });
+    // Same mode follows the ping key.
+    const same = (trigger: Settings['trigger']) => configCommand({
+      ...DEFAULT_SETTINGS, trigger, teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'same', askDoubleTap: true }, features: on,
+    }, true);
+    expect(same('shift')).toMatchObject({ askDoubleTap: true });
+    expect(same('mouse5')).toMatchObject({ askDoubleTap: false });
+    expect(same({ vk: 0x56 })).toMatchObject({ askDoubleTap: false });
+  });
+
+  it('reports ping-key clicks for the words box when the ask key is the ping key, and only then', () => {
+    const on = { ...DEFAULT_FEATURES, teammate: true };
+    const same = { ...DEFAULT_SETTINGS.teammate, askTrigger: 'same' as const, askClick: true };
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: same, features: on }, true))
+      .toMatchObject({ clickPing: true });
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: { ...same, askClick: false }, features: on }, true))
+      .toMatchObject({ clickPing: false });
+    // With the teammate off the helper gets the user's own click setting, as before.
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: same }, true)).toMatchObject({ clickPing: false });
+    expect(configCommand({ ...DEFAULT_SETTINGS, clickPing: false, teammate: { ...same, askTrigger: 'win' }, features: on }, true))
+      .toMatchObject({ clickPing: false });
   });
 
   it('keeps the emote key while only rooms are off', () => {

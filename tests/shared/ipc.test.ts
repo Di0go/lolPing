@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePanelAction } from '../../src/shared/ipc';
+import { OVERLAY_CHANNELS, parseMateGlow, parsePanelAction } from '../../src/shared/ipc';
 
 const peer = '0123456789abcdef';
 
@@ -35,5 +35,41 @@ describe('parsePanelAction', () => {
     expect(parsePanelAction({ t: 'vote', kind: 'kick' })).toBeNull();
     expect(parsePanelAction({ t: 'vote', kind: 'remake' })).toBeNull();
     expect(parsePanelAction({ t: 'ballot', yes: true, extra: 'x' })).toEqual({ t: 'ballot', yes: true });
+  });
+});
+
+describe('OVERLAY_CHANNELS', () => {
+  it('lists the mate channels', () => {
+    expect(OVERLAY_CHANNELS).toEqual(
+      expect.arrayContaining(['mate:clear', 'mate:fade', 'mate:ticket', 'mate:said', 'mate:glow']),
+    );
+  });
+});
+
+describe('parseMateGlow', () => {
+  const glow = { box: { x: 10.5, y: 20, w: 200, h: 24 }, color: 3, rgb: null, delay: 120 };
+
+  it('validates a glow box', () => {
+    expect(parseMateGlow(glow)).toEqual(glow);
+    expect(parseMateGlow({ ...glow, rgb: [255, 128, 0], ticket: 't1', extra: 1 }))
+      .toEqual({ ...glow, rgb: [255, 128, 0], ticket: 't1' });
+    expect(parseMateGlow({ ...glow, box: { x: -40, y: -8, w: 1, h: 1 }, delay: 0 })).not.toBeNull();
+    for (const box of [
+      null, {}, { x: 0, y: 0, w: 0, h: 10 }, { x: 0, y: 0, w: 10, h: -1 }, { x: Number.NaN, y: 0, w: 10, h: 10 },
+      { x: 0, y: '0', w: 10, h: 10 }, { x: 0, y: 0, w: Infinity, h: 10 }, { x: 0, y: 0, w: 100_000, h: 10 },
+      { x: 1e9, y: 0, w: 10, h: 10 },
+    ]) {
+      expect(parseMateGlow({ ...glow, box }), JSON.stringify(box)).toBeNull();
+    }
+  });
+
+  it('refuses a colour, delay or ticket it could not use', () => {
+    for (const bad of [
+      { color: -1 }, { color: 99 }, { color: '3' }, { rgb: [300, 0, 0] }, { rgb: 'red' }, { delay: -1 },
+      { delay: 60_000 }, { delay: Number.NaN }, { ticket: 5 }, { ticket: 'x'.repeat(200) },
+    ]) {
+      expect(parseMateGlow({ ...glow, ...bad }), JSON.stringify(bad)).toBeNull();
+    }
+    for (const raw of [null, undefined, 'glow', 7, []]) expect(parseMateGlow(raw)).toBeNull();
   });
 });

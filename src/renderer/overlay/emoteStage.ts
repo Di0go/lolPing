@@ -1,4 +1,4 @@
-import { EMOTE_DURATION_S, emoteAnimUrl, type EmoteArt } from '../../shared/emotes';
+import { EMOTE_DURATION_S, emoteAnimUrl, emoteIconUrl, type EmoteArt } from '../../shared/emotes';
 import type { PingTag } from '../../shared/ipc';
 import { tagColorCss } from '../../shared/roomColors';
 import { bubble, emoteFxContent, envelope } from '../shared/emoteFx';
@@ -8,7 +8,12 @@ export interface EmoteOptions {
   sizePx: number;
   /** A room member's name under the emote. */
   tag?: PingTag;
+  /** Stays on screen until `clear`, as a still once its animation has played (the teammate's, until it fades). */
+  keep?: boolean;
 }
+
+/** A kept emote's envelope never reaches its goodbye: this is longer than anyone leaves lolPing running. */
+const KEPT_DUR_S = 86_400;
 
 interface Live {
   root: HTMLElement;
@@ -16,6 +21,8 @@ interface Live {
   /** The object URL of a bundled emote's image, once its Blob has arrived. */
   url: string | null;
   gone: boolean;
+  /** A kept bundled emote's change from its animation to its still, once the animation is over. */
+  settle?: () => void;
 }
 
 const div = (cls: string): HTMLDivElement => {
@@ -43,17 +50,18 @@ export class EmoteStage {
   spawn(owner: string, art: EmoteArt, x: number, y: number, opts: EmoteOptions): void {
     this.clear(owner);
     const root = div('emote');
+    if (owner === 'mate') root.dataset.owner = owner; // 'mate:fade' finds the teammate's marks by it, pings and emotes alike
     root.style.left = `${x}px`;
     root.style.top = `${y}px`;
     root.style.setProperty('--size', `${opts.sizePx}px`);
-    root.style.setProperty('--dur', `${EMOTE_DURATION_S}s`);
+    root.style.setProperty('--dur', `${opts.keep ? KEPT_DUR_S : EMOTE_DURATION_S}s`);
     const live: Live = {
       root, url: null, gone: false,
-      timer: setTimeout(() => this.end(owner, live), EMOTE_DURATION_S * 1000 + 150),
+      timer: setTimeout(() => (opts.keep ? live.settle?.() : this.end(owner, live)), EMOTE_DURATION_S * 1000 + 150),
     };
     this.live.set(owner, live);
 
-    if (art.kind === 'bundled') this.showBundled(live, art.slug);
+    if (art.kind === 'bundled') this.showBundled(live, art.slug, opts.keep === true);
     else if (art.kind === 'custom') root.append(emoteFxContent(art.fx, art.url));
     else root.append(envelope(bubble(), 0));
 
@@ -76,7 +84,7 @@ export class EmoteStage {
    * The baked animation plays once from frame 0, but Chromium gives images with the same URL one shared clock, so each
    * spawn gets its own object URL (the Blob is fetched once per emote).
    */
-  private showBundled(live: Live, slug: string): void {
+  private showBundled(live: Live, slug: string, keep: boolean): void {
     const img = image('sheet');
     live.root.append(img);
     // A missing file (the asset check lists it in About) or one that arrives but can't be decoded: the placeholder plays
@@ -88,9 +96,19 @@ export class EmoteStage {
       img.replaceWith(envelope(bubble(), 0));
     };
     img.addEventListener('error', placeholder, { once: true });
+    // The baked animations play once and all but one (poro_snax) end on an empty frame, so a kept emote holds its
+    // wheel icon after the animation instead.
+    if (keep) {
+      live.settle = () => {
+        if (swapped || live.gone) return;
+        swapped = true;
+        img.className = 'still';
+        img.src = emoteIconUrl(slug);
+      };
+    }
     this.blob(slug).then(
       (blob) => {
-        if (live.gone) return;
+        if (live.gone || swapped) return; // a late blob must not bring the animation back over the still
         live.url = URL.createObjectURL(blob);
         img.src = live.url;
       },

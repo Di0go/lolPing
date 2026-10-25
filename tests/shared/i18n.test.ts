@@ -34,6 +34,51 @@ describe('language', () => {
     expect(zh.limitations).toHaveLength(en.limitations.length);
   });
 
+  it('has every teammate window word in both languages', () => {
+    const en = strings('en').teammate.ui;
+    const zh = strings('zh-CN').teammate.ui;
+    expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
+    for (const [key, value] of Object.entries(zh)) {
+      const text = typeof value === 'function' ? (value as (arg: number | string) => string)(1200) : value;
+      expect(text.trim(), key).not.toBe('');
+    }
+  });
+
+  it('has every teammate failure line in both languages', () => {
+    const en = strings('en').teammate.ask;
+    const zh = strings('zh-CN').teammate.ask;
+    expect(Object.keys(zh.failed).sort()).toEqual(Object.keys(en.failed).sort());
+    for (const [key, value] of Object.entries(zh.failed)) expect(value.trim(), key).not.toBe('');
+    expect(en.failed.noProfile).toMatch(/^Set me up first/);
+  });
+
+  it('names the part of a file an answer used in both languages', () => {
+    const en = strings('en').teammate.ask.usedFile;
+    const zh = strings('zh-CN').teammate.ask.usedFile;
+    expect(en('paper.pdf', 'page', '3', '4')).toBe('paper.pdf p. 3–4');
+    expect(en('deck.pptx', 'slide', '2', '2')).toBe('deck.pptx slide 2');
+    expect(en('plan.xlsx', 'sheet', 'Budget', 'Costs')).toBe('plan.xlsx sheets Budget–Costs');
+    expect(en('notes.md', 'part', '1', '2')).toBe('notes.md parts 1–2');
+    expect(zh('paper.pdf', 'page', '3', '4')).toBe('paper.pdf 第 3–4 页');
+    expect(zh('paper.pdf', 'page', '3', '3')).toBe('paper.pdf 第 3 页');
+    expect(zh('deck.pptx', 'slide', '2', '5')).toBe('deck.pptx 第 2–5 张幻灯片');
+    expect(zh('plan.xlsx', 'sheet', 'Budget', 'Budget')).toBe('plan.xlsx 工作表 Budget');
+    expect(zh('plan.xlsx', 'sheet', 'Budget', 'Costs')).toBe('plan.xlsx 工作表 Budget–Costs');
+    expect(zh('notes.md', 'part', '1', '2')).toBe('notes.md 第 1–2 部分');
+  });
+
+  it('has a teammate label and instruction for every ping in both languages', () => {
+    for (const lang of ['en', 'zh-CN'] as const) {
+      const t = strings(lang).teammate.intent;
+      for (const p of ALL_PINGS) {
+        expect(t[p.id].label.trim(), `${lang} ${p.id} label`).not.toBe('');
+        expect(t[p.id].instruction.trim(), `${lang} ${p.id} instruction`).not.toBe('');
+      }
+    }
+    expect(strings('en').teammate.intent.danger.label).toBe("What's wrong");
+    expect(strings('zh-CN').teammate.intent.omw.label).toBe('帮我做');
+  });
+
   it('has the same Mac wording in both languages', () => {
     const en = strings('en', 'mac');
     const zh = strings('zh-CN', 'mac');
@@ -42,6 +87,25 @@ describe('language', () => {
     expect(en.launchAtStartup).toBe('Open at login');
     expect(strings('en').launchAtStartup).toBe('Launch at Windows startup');
     expect(strings('en', 'mac')).toBe(en); // stable identity: the settings page uses it as a React dependency
+  });
+
+  it('names ⌘Z for undo on a Mac and Ctrl + Z elsewhere, in both languages', () => {
+    for (const platform of ['win', 'linux'] as const) {
+      for (const lang of ['en', 'zh-CN'] as const) {
+        const ui = strings(lang, platform).teammate.ui;
+        expect(ui.pasted, `${lang} ${platform} pasted`).toContain('Ctrl + Z');
+        expect(ui.formNote, `${lang} ${platform} note`).toContain('Ctrl + Z');
+      }
+    }
+    for (const lang of ['en', 'zh-CN'] as const) {
+      const ui = strings(lang, 'mac').teammate.ui;
+      expect(ui.pasted, `${lang} pasted`).toContain('⌘Z');
+      expect(ui.formNote, `${lang} note`).toContain('⌘Z');
+      expect(`${ui.pasted}${ui.formNote}`, lang).not.toContain('Ctrl');
+      expect(ui.formFill(2), lang).toBe(strings(lang).teammate.ui.formFill(2));
+    }
+    expect(strings('en', 'mac').teammate.ui.pasted).toBe('Pasted. ⌘Z to undo.');
+    expect(strings('zh-CN', 'mac').teammate.ui.pasted).toMatch(/。$/);
   });
 
   it('words the update checker as specified, with a menu bar toast on a Mac', () => {

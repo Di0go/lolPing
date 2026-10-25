@@ -88,13 +88,16 @@ try:
     assert received() == [4,5], 'plain click must reach the application exactly once'
     assert not emitted()
     key(ALT,True); received(); button(1,True); move(260,200); button(1,False); key(ALT,False)
-    events=emitted(); assert [e['type'] for e in events] == ['wheelOpen','wheelMove','wheelRelease'], events
+    # A spot placed while the trigger key is held reports the key's release too (helper protocol 5).
+    events=emitted(); assert [e['type'] for e in events] == ['wheelOpen','wheelMove','wheelRelease','triggerUp'], events
+    assert events[-1]['wheel'] == 'ping', events
     assert not any(e in (4,5) for e in received()), 'wheel gesture leaked to application'
     key(ALT,True); received(); button(1,True); button(1,False); key(ALT,False)
     assert [e for e in received() if e in (4,5)] == [4,5], 'short trigger click must be replayed once'
     assert not emitted()
     key(CTRL,True); button(1,True); move(300,200); button(1,False); key(CTRL,False)
-    events=emitted(); assert events[-1]['type']=='wheelRelease' and events[-1]['wheel']=='emote', events
+    events=emitted(); assert events[-2]['type']=='wheelRelease' and events[-2]['wheel']=='emote', events
+    assert events[-1]=={'type':'triggerUp','wheel':'emote'}, events
     received()
     key(CTRL,True); key(ALT,True); key(P,True); key(P,False); key(ALT,False); key(CTRL,False)
     events=emitted(); assert events == [{'type':'toggled','enabled':False}], events
@@ -107,7 +110,7 @@ try:
     assert types()==['wheelOpen','wheelMove','wheelRelease']; received()
     command(type='config',trigger='vk',triggerVk=0x47,emoteTrigger='off',enabled=True)
     key(0x67,True); button(1,True); move(450,200); button(1,False); key(0x67,False)
-    events=emitted(); assert [e['type'] for e in events]==['wheelOpen','wheelMove','wheelRelease'], events
+    events=emitted(); assert [e['type'] for e in events]==['wheelOpen','wheelMove','wheelRelease','triggerUp'], events
     assert received()==[], 'custom trigger must not type into the application'
     # A lone tap of a custom trigger is replayed when the key comes up, so it still types.
     key(0x67,True); key(0x67,False)

@@ -1,10 +1,12 @@
+import type { Platform } from './platform';
 import type { RoomFeatureOff } from './roomProtocol';
 
-export type FeatureId = 'emotes' | 'rooms' | 'roomText' | 'roomVotes' | 'roomPanel';
+export type FeatureId = 'teammate' | 'emotes' | 'rooms' | 'roomText' | 'roomVotes' | 'roomPanel';
 export type Features = Record<FeatureId, boolean>;
 
 /** In the order of the Features page. A feature with `requires` counts as off while that one is off. */
 export const FEATURES: readonly { id: FeatureId; requires?: FeatureId }[] = [
+  { id: 'teammate' },
   { id: 'emotes' },
   { id: 'rooms' },
   { id: 'roomText', requires: 'rooms' },
@@ -12,7 +14,7 @@ export const FEATURES: readonly { id: FeatureId; requires?: FeatureId }[] = [
   { id: 'roomPanel', requires: 'rooms' },
 ];
 
-export const DEFAULT_FEATURES: Features = { emotes: true, rooms: true, roomText: true, roomVotes: true, roomPanel: true };
+export const DEFAULT_FEATURES: Features = { teammate: false, emotes: true, rooms: true, roomText: true, roomVotes: true, roomPanel: true };
 
 /** Turns anything into a full Features object: a missing or non-boolean key falls back to on, unknown keys are dropped. */
 export function normalizeFeatures(raw: unknown): Features {
@@ -23,6 +25,18 @@ export function normalizeFeatures(raw: unknown): Features {
     if (typeof v === 'boolean') out[id] = v;
   }
   return out;
+}
+
+/** Whether the Features page offers a feature on this platform: the teammate isn't built for Linux. */
+export function featureVisible(id: FeatureId, platform: Platform): boolean {
+  return !(id === 'teammate' && platform === 'linux');
+}
+
+/** The Features page's rows on this platform: each top-level feature with the features that require it, in list order. */
+export function featureGroups(platform: Platform): { id: FeatureId; parts: FeatureId[] }[] {
+  const visible = FEATURES.filter(({ id }) => featureVisible(id, platform));
+  return visible.filter((f) => f.requires === undefined)
+    .map(({ id }) => ({ id, parts: visible.filter((f) => f.requires === id).map((f) => f.id) }));
 }
 
 /** The room features this setup has switched off, as a room presence announces them. */

@@ -1,15 +1,24 @@
 import { globalShortcut, ipcMain, shell } from 'electron';
 import { isCustomRef, isEmoteFx, isEmoteRefShape, type CustomEmote, type EmoteRef, type ImportResult, type SoundResult } from '../shared/emotes';
 import type { Strings } from '../shared/i18n';
-import { SETTINGS_CH, type About, type AppStatus, type SetSettingsResult } from '../shared/ipc';
+import {
+  SETTINGS_CH, TEAMMATE_HISTORY_OPS, type About, type AppStatus, type CheckAgentResult, type CheckKeyResult,
+  type SecretResult, type SetSettingsResult, type TeammateHistoryOp, type TeammateStatus, type UsageMonth,
+} from '../shared/ipc';
 import { hotkeyLabel, hotkeyToAccelerator, type Hotkey } from '../shared/keys';
 import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
-import { panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
+import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
+import { AGENT_PRESETS } from '../shared/teammate/agents';
+import { CONNECT_APPS, connectSnippet, mcpAddLine, type BridgeCommand } from '../shared/teammate/connectApps';
+import { needsKey } from '../shared/teammate/providers';
+import { isBuiltin, PATH_MAX, type AgentProfile, type BuiltinProfile } from '../shared/teammate/settings';
 import type { UpdateState } from '../shared/update';
 import { emoteFileFrom, type EmoteLibrary } from './emoteLibrary';
 import type { SettingsStore } from './settingsStore';
+import { ProviderError, type ProviderAdapter } from './teammate/providers/types';
+import { INSTRUCTIONS_MAX_CHARS, type SecretStore } from './teammate/secrets';
 
 const PROJECT_URL = 'https://github.com/darrenprx/lolPing';
 /** Where "What's new" goes when no update is known. */
@@ -50,7 +59,34 @@ export interface SettingsIpcDeps {
     copyCode(): void;
     retryInternet(): void;
   };
+  teammate: {
+    /** null while the teammate feature is off: then no key or instructions are read or stored. */
+    secrets(): Pick<SecretStore, 'available' | 'key' | 'hasKey' | 'setKey' | 'instructions' | 'setInstructions'> | null;
+    adapter(p: BuiltinProfile, key: string): Pick<ProviderAdapter, 'listModels'>;
+    usage(): UsageMonth;
+    /** Resolves true when the operation was carried out. */
+    history(op: TeammateHistoryOp): Promise<boolean>;
+    /** macOS: whether Screen Recording is allowed; null on other systems, which need no permission. */
+    screenAccess(): boolean | null;
+    openScreenRecording(): void;
+    /** Runs the agent's command with --version. */
+    checkAgent(p: AgentProfile): Promise<CheckAgentResult>;
+    /** The system folder picker over the settings window; null when cancelled. */
+    pickFolder(): Promise<string | null>;
+    /** The JSON to paste into an agent's own MCP file; null when the pipe name can't be worked out. */
+    agentSnippet(): string | null;
+    /** How an agent started by the user's own app runs the bridge; null when the pipe name can't be worked out. */
+    bridge(): BridgeCommand | null;
+    /** Foreground app names of this session's asks, newest first. */
+    recentApps(): readonly string[];
+    /** The editors found on this computer. */
+    editors(): Promise<string[]>;
+  };
 }
+
+/** Longer than any provider's key; anything longer is not a key. */
+const KEY_MAX = 4096;
+const CHECK_KEY_MS = 15_000;
 
 const sameHotkey = (a: Hotkey, b: Hotkey): boolean => a.mods === b.mods && a.vk === b.vk;
 
@@ -85,6 +121,9 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
     }
     if (patchClashes(d.store.get(), patch, d.platform)) {
       return { ok: false, error: d.text().emoteKeyClash, settings: d.store.get() };
+    }
+    if (askKeyClashes(d.store.get(), patch, d.platform)) {
+      return { ok: false, error: d.text().teammate.settings.askKeyClash, settings: d.store.get() };
     }
     if (patch.toggleHotkey) {
       if (sameHotkey(patch.toggleHotkey, patch.textHotkey ?? d.store.get().textHotkey)) {
@@ -161,6 +200,8 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
   ipcMain.handle(SETTINGS_CH.roomCopy, () => d.room.copyCode());
   ipcMain.handle(SETTINGS_CH.roomRetryInternet, () => d.room.retryInternet());
 
+  registerTeammateIpc(d);
+
   ipcMain.handle(SETTINGS_CH.updateGet, (): UpdateState | null => d.update?.state() ?? null);
   ipcMain.handle(SETTINGS_CH.updateCheck, async () => {
     await d.update?.check();
@@ -174,6 +215,100 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
     const notes = d.update.notesUrl();
     await shell.openExternal(notes !== null && isWebUrl(notes) ? notes : LATEST_RELEASE_URL);
   });
+}
+
+/** Keys go in and never come back out: the window learns only whether a profile has one, and what Check key found. */
+function registerTeammateIpc(d: SettingsIpcDeps): void {
+  const profileOf = (id: unknown): BuiltinProfile | null =>
+    typeof id === 'string' ? d.store.get().teammate.profiles.filter(isBuiltin).find((p) => p.id === id) ?? null : null;
+  const agentOf = (id: unknown): AgentProfile | null => {
+    const found = typeof id === 'string' ? d.store.get().teammate.profiles.find((p) => p.id === id) : undefined;
+    return found?.kind === 'agent' ? found : null;
+  };
+  const stored = async (write: () => Promise<void>): Promise<SecretResult> => {
+    try {
+      await write();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'unavailable' };
+    }
+  };
+
+  ipcMain.handle(SETTINGS_CH.teammateSetKey, (_e, id: unknown, key: unknown): Promise<SecretResult> | SecretResult => {
+    const profile = profileOf(id);
+    if (!profile || typeof key !== 'string' || key.length > KEY_MAX) return { ok: false };
+    const secrets = d.teammate.secrets();
+    if (!secrets) return { ok: false, error: 'unavailable' };
+    return stored(() => secrets.setKey(profile.id, key.trim()));
+  });
+  ipcMain.handle(SETTINGS_CH.teammateHasKey, (_e, id: unknown): boolean => {
+    const profile = profileOf(id);
+    return profile !== null && (d.teammate.secrets()?.hasKey(profile.id) ?? false);
+  });
+  ipcMain.handle(SETTINGS_CH.teammateCheckKey, async (_e, id: unknown): Promise<CheckKeyResult> => {
+    const t = d.text().teammate.settings;
+    const profile = profileOf(id);
+    if (!profile) return { ok: false, error: 'other', message: t.checkNoProfile };
+    const key = d.teammate.secrets()?.key(profile.id) ?? (needsKey(profile) ? null : '');
+    if (key === null) return { ok: false, error: 'auth', message: t.checkNoKey };
+    try {
+      const models = await d.teammate.adapter(profile, key).listModels(AbortSignal.timeout(CHECK_KEY_MS));
+      return { ok: true, models };
+    } catch (err) {
+      const kind = err instanceof ProviderError ? err.kind : 'other';
+      const error = kind === 'auth' || kind === 'network' ? kind : 'other';
+      // Some providers repeat the refused key in their message.
+      const message = err instanceof Error ? (key ? err.message.split(key).join('…') : err.message) : '';
+      return { ok: false, error, message };
+    }
+  });
+  ipcMain.handle(SETTINGS_CH.teammateSetInstructions, (_e, text: unknown): Promise<SecretResult> | SecretResult => {
+    if (typeof text !== 'string' || text.length > INSTRUCTIONS_MAX_CHARS) return { ok: false };
+    const secrets = d.teammate.secrets();
+    if (!secrets) return { ok: false, error: 'unavailable' };
+    return stored(() => secrets.setInstructions(text));
+  });
+  ipcMain.handle(SETTINGS_CH.teammateInstructions, (): string => d.teammate.secrets()?.instructions() ?? '');
+  ipcMain.handle(SETTINGS_CH.teammateUsage, (): UsageMonth => d.teammate.usage());
+  ipcMain.handle(SETTINGS_CH.teammateHistory, async (_e, op: unknown): Promise<boolean> => {
+    const known = TEAMMATE_HISTORY_OPS.find((o) => o === op);
+    return known ? d.teammate.history(known).catch(() => false) : false;
+  });
+  ipcMain.handle(SETTINGS_CH.teammateStatus, (): TeammateStatus => ({
+    secretsAvailable: d.teammate.secrets()?.available() ?? false,
+    screenAccess: d.teammate.screenAccess(),
+  }));
+  ipcMain.handle(SETTINGS_CH.teammateOpenScreen, () => d.teammate.openScreenRecording());
+  // The command is read from the saved profile, never taken from the window.
+  ipcMain.handle(SETTINGS_CH.teammateCheckAgent, async (_e, id: unknown): Promise<CheckAgentResult> => {
+    const profile = agentOf(id);
+    if (!profile) return { ok: false, reason: 'failed', detail: d.text().teammate.settings.checkNoProfile };
+    return d.teammate.checkAgent(profile).catch((): CheckAgentResult => ({ ok: false, reason: 'failed', detail: '' }));
+  });
+  ipcMain.handle(SETTINGS_CH.teammatePickFolder, async (): Promise<string | null> => {
+    const picked: unknown = await d.teammate.pickFolder().catch(() => null);
+    return typeof picked === 'string' && picked !== '' && picked.length <= PATH_MAX ? picked : null;
+  });
+  // By the saved profile's preset: one with an MCP file gets the JSON, one with only `<bin> mcp add` gets that line.
+  ipcMain.handle(SETTINGS_CH.teammateAgentSnippet, (_e, id: unknown): { text: string } | null => {
+    const profile = agentOf(id);
+    const preset = profile && profile.preset !== 'custom' ? AGENT_PRESETS[profile.preset] : null;
+    if (!preset) return null;
+    if (preset.mcp === 'user' && preset.userConfig === undefined) {
+      const bridge = d.teammate.bridge();
+      return bridge ? { text: mcpAddLine(preset.bin, bridge, d.platform) } : null;
+    }
+    const json = d.teammate.agentSnippet();
+    return json === null ? null : { text: json };
+  });
+  // The shape comes from the app's own row, never from the window.
+  ipcMain.handle(SETTINGS_CH.teammateConnectSnippet, (_e, id: unknown): { text: string } | null => {
+    const app = typeof id === 'string' ? CONNECT_APPS.find((a) => a.id === id) : undefined;
+    const bridge = app ? d.teammate.bridge() : null;
+    return app && bridge ? { text: connectSnippet(app.shape, bridge, d.platform, d.text().teammate.settings.connectEnvLabel) } : null;
+  });
+  ipcMain.handle(SETTINGS_CH.teammateRecentApps, (): string[] => [...d.teammate.recentApps()]);
+  ipcMain.handle(SETTINGS_CH.teammateEditors, (): Promise<string[]> => d.teammate.editors().catch(() => []));
 }
 
 function isWebUrl(url: string): boolean {

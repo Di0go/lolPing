@@ -256,6 +256,9 @@ export function RoomSection({ settings: s, update }: { settings: Settings; updat
           ))}
         </span>
       </SettingRow>
+      {featureOn(s, 'teammate') && s.teammate.askTrigger === 'same' ? (
+        <p className="desc roomNote warnText">{t.teammate.settings.askKeySameNote}</p>
+      ) : null}
       <p className="desc roomNote">{t.roomPrivacy} {t.roomHelp}</p>
     </>
   );

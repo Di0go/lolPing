@@ -4,10 +4,11 @@ import type { PingId } from './pings';
 import type { Platform } from './platform';
 import type { HelperStatus, WheelKind } from './protocol';
 import type { JoinResult, RoomState, RoomStateCore } from './room';
-import type { TagRgb } from './roomColors';
+import { isTagColor, isTagRgb, type TagRgb } from './roomColors';
 import type { HistoryLine } from './roomHistory';
 import { PEER_RE } from './roomProtocol';
 import type { OverlaySettings, RoomTextStyle, Settings } from './settings';
+import type { Rect } from './teammate/coords';
 import type { UpdateState } from './update';
 import type { VoteView } from './voteTally';
 
@@ -32,23 +33,88 @@ export interface OverlayEvents {
   'wheel:release': Point & { wheel?: WheelKind };
   'wheel:cancel': null;
   /** `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one. */
-  'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean };
+  'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean } & MateMark;
   /** Removes the ping kept on this display, if any: we pinged on another display, or paused. */
   'ping:unkeep': null;
-  /** `owner` is 'self', 'preview' or a room member: each owner has at most one emote on screen. */
-  'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag };
+  /**
+   * `owner` is 'self', 'preview' or a room member: each owner has at most one emote on screen.
+   * `keep`: the teammate's emote stays until mate:clear or mate:fade.
+   */
+  'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag; ticket?: string; keep?: boolean };
   'emote:clear': { owner: string };
   'toast:show': { title: string; body: string };
   /** `owner` is 'self' or a room member: each owner has at most 3 lines on screen. */
   'text:spawn': Point & { text: string; owner: string; style: RoomTextStyle; tag?: PingTag };
+  /** Removes every teammate ping and emote at once. */
+  'mate:clear': null;
+  /** Fades every teammate ping and emote out, then removes them. */
+  'mate:fade': null;
+  /** The ask now running: teammate marks stamped with another ticket belong to a cancelled ask and are dropped. */
+  'mate:ticket': { id: string };
+  /** The teammate said its first line: the dots on its tags stop. */
+  'mate:said': null;
+  /** A field the teammate just pasted into or filled: an outline over it in the teammate's colour. */
+  'mate:glow': MateGlow;
+}
+
+/**
+ * The outline over a field the teammate wrote. `box` is in CSS px inside the overlay; `color` and `rgb` are the
+ * teammate's tag colour; `delay` (ms) lets the fields of one fill light up in order. `ticket` as in MateMark.
+ */
+export interface MateGlow {
+  box: Rect;
+  color: number;
+  rgb: TagRgb | null;
+  delay: number;
+  ticket?: string;
+}
+
+/** What a teammate ping carries on top of a ping. `ticket` is the ask it answers, set by the overlay manager. */
+export interface MateMark {
+  owner?: 'mate';
+  /** Shown next to the ping, at most 20 characters. */
+  label?: string;
+  /** Animated dots on the tag until the teammate says something. */
+  thinking?: boolean;
+  /** No sound: every ping of a set but the first, and the receipt when its sound is off. */
+  silent?: boolean;
+  /** Only the name tag, no ping art: the receipt for a Do it ask, whose On My Way the user already placed. */
+  tagOnly?: boolean;
+  ticket?: string;
 }
 
 export type OverlayChannel = keyof OverlayEvents;
 
 export const OVERLAY_CHANNELS: readonly OverlayChannel[] = [
   'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
-  'toast:show', 'text:spawn',
+  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket', 'mate:said', 'mate:glow',
 ];
+
+/** Larger than any screen in CSS px: a box or a point past these is not one the overlay should draw. */
+const GLOW_SIZE_MAX = 32_768;
+const GLOW_AT_MAX = 100_000;
+/** 60 fields 120 ms apart, with room to spare. */
+const GLOW_DELAY_MAX = 10_000;
+const TICKET_MAX = 100;
+
+/** The overlay draws a glow only from a message that checks out field by field, whoever sent it. */
+export function parseMateGlow(raw: unknown): MateGlow | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const g = raw as Record<string, unknown>;
+  const num = (v: unknown, min: number, max: number): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+  const box = g.box as Record<string, unknown> | null | undefined;
+  if (typeof box !== 'object' || box === null) return null;
+  const { x, y, w, h } = box;
+  if (!num(x, -GLOW_AT_MAX, GLOW_AT_MAX) || !num(y, -GLOW_AT_MAX, GLOW_AT_MAX)) return null;
+  if (!num(w, 0, GLOW_SIZE_MAX) || !num(h, 0, GLOW_SIZE_MAX) || w === 0 || h === 0) return null;
+  if (!isTagColor(g.color) || !num(g.delay, 0, GLOW_DELAY_MAX)) return null;
+  const rgb = g.rgb ?? null;
+  if (rgb !== null && !isTagRgb(rgb)) return null;
+  const { ticket } = g;
+  if (ticket !== undefined && (typeof ticket !== 'string' || ticket.length > TICKET_MAX)) return null;
+  return { box: { x, y, w, h }, color: g.color, rgb, delay: g.delay, ...(ticket === undefined ? {} : { ticket }) };
+}
 
 export const TEXT_CH = { submit: 'text:submit', cancel: 'text:cancel', strings: 'text:strings' } as const;
 
@@ -154,6 +220,32 @@ export interface About {
 
 export type SetSettingsResult = { ok: true; settings: Settings } | { ok: false; error: string; settings: Settings };
 
+/** Storing a key or Your instructions; 'unavailable': the system can't encrypt them, so nothing was stored. */
+export type SecretResult = { ok: boolean; error?: 'unavailable' };
+/** Check key lists the provider's models; it never asks for a completion. `message` never contains the key. */
+export type CheckKeyResult =
+  | { ok: true; models: string[] }
+  | { ok: false; error: 'auth' | 'network' | 'other'; message: string };
+/** Check on an agent profile: what `<command> --version` printed. `detail` is the command, or the first line of stderr. */
+export type CheckAgentResult =
+  | { ok: true; version: string }
+  | { ok: false; reason: 'notFound' | 'timeout' | 'failed'; detail: string };
+/** The tokens the teammate's providers reported this month. */
+export interface UsageMonth {
+  /** YYYY-MM */
+  month: string;
+  input: number;
+  output: number;
+}
+export type TeammateHistoryOp = 'open' | 'pause' | 'resume' | 'clear';
+/** false: the system can't encrypt, so keys can't be saved and history is off. */
+export interface TeammateStatus {
+  secretsAvailable: boolean;
+  /** macOS only: whether Screen Recording is allowed. null where no such permission exists. */
+  screenAccess: boolean | null;
+}
+export const TEAMMATE_HISTORY_OPS: readonly TeammateHistoryOp[] = ['open', 'pause', 'resume', 'clear'];
+
 // SETTINGS_CH lives in its own module so the settings preload can import it without sharing a chunk
 // with the overlay preload (a sandboxed preload can only require('electron'), never a sibling file).
 export { SETTINGS_CH } from './settingsChannels';
@@ -208,4 +300,32 @@ export interface SettingsApi {
   startUpdate(): Promise<void>;
   /** Opens the release notes of the version that was found, or else the page of the latest release. */
   openReleasePage(): Promise<void>;
+  /** Stores a profile's key (an empty key removes it). The key is never sent back to this window. */
+  setTeammateKey(profileId: string, key: string): Promise<SecretResult>;
+  hasTeammateKey(profileId: string): Promise<boolean>;
+  checkTeammateKey(profileId: string): Promise<CheckKeyResult>;
+  /** Runs an agent profile's command with --version. The main process looks the profile up; no command comes from here. */
+  checkTeammateAgent(profileId: string): Promise<CheckAgentResult>;
+  /** Shows the system folder picker; the chosen path, or null when it was cancelled. */
+  pickTeammateFolder(): Promise<string | null>;
+  /**
+   * What the agent profile's agent needs to add lolPing: the JSON for its MCP file, or its `mcp add` line; null for
+   * an unknown or custom profile, or when it can't be made.
+   */
+  getTeammateAgentSnippet(profileId: string): Promise<{ text: string } | null>;
+  /** The text to paste into the app with this CONNECT_APPS id (its config or command line); null for an unknown app. */
+  getTeammateConnectSnippet(appId: string): Promise<{ text: string } | null>;
+  /** Foreground app names of this session's asks, newest first: the App field of a rule offers them. */
+  getTeammateRecentApps(): Promise<string[]>;
+  /** The editors found on this computer, named as the helper names the foreground app. */
+  getTeammateEditors(): Promise<string[]>;
+  setTeammateInstructions(text: string): Promise<SecretResult>;
+  /** Your instructions: the user's own text, so this window may read it back. */
+  getTeammateInstructions(): Promise<string>;
+  getTeammateUsage(): Promise<UsageMonth>;
+  /** Resolves true when it was carried out (Clear can fail). */
+  teammateHistory(op: TeammateHistoryOp): Promise<boolean>;
+  getTeammateStatus(): Promise<TeammateStatus>;
+  /** macOS: asks for Screen Recording access and opens that page of System Settings. */
+  openScreenRecording(): Promise<void>;
 }

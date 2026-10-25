@@ -3,7 +3,7 @@ import {
   CUSTOM_NAME_MAX, MAX_CUSTOM_EMOTES, customHash, isCustomRef, isEmoteFx, normalizeClickEmote, normalizeEmoteWheel,
   type CustomEmote, type EmoteRef,
 } from './emotes';
-import { DEFAULT_FEATURES, normalizeFeatures, type Features } from './features';
+import { DEFAULT_FEATURES, featureOn, normalizeFeatures, type Features } from './features';
 import { WHEEL } from './geometry';
 import { LANGUAGE_PREFS, strings, type Lang, type LanguagePref } from './i18n';
 import { HOTKEY_PRIMARY_MODS, MOD, type Hotkey, vkLabel } from './keys';
@@ -13,6 +13,9 @@ import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from './roomColors'
 import { parseRoomCode } from './roomCode';
 import { sanitizeName } from './roomProtocol';
 import { isVersion } from './update';
+import type { PingTag } from './ipc';
+import { intentFor } from './teammate/intents';
+import { DEFAULT_TEAMMATE, normalizeTeammate, type TeammateSettings } from './teammate/settings';
 import { isValidWheel } from './wheelLayout';
 
 export type NamedTrigger = 'alt' | 'ctrl' | 'shift' | 'win' | 'capslock' | 'mouse4' | 'mouse5';
@@ -89,6 +92,8 @@ export interface Settings {
   features: Features;
   /** How room text appears here: a bubble at the spot the sender pointed at, or a line scrolling across the top. */
   roomTextStyle: RoomTextStyle;
+  /** The AI teammate: its ask key, profiles and history. Used only while features.teammate is on. */
+  teammate: TeammateSettings;
 }
 
 /** Per-machine defaults for the room profile: the OS username and a random tag colour. */
@@ -138,6 +143,7 @@ export const DEFAULT_SETTINGS: Settings = {
   updateNotifiedVersion: null,
   features: { ...DEFAULT_FEATURES },
   roomTextStyle: 'spot',
+  teammate: { ...DEFAULT_TEAMMATE },
 };
 
 export const LIMITS = {
@@ -230,6 +236,35 @@ export function patchClashes(current: Settings, patch: Partial<Settings>, platfo
   const emote = emoteKey(pick('emoteTrigger'), platform);
   if (triggersClash(ping, emote, hotkey(pick('toggleHotkey')))) return true;
   return panelKeyClashes(current, patch, platform);
+}
+
+/** The teammate's own ask key while the teammate is on; null when it asks on the ping key or is off. */
+export function separateAskKey(s: Pick<Settings, 'features' | 'teammate'>): TriggerKey | null {
+  return featureOn(s, 'teammate') && s.teammate.askTrigger !== 'same' ? s.teammate.askTrigger : null;
+}
+
+/** The teammate is on and asks on the ping key: the ping wheel is the ask wheel. */
+export const asksOnPing = (s: Pick<Settings, 'features' | 'teammate'>): boolean => (
+  featureOn(s, 'teammate') && s.teammate.askTrigger === 'same'
+);
+
+/** The key that asks (the ping key in same-key mode) is a keyboard key, whose up the helper reports. */
+export function askKeyHeld(s: Pick<Settings, 'features' | 'teammate' | 'trigger'>): boolean {
+  const key = separateAskKey(s) ?? s.trigger;
+  return key !== 'mouse4' && key !== 'mouse5';
+}
+
+/**
+ * Whether `patch` puts the ping trigger or the emote key on the teammate's separate ask key. Saving it would move the
+ * ask key, so it is refused with a reason instead, as the emote key's clash is.
+ */
+export function askKeyClashes(current: Settings, patch: Partial<Settings>, platform: Platform = 'win'): boolean {
+  if (!('trigger' in patch) && !('emoteTrigger' in patch)) return false;
+  const ask = separateAskKey(current);
+  if (ask === null) return false;
+  const ping = trigger(pickKey(current, patch, 'trigger'), platform);
+  const emote = emoteKey(pickKey(current, patch, 'emoteTrigger'), platform);
+  return sameTrigger(ping, ask) || sameTrigger(emote, ask);
 }
 
 function hotkey(raw: unknown, fallback: Hotkey = DEFAULT_SETTINGS.toggleHotkey): Hotkey {
@@ -338,8 +373,10 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     friendEmotes: bool(r.friendEmotes, 'friendEmotes'),
     autoUpdateCheck: bool(r.autoUpdateCheck, 'autoUpdateCheck'),
     updateNotifiedVersion: isVersion(r.updateNotifiedVersion) ? r.updateNotifiedVersion : null,
-    features: normalizeFeatures(r.features),
+    // The teammate isn't built for Linux, so a settings file carried over from another system can't switch it on.
+    features: platform === 'linux' ? { ...normalizeFeatures(r.features), teammate: false } : normalizeFeatures(r.features),
     roomTextStyle: r.roomTextStyle === 'danmaku' ? 'danmaku' : 'spot',
+    teammate: normalizeTeammate(r.teammate, { platform, trigger: pingTrigger, emoteTrigger: emote }),
   };
 }
 
@@ -375,14 +412,39 @@ export type OverlaySettings = Pick<
   Settings,
   'pingSizePx' | 'pingDurationS' | 'keepLastPing' | 'volume' | 'muted' | 'tickSound' | 'wheelSizePx' | 'wheel' | 'clickPingId'
   | 'emoteWheel' | 'clickEmoteId' | 'emoteSizePx' | 'emoteSound' | 'customEmotes'
->;
+> & {
+  /** The ask wheel: the teammate's name tag, each slice's intent label, and the slices whose intent is off. */
+  ask: {
+    tag: PingTag; labels: Partial<Record<PingId, string>>; disabled: PingId[];
+    /** The ask key is the ping key: the ping wheel asks, and a ping click opens the words box while `click` is on. */
+    onPing: boolean;
+    click: boolean;
+  };
+};
 
 /** How loud lolPing's sounds play, 0 to 1: the volume setting, or 0 when muted. */
 export const soundLevel = (s: Pick<Settings, 'volume' | 'muted'>): number => (s.muted ? 0 : s.volume / 100);
 
-export const overlaySettings = (s: Settings): OverlaySettings => ({
+/** `lang` is the app's language: the ask wheel's labels are in it. */
+export const overlaySettings = (s: Settings, lang: Lang = 'en'): OverlaySettings => ({
   pingSizePx: s.pingSizePx, pingDurationS: s.pingDurationS, keepLastPing: s.keepLastPing, volume: s.volume, muted: s.muted, tickSound: s.tickSound,
   wheelSizePx: s.wheelSizePx, wheel: [...s.wheel], clickPingId: s.clickPingId,
   emoteWheel: [...s.emoteWheel], clickEmoteId: s.clickEmoteId, emoteSizePx: s.emoteSizePx, emoteSound: s.emoteSound,
   customEmotes: s.customEmotes.map((c) => ({ ...c })),
+  ask: askWheel(s, lang),
 });
+
+function askWheel(s: Settings, lang: Lang): OverlaySettings['ask'] {
+  const t = s.teammate;
+  const labels: Partial<Record<PingId, string>> = {};
+  const disabled: PingId[] = [];
+  for (const id of s.wheel) {
+    const intent = intentFor(t, id, lang);
+    labels[id] = intent.label;
+    if (!intent.enabled) disabled.push(id);
+  }
+  return {
+    tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled,
+    onPing: asksOnPing(s), click: t.askClick,
+  };
+}

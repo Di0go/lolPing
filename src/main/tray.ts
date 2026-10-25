@@ -30,6 +30,12 @@ export interface TrayHandlers {
     /** Opens settings at the Room section. */
     openSettings(): void;
   };
+  teammate: {
+    /** Cancels the running ask and clears the teammate's answer from the screen. */
+    stop(): void;
+    openHistory(): void;
+    setHistoryPaused(paused: boolean): void;
+  };
 }
 
 /** What the tray shows about the room: `code` is null when not in one. */
@@ -38,6 +44,9 @@ export interface TrayRoom {
   count: number;
   muted: boolean;
 }
+
+/** What the tray shows about the teammate; null while the feature is off, so the menu has no teammate items. */
+export type TrayTeammate = { running: boolean; historyOn: boolean; paused: boolean } | null;
 
 /**
  * What the tray shows about updates: the phase of the update checker, with the version found and the download's percent.
@@ -74,6 +83,7 @@ export class AppTray {
   private room: TrayRoom = { code: null, count: 0, muted: false };
   private update: TrayUpdate = null;
   private roomsShown = true;
+  private teammate: TrayTeammate = null;
   private destroyed = false;
 
   /** `mac` switches to menu bar behaviour: template icons, and a click opens the menu (which has Settings…). */
@@ -133,6 +143,15 @@ export class AppTray {
     this.render();
   }
 
+  setTeammate(teammate: TrayTeammate): void {
+    if (this.destroyed) return;
+    const m = this.teammate;
+    if (m === teammate || (m && teammate && m.running === teammate.running && m.historyOn === teammate.historyOn
+      && m.paused === teammate.paused)) return;
+    this.teammate = teammate;
+    this.render();
+  }
+
   setUpdate(update: TrayUpdate): void {
     if (this.destroyed) return;
     const u = this.update;
@@ -171,6 +190,7 @@ export class AppTray {
     if (failed) items.push({ label: t.trayRestart, click: () => this.handlers.retryHelper() });
     items.push({ type: 'separator' });
     if (this.roomsShown) items.push({ label: t.trayRoom, submenu: this.roomMenu() });
+    items.push(...this.teammateItems());
     items.push(
       { label: t.traySettings, click: () => this.handlers.openSettings() },
       { label: t.trayQuit, click: () => this.handlers.quit() },
@@ -188,6 +208,22 @@ export class AppTray {
     if (u.phase === 'downloading') return { label: t.trayDownloading(u.percent ?? 0), enabled: false };
     if (u.phase === 'installing') return { label: t.trayInstalling, enabled: false };
     return { label: t.trayCheckForUpdates, click: () => h.check() };
+  }
+
+  private teammateItems(): MenuItemConstructorOptions[] {
+    const m = this.teammate;
+    if (!m) return [];
+    const t = this.text;
+    const h = this.handlers.teammate;
+    const items: MenuItemConstructorOptions[] = [];
+    if (m.running) items.push({ label: t.trayMateStop, click: () => h.stop() });
+    items.push({ label: t.trayMateHistory, click: () => h.openHistory() });
+    if (m.historyOn) {
+      items.push(m.paused
+        ? { label: t.trayMateResumeHistory, click: () => h.setHistoryPaused(false) }
+        : { label: t.trayMatePauseHistory, click: () => h.setHistoryPaused(true) });
+    }
+    return items;
   }
 
   private roomMenu(): MenuItemConstructorOptions[] {

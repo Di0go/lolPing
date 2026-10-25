@@ -21,6 +21,10 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
    until hovered), so the hot slice shows by its wedge and the larger icon. */
 #emoteWheel .icon, #emoteWheel .hub { clip-path: circle(50%); }
 #emoteWheel .icon { filter: none; }
+/* The ask wheel is the ping wheel in the teammate's tag colour; a slice whose intent is off stays grey and faint. */
+#wheel.ask .core { stroke: var(--ask); }
+#wheel.ask .centerTxt { fill: var(--ask); font-size: 14px; letter-spacing: .3px; }
+#wheel .icon.dim, #wheel .icon.dim.hot { filter: grayscale(1) brightness(.6); opacity: .45; }
 
 /* ---------- pings (sizes scale with --size, timing with --dur) ---------- */
 .ping { position: absolute; width: 0; height: 0; pointer-events: none; --size: 110px; --dur: 3.2s; }
@@ -56,8 +60,34 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
   font: 600 13px/18px "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif; letter-spacing: .2px;
   text-shadow: 0 1px 2px #000; animation: tagIn .25s ease-out both, life var(--dur) linear forwards;
 }
-/* A kept ping skips the fade at the end of its life: its art stays, still bobbing, until it is removed. */
-.ping.kept .art, .ping.kept .tag { animation-name: none; }
+/* The teammate's marks: its words above the ping, and dots on its tag while it thinks. */
+.ping .label {
+  position: absolute; left: 0; top: calc(var(--size) * -0.73 - 24px); transform: translateX(-50%); white-space: nowrap;
+  padding: 1px 7px; border-radius: 4px; background: rgba(8, 12, 16, .72); color: #f0e6d2;
+  font: 600 13px/18px "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif; text-shadow: 0 1px 2px #000;
+  /* It pops in just after the ping lands, so the eye goes from the mark to its words. */
+  animation: labelIn .3s cubic-bezier(.1, .9, .2, 1) .15s both, life var(--dur) linear forwards;
+}
+@keyframes labelIn { from { transform: translate(-50%, 6px) scale(.85); opacity: 0 } }
+.ping .tag.dots::after { content: ''; display: inline-block; width: 1.2em; text-align: left; animation: dots 1.2s steps(4) infinite; }
+@keyframes dots { 0% { content: '' } 25% { content: '.' } 50% { content: '..' } 75% { content: '...' } }
+[data-owner="mate"] { transition: opacity .6s ease-in, scale .6s ease-in; }
+[data-owner="mate"].mate-fade { opacity: 0; scale: .92; }
+/* A kept ping skips the fade at the end of its life: its art stays, still bobbing, until it is removed. The tag and
+   label keep their entrance (the first name of each animation list) and drop only `life`. */
+.ping.kept .art { animation-name: none; }
+.ping.kept .tag { animation-name: tagIn, none; }
+.ping.kept .label { animation-name: labelIn, none; }
+/* The receipt for a Do it ask is the teammate's tag alone, centred where the ping would be. */
+.ping.tag-only .tag { top: -10px; }
+/* A field the teammate just wrote: a 2 px outline over it in the teammate's colour, fading out. */
+.mate-glow {
+  position: absolute; box-sizing: border-box; border: 2px solid var(--glow); border-radius: 4px;
+  box-shadow: 0 0 8px var(--glow); animation: glowOut .9s ease-in forwards;
+}
+@keyframes glowOut { from { opacity: 1 } to { opacity: 0 } }
+/* Reduced motion: the outline holds still for its 900 ms, then goes. */
+@media (prefers-reduced-motion: reduce) { .mate-glow { animation: none; } }
 @keyframes tagIn { from { transform: translate(-50%, 4px) } }
 @keyframes pop { 0% { transform: scale(.4); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
 @keyframes bob { 0%, 100% { translate: 0 0 } 50% { translate: 0 -5px } }
@@ -71,6 +101,11 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 
 /* ---------- emotes (the box and the 13 effect envelopes live in shared/emoteFx.css, shared with the effect picker) ---------- */
 .emote .tag { top: calc(var(--size) * 0.5 + 8px); }
+/* A kept bundled emote holds its round wheel icon once the animation is over. */
+.emote .still {
+  position: absolute; left: calc(var(--size) * -0.5); top: calc(var(--size) * -0.5); width: var(--size); height: var(--size);
+  border-radius: 50%;
+}
 /* A bundled emote is a baked animation: a 320 px canvas holding 256 px of art, so it is drawn 1.25 times the art's size. */
 .emote .sheet {
   position: absolute; left: calc(var(--size) * -0.625); top: calc(var(--size) * -0.625);

@@ -29,17 +29,24 @@
   "devDependencies": {
     "@fluentui/react-components": "9.74.9",
     "@fluentui/react-icons": "2.0.343",
+    "@fluentui/react-motion-components-preview": "0.15.9",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@noble/secp256k1": "3.2.0",
     "@types/node": "22.20.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@types/ws": "8.18.2",
     "@vitejs/plugin-react": "5.2.0",
+    "dompurify": "3.4.17",
     "electron": "44.5.1",
     "electron-builder": "26.15.3",
     "electron-updater": "6.8.10",
     "electron-vite": "5.0.0",
     "esbuild": "0.25.12",
+    "fflate": "0.8.3",
+    "jsdom": "29.1.1",
+    "marked": "18.1.1",
+    "pdfjs-dist": "6.4.299",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "typescript": "5.9.3",
@@ -52,10 +59,17 @@
     "productName": "lolPing",
     "directories": { "output": "release", "buildResources": "build" },
     "files": ["out/**/*", "package.json"],
+    "extraResources": [
+      { "from": "node_modules/pdfjs-dist/cmaps", "to": "pdfjs/cmaps" },
+      { "from": "node_modules/pdfjs-dist/standard_fonts", "to": "pdfjs/standard_fonts" }
+    ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "build/icon.ico",
-      "extraResources": [{ "from": "native/hook-helper/build/hook-helper.exe", "to": "hook-helper.exe" }]
+      "extraResources": [
+        { "from": "native/hook-helper/build/hook-helper.exe", "to": "hook-helper.exe" },
+        { "from": "native/hook-helper/build/context-helper.exe", "to": "context-helper.exe" }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -73,11 +87,14 @@
       "hardenedRuntime": false,
       "extraResources": [
         { "from": "native/hook-helper/build/hook-helper", "to": "hook-helper" },
+        { "from": "native/hook-helper/build/context-helper", "to": "context-helper" },
         { "from": "build", "to": ".", "filter": ["tray*Template*.png"] }
       ],
       "extendInfo": {
         "NSAccessibilityUsageDescription": "lolPing reads the mouse and keyboard to open the ping wheel or the emote wheel when you hold its key and drag.",
         "NSDownloadsFolderUsageDescription": "lolPing saves update downloads to your Downloads folder.",
+        "NSAppleEventsUsageDescription": "lolPing opens Terminal to continue an agent's session.",
+        "NSScreenCaptureUsageDescription": "The teammate looks at your screen when you ask it to ping what it sees.",
         "NSLocalNetworkUsageDescription": "lolPing finds the other people in your room on the local network and sends them your pings."
       }
     },

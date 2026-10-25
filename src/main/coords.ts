@@ -14,6 +14,21 @@ export function placeInside(at: { x: number; y: number }, size: { width: number;
   };
 }
 
+/** Space between the spot and a box placed beside it. */
+const SPOT_GAP = 16;
+
+/**
+ * Where a box of `size` sits beside a spot: right of it, or left when the right side would leave `area`, vertically
+ * centred on it and kept inside `area`. `side` is the side of the spot the box is on.
+ */
+export function besideSpot(
+  spot: { x: number; y: number }, size: { width: number; height: number }, area: Rect,
+): { x: number; y: number; side: 'left' | 'right' } {
+  const side = spot.x + SPOT_GAP + size.width <= area.x + area.width ? 'right' : 'left';
+  const x = side === 'right' ? spot.x + SPOT_GAP : spot.x - SPOT_GAP - size.width;
+  return { ...placeInside({ x, y: spot.y - size.height / 2 }, size, area), side };
+}
+
 /** One monitor: its rect in DIPs (Electron) and in physical pixels (the hook helper). */
 export interface DisplayMap {
   id: number;
@@ -56,4 +71,19 @@ export function physicalToLocal(x: number, y: number, maps: readonly DisplayMap[
   const target = displayId === undefined ? p.display : maps.find((m) => m.id === displayId);
   if (!target) return null;
   return { displayId: target.id, x: p.x - target.dip.x, y: p.y - target.dip.y };
+}
+
+/**
+ * A physical box → CSS pixels inside the overlay of the display its centre is on (the nearest one when it is on
+ * none), sized by that display's scale. A box that spans two displays is drawn on the one that holds most of it.
+ */
+export function physicalBoxToLocal(
+  box: { x: number; y: number; w: number; h: number }, maps: readonly DisplayMap[],
+): (LocalPoint & { w: number; h: number }) | null {
+  const d = displayAtPhysical(box.x + box.w / 2, box.y + box.h / 2, maps);
+  if (!d) return null;
+  return {
+    displayId: d.id, x: (box.x - d.phys.x) / d.scale, y: (box.y - d.phys.y) / d.scale, w: box.w / d.scale,
+    h: box.h / d.scale,
+  };
 }

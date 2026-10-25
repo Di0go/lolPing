@@ -3,11 +3,21 @@ import { DEFAULT_CLICK_EMOTE, DEFAULT_EMOTE_WHEEL } from '../../src/shared/emote
 import { MOD } from '../../src/shared/keys';
 import { formatRoomCode, makeRoomCode } from '../../src/shared/roomCode';
 import {
-  DEFAULT_SETTINGS, keyboardTriggers, mergeSettings, normalizeSettings, overlaySettings, patchClashes, rendererPatch, sameTrigger,
-  soundLevel, triggerLabel, triggersClash,
+  askKeyClashes, askKeyHeld, asksOnPing, DEFAULT_SETTINGS, keyboardTriggers, mergeSettings, normalizeSettings,
+  overlaySettings, patchClashes, rendererPatch, sameTrigger, separateAskKey, soundLevel, triggerLabel, triggersClash,
+  type TriggerKey,
 } from '../../src/shared/settings';
+import type { AskTrigger } from '../../src/shared/teammate/settings';
 
 describe('normalizeSettings', () => {
+  it('loads a 0.5.3 settings file with the teammate off', () => {
+    const { teammate: _t, features: _f, ...old } = DEFAULT_SETTINGS;
+    const s = normalizeSettings({ ...old, features: { emotes: false, rooms: true } });
+    expect(s.features.teammate).toBe(false);
+    expect(s.features.emotes).toBe(false);
+    expect(s.teammate).toEqual(DEFAULT_SETTINGS.teammate);
+  });
+
   it('returns defaults for missing or non-object input', () => {
     for (const raw of [undefined, null, 42, 'x', [1, 2]]) expect(normalizeSettings(raw)).toEqual(DEFAULT_SETTINGS);
   });
@@ -461,6 +471,64 @@ describe('emote key clashes', () => {
   });
 });
 
+describe('ask key clashes', () => {
+  const on = { ...DEFAULT_SETTINGS.features, teammate: true };
+  const current = {
+    ...DEFAULT_SETTINGS, trigger: 'alt' as const, emoteTrigger: 'ctrl' as const, features: on,
+    teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'mouse4' as const },
+  };
+
+  it('refuses a ping or emote key on the separate ask key while the teammate is on', () => {
+    expect(askKeyClashes(current, { trigger: 'mouse4' })).toBe(true);
+    expect(askKeyClashes(current, { emoteTrigger: 'mouse4' })).toBe(true);
+    const caps = { ...current, teammate: { ...current.teammate, askTrigger: { vk: 0x14 } } };
+    expect(askKeyClashes(caps, { trigger: 'capslock' })).toBe(true);
+    expect(askKeyClashes(current, { trigger: 'shift' })).toBe(false);
+    expect(askKeyClashes(current, { emoteTrigger: 'off' })).toBe(false);
+    expect(askKeyClashes(current, { volume: 3 })).toBe(false);
+  });
+
+  it('has nothing to refuse when the ask key is the ping key or the teammate is off', () => {
+    const same = { ...current, teammate: { ...current.teammate, askTrigger: 'same' as const } };
+    expect(askKeyClashes(same, { trigger: 'mouse4' })).toBe(false);
+    expect(askKeyClashes({ ...current, features: DEFAULT_SETTINGS.features }, { trigger: 'mouse4' })).toBe(false);
+  });
+
+  it('names the separate ask key only while the teammate is on', () => {
+    expect(separateAskKey(current)).toBe('mouse4');
+    expect(separateAskKey({ ...current, teammate: { ...current.teammate, askTrigger: 'same' } })).toBeNull();
+    expect(separateAskKey({ ...current, features: DEFAULT_SETTINGS.features })).toBeNull();
+  });
+
+  it('asks on the ping wheel only with the teammate on and its ask key on the ping key', () => {
+    const same = { ...current, teammate: { ...current.teammate, askTrigger: 'same' as const } };
+    expect(asksOnPing(same)).toBe(true);
+    expect(asksOnPing(current)).toBe(false);
+    expect(asksOnPing({ ...same, features: DEFAULT_SETTINGS.features })).toBe(false);
+    expect(overlaySettings(same).ask.onPing).toBe(true);
+    expect(overlaySettings(current).ask.onPing).toBe(false);
+  });
+
+  it('holds the key that asks only when it is a keyboard key', () => {
+    const ask = (askTrigger: AskTrigger, trigger: TriggerKey = 'alt') => askKeyHeld({
+      ...current, trigger, teammate: { ...current.teammate, askTrigger },
+    });
+    expect(ask('mouse4')).toBe(false);
+    expect(ask('mouse5')).toBe(false);
+    expect(ask('win')).toBe(true);
+    expect(ask({ vk: 0x54 })).toBe(true);
+    // On the ping key, the ping trigger is the key that asks.
+    expect(ask('same', 'mouse5')).toBe(false);
+    expect(ask('same', 'ctrl')).toBe(true);
+  });
+
+  it('moves a separate ask key off a new ping key instead of making it share the ping key', () => {
+    const off = { ...current, features: DEFAULT_SETTINGS.features };
+    expect(mergeSettings(off, { trigger: 'mouse4' }).teammate.askTrigger).toBe('win');
+    expect(mergeSettings(off, { emoteTrigger: 'mouse4' }).teammate.askTrigger).toBe('win');
+  });
+});
+
 describe('mergeSettings', () => {
   it('applies a patch and re-normalizes it', () => {
     const s = mergeSettings(DEFAULT_SETTINGS, { volume: 500, tickSound: false });
@@ -524,7 +592,34 @@ describe('helpers', () => {
       pingSizePx: 110, pingDurationS: 3.2, keepLastPing: false, volume: 70, muted: false, tickSound: true,
       wheelSizePx: 600, wheel: ['danger', 'push', 'omw', 'allin', 'assist', 'needvision', 'missing', 'enemyvision'], clickPingId: 'generic',
       emoteWheel: [...DEFAULT_EMOTE_WHEEL], clickEmoteId: DEFAULT_CLICK_EMOTE, emoteSizePx: 150, emoteSound: true, customEmotes: [],
+      ask: {
+        tag: { name: 'AI', color: 3, rgb: null },
+        labels: {
+          danger: "What's wrong", push: 'Keep going', omw: 'Do it', allin: 'Whole picture', assist: 'Show me how',
+          needvision: 'Look it up', missing: 'Explain', enemyvision: 'Grab',
+        },
+        disabled: [],
+        onPing: false,
+        click: true,
+      },
     });
+  });
+
+  it('asks on the ping wheel only while the teammate is on and shares the ping key', () => {
+    const same = { askTrigger: 'same', askClick: false };
+    expect(overlaySettings(normalizeSettings({ teammate: same })).ask).toMatchObject({ onPing: false, click: false });
+    const on = normalizeSettings({ features: { teammate: true }, teammate: same });
+    expect(overlaySettings(on).ask.onPing).toBe(true);
+    const own = normalizeSettings({ features: { teammate: true }, teammate: { askTrigger: 'win' } });
+    expect(overlaySettings(own).ask.onPing).toBe(false);
+  });
+
+  it('labels the ask wheel in the app language and lists the switched-off intents', () => {
+    const s = normalizeSettings({ teammate: { intents: { danger: { enabled: false }, push: { label: 'More' } } } });
+    const { ask } = overlaySettings(s, 'zh-CN');
+    expect(ask.disabled).toEqual(['danger']);
+    expect(ask.labels.push).toBe('More');
+    expect(ask.labels.missing).toBe('解释');
   });
 
   it('overlaySettings carries the emote fields', () => {
@@ -566,10 +661,12 @@ describe('update settings', () => {
 });
 
 describe('feature settings', () => {
-  it('loads a 0.5.2 settings file with every feature on', () => {
+  it('loads a 0.5.2 settings file with every feature on but the teammate', () => {
     const { features: _features, ...old } = DEFAULT_SETTINGS;
     expect(normalizeSettings(old).features).toEqual(DEFAULT_SETTINGS.features);
-    expect(Object.values(normalizeSettings(old).features).every((v) => v)).toBe(true);
+    const { teammate, ...rest } = normalizeSettings(old).features;
+    expect(teammate).toBe(false);
+    expect(Object.values(rest).every((v) => v)).toBe(true);
   });
 
   it('keeps a switched-off feature', () => {
@@ -581,6 +678,13 @@ describe('feature settings', () => {
   it('falls back to every feature on when features is not an object', () => {
     for (const raw of ['yes', 1, null, [true]]) expect(normalizeSettings({ features: raw }).features).toEqual(DEFAULT_SETTINGS.features);
     expect(normalizeSettings({ features: { rooms: 1 } }).features.rooms).toBe(true);
+  });
+
+  it('keeps the teammate off on Linux, where it is not built', () => {
+    const on = { features: { ...DEFAULT_SETTINGS.features, teammate: true } };
+    expect(normalizeSettings(on, 'linux').features.teammate).toBe(false);
+    expect(normalizeSettings(on, 'win').features.teammate).toBe(true);
+    expect(normalizeSettings(on, 'mac').features.teammate).toBe(true);
   });
 });
 

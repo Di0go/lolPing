@@ -44,6 +44,21 @@ const api: SettingsApi = {
   checkForUpdates: () => ipcRenderer.invoke(SETTINGS_CH.updateCheck),
   startUpdate: () => ipcRenderer.invoke(SETTINGS_CH.updateStart),
   openReleasePage: () => ipcRenderer.invoke(SETTINGS_CH.updateOpenRelease),
+  setTeammateKey: (profileId, key) => ipcRenderer.invoke(SETTINGS_CH.teammateSetKey, profileId, key),
+  hasTeammateKey: (profileId) => ipcRenderer.invoke(SETTINGS_CH.teammateHasKey, profileId),
+  checkTeammateKey: (profileId) => ipcRenderer.invoke(SETTINGS_CH.teammateCheckKey, profileId),
+  checkTeammateAgent: (profileId) => ipcRenderer.invoke(SETTINGS_CH.teammateCheckAgent, profileId),
+  pickTeammateFolder: () => ipcRenderer.invoke(SETTINGS_CH.teammatePickFolder),
+  getTeammateAgentSnippet: (profileId) => ipcRenderer.invoke(SETTINGS_CH.teammateAgentSnippet, profileId),
+  getTeammateConnectSnippet: (appId) => ipcRenderer.invoke(SETTINGS_CH.teammateConnectSnippet, appId),
+  getTeammateRecentApps: () => ipcRenderer.invoke(SETTINGS_CH.teammateRecentApps),
+  getTeammateEditors: () => ipcRenderer.invoke(SETTINGS_CH.teammateEditors),
+  setTeammateInstructions: (text) => ipcRenderer.invoke(SETTINGS_CH.teammateSetInstructions, text),
+  getTeammateInstructions: () => ipcRenderer.invoke(SETTINGS_CH.teammateInstructions),
+  getTeammateUsage: () => ipcRenderer.invoke(SETTINGS_CH.teammateUsage),
+  teammateHistory: (op) => ipcRenderer.invoke(SETTINGS_CH.teammateHistory, op),
+  getTeammateStatus: () => ipcRenderer.invoke(SETTINGS_CH.teammateStatus),
+  openScreenRecording: () => ipcRenderer.invoke(SETTINGS_CH.teammateOpenScreen),
 };
 
 contextBridge.exposeInMainWorld('settingsApi', api);

@@ -11,11 +11,11 @@
 
 #include "app.h"
 #include "commands.h"
+#include "selfMarker.h"
 
 namespace lp {
 namespace {
 
-constexpr ULONG_PTR kSelfMarker = 0x4C50494E;  // "LPIN" in dwExtraInfo marks our own SendInput events
 constexpr UINT kWmCommand = WM_APP + 1;
 constexpr UINT kWmInject = WM_APP + 2;
 
@@ -145,6 +145,8 @@ LRESULT CALLBACK mouseProc(int code, WPARAM wParam, LPARAM lParam) {
     bool known = true;
     switch (wParam) {
       case WM_MOUSEMOVE: e.kind = EvKind::MouseMove; break;
+      case WM_MOUSEWHEEL:
+      case WM_MOUSEHWHEEL: e.kind = EvKind::Scroll; break;
       case WM_LBUTTONDOWN: e.kind = EvKind::MouseDown; e.btn = Btn::Left; break;
       case WM_LBUTTONUP: e.kind = EvKind::MouseUp; e.btn = Btn::Left; break;
       case WM_RBUTTONDOWN: e.kind = EvKind::MouseDown; e.btn = Btn::Right; break;
@@ -162,7 +164,8 @@ LRESULT CALLBACK mouseProc(int code, WPARAM wParam, LPARAM lParam) {
     if (known && e.kind == EvKind::MouseDown) g_decision->syncKeyStates(isKeyDown);
     if (known) {
       // Moves may overtake queued injects: a replayed press just lands at the newer cursor position.
-      const bool swallow = e.kind == EvKind::MouseMove
+      // A scroll is only reported, never swallowed, so it needs no order either.
+      const bool swallow = e.kind == EvKind::MouseMove || e.kind == EvKind::Scroll
           ? apply(g_decision->onEvent(e))
           : applyInOrder(e, {e.kind == EvKind::MouseDown ? InjectKind::ButtonDown : InjectKind::ButtonUp, e.btn});
       if (swallow) return 1;
@@ -271,6 +274,7 @@ int runHooks(Output& out) {
         case Command::Kind::Config: apply(decision.setConfig(c.config)); break;
         case Command::Kind::SetEnabled: apply(decision.setEnabled(c.flag)); break;
         case Command::Kind::Suspend: apply(decision.setSuspended(c.flag)); break;
+        case Command::Kind::StaleWatch: apply(decision.setStaleWatch(c.flag)); break;
         case Command::Kind::Shutdown: PostQuitMessage(0); break;
         default: out.error("invalid command: " + *text); break;
       }

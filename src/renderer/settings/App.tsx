@@ -1,16 +1,17 @@
-import { Dropdown, FluentProvider, Option, webDarkTheme, webLightTheme } from '@fluentui/react-components';
+import { Dropdown, FluentProvider, motionTokens, Option, webDarkTheme, webLightTheme } from '@fluentui/react-components';
 import {
   ArrowMove24Regular, ArrowSync24Regular, CursorClick24Regular, DataPie24Regular, Games24Regular, Info24Regular, Keyboard24Regular, MusicNote224Regular, Pin24Regular,
   Power24Regular, ResizeLarge24Regular, Rocket24Regular, Settings24Regular, Speaker224Regular, SpeakerMute24Regular,
   Apps24Regular, Timer24Regular, Cursor24Regular, Emoji24Regular, LocalLanguage24Regular, PeopleCommunity24Regular,
+  Sparkle24Regular,
 } from '@fluentui/react-icons';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { LANGUAGE_NAMES, LANGUAGE_PREFS, resolveLang, strings, type LanguagePref, type Strings } from '../../shared/i18n';
 import type { AppStatus } from '../../shared/ipc';
 import { featureOn, type FeatureId } from '../../shared/features';
 import { hotkeyParts } from '../../shared/keys';
 import { ALL_PINGS, DEFAULT_CLICK_PING, DEFAULT_WHEEL, LOGO_TEXTURE, textureUrl, type PingId } from '../../shared/pings';
-import { triggerLabel, type Settings } from '../../shared/settings';
+import { separateAskKey, triggerLabel, type Settings } from '../../shared/settings';
 import type { WheelPatch } from '../../shared/wheelLayout';
 import { api } from './api';
 import { AboutSection } from './components/AboutSection';
@@ -21,10 +22,12 @@ import { PermissionCard } from './components/PermissionCard';
 import { RoomSection } from './components/RoomSection';
 import { SettingRow, SliderRow, SwitchRow } from './components/rows';
 import { StatusCard } from './components/StatusCard';
+import { TeammateSection } from './components/TeammateSection';
 import { TriggerPicker } from './components/TriggerPicker';
 import { WheelEditor, type PoolItem } from './components/WheelEditor';
 import { TextContext, useText } from './text';
 import { macDarkTheme, macLightTheme } from './macTheme';
+import { barFrames } from './navIndicator';
 import { useAppState, type Update } from './useAppState';
 import { useUpdateState } from './useUpdateState';
 
@@ -40,9 +43,15 @@ const SECTIONS: { id: string; label: (t: Strings) => string; icon: ReactNode; fe
   { id: 'wheel', label: (t) => t.navWheel, icon: <DataPie24Regular /> },
   { id: 'emotes', label: (t) => t.navEmotes, icon: <Emoji24Regular />, feature: 'emotes' },
   { id: 'room', label: (t) => t.navRoom, icon: <PeopleCommunity24Regular />, feature: 'rooms' },
+  { id: 'teammate', label: (t) => t.navTeammate, icon: <Sparkle24Regular />, feature: 'teammate' },
   { id: 'features', label: (t) => t.navFeatures, icon: <Apps24Regular /> },
   { id: 'app', label: (t) => t.navApp, icon: <Settings24Regular /> },
 ];
+
+/** The nav selection bar's height; it sits centred on the item. */
+const BAR_PX = 16;
+/** How long the page's first rows keep their staggered entrance before later rows just rise in. */
+const ENTRANCE_MS = 900;
 
 /** Pings that aren't in League's default wheel layout get a "new" badge. */
 const NEW_PINGS = new Set<PingId>(['bait', 'visioncleared', 'missingflip']);
@@ -98,22 +107,58 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
   const trigger = triggerLabel(s.trigger, t.lang, PLATFORM);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [triggerError, setTriggerError] = useState<string | null>(null);
+  const askKey = separateAskKey(s); // the key pickers can't take it; main refuses it too
   const mouseTrigger = s.trigger === 'mouse4' || s.trigger === 'mouse5';
   const customTrigger = typeof s.trigger === 'object';
   const pingPool: PoolItem<PingId>[] = ALL_PINGS.map((p) => ({
     id: p.id, icon: textureUrl(p.icon), name: t.pingNames[p.id], badge: NEW_PINGS.has(p.id) ? t.wheelNew : undefined,
   }));
 
+  const [entering, setEntering] = useState(true);
   useEffect(() => {
-    const show = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-    const initial = location.hash.slice(1);
-    if (initial) requestAnimationFrame(() => show(initial));
-    return api.onShowSection(show);
+    const timer = setTimeout(() => setEntering(false), ENTRANCE_MS);
+    return () => clearTimeout(timer);
   }, []);
+
+  // A jump from the nav selects its item at once; the scroll spy waits until the smooth scroll has ended.
+  const jumping = useRef(false);
+  const show = (id: string) => {
+    const main = mainRef.current;
+    const el = document.getElementById(id);
+    if (!main || !el) return;
+    const max = main.scrollHeight - main.clientHeight;
+    const target = Math.min(max, el.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop);
+    jumping.current = Math.abs(target - main.scrollTop) > 1;
+    if (sections.some((sec) => sec.id === id)) setActive(id);
+    el.scrollIntoView({ behavior: 'smooth' });
+  };
+  const showRef = useRef(show);
+  showRef.current = show;
+  useEffect(() => {
+    const initial = location.hash.slice(1);
+    if (initial) requestAnimationFrame(() => showRef.current(initial));
+    return api.onShowSection((id) => showRef.current(id));
+  }, []);
+
+  const navRef = useRef<HTMLElement>(null);
+  const barRef = useRef<HTMLSpanElement>(null);
+  const barTop = useRef<number | null>(null);
+  const navIds = sections.map((sec) => sec.id).join();
+  useLayoutEffect(() => {
+    const item = navRef.current?.querySelector<HTMLElement>(`[data-section="${active}"]`);
+    const bar = barRef.current;
+    if (!item || !bar) return;
+    const top = item.offsetTop + (item.offsetHeight - BAR_PX) / 2;
+    const from = barTop.current;
+    barTop.current = top;
+    bar.style.top = `${top}px`;
+    if (from === null || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    bar.animate(barFrames(from, top, BAR_PX), { duration: motionTokens.durationSlow, easing: motionTokens.curveDecelerateMid });
+  }, [active, navIds]);
 
   const onScroll = () => {
     const main = mainRef.current;
-    if (!main) return;
+    if (!main || jumping.current) return;
     let current = sections[0].id;
     for (const sec of sections) {
       const el = document.getElementById(sec.id);
@@ -123,12 +168,13 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
   };
 
   return (
-    <div className="app">
+    <div className={`app${entering ? ' entering' : ''}`}>
       <div className="titlebar">
         <img src={textureUrl(LOGO_TEXTURE)} alt="" />
         lolPing
       </div>
-      <nav className="side">
+      <nav className="side" ref={navRef}>
+        <span className="navBar" ref={barRef} />
         <div className="brand">
           <img src={textureUrl('pingwheel_basicpingrender')} alt="" />
           <div>
@@ -137,13 +183,15 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
           </div>
         </div>
         {sections.map((sec) => (
-          <button key={sec.id} className={`navItem${active === sec.id ? ' sel' : ''}`} onClick={() => document.getElementById(sec.id)?.scrollIntoView({ behavior: 'smooth' })}>
+          <button key={sec.id} data-section={sec.id} className={`navItem${active === sec.id ? ' sel' : ''}`} onClick={() => show(sec.id)}>
             {sec.icon}
             {sec.label(t)}
           </button>
         ))}
       </nav>
-      <main className="content" ref={mainRef} onScroll={onScroll}>
+      <main className="content" ref={mainRef} onScroll={onScroll} onScrollEnd={() => {
+        jumping.current = false;
+      }}>
         <h1 className="pageTitle">{t.pageTitle}</h1>
         {MAC && status.helper === 'noAccess' ? <PermissionCard stale={status.staleAccess === true} /> : null}
         <StatusCard settings={s} status={status} />
@@ -156,7 +204,7 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
               {customTrigger ? <span className="desc">{t.customKeyNote}</span> : null}
             </>
           )}>
-          <TriggerPicker value={s.trigger} blocked={s.emoteTrigger}
+          <TriggerPicker value={s.trigger} blocked={[s.emoteTrigger, ...(askKey ? [askKey] : [])]}
             onChange={(k) => {
               if (k !== 'off') void update({ trigger: k }).then((r) => setTriggerError(r.ok ? null : r.error));
             }} />
@@ -220,6 +268,13 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
           <>
             <div className="section" id="room">{t.navRoom}</div>
             <RoomSection settings={s} update={update} />
+          </>
+        ) : null}
+
+        {featureOn(s, 'teammate') ? (
+          <>
+            <div className="section" id="teammate">{t.navTeammate}</div>
+            <TeammateSection settings={s} update={update} />
           </>
         ) : null}
 

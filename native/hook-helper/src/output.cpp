@@ -5,9 +5,10 @@
 namespace lp {
 
 std::string formatEmit(const Emit& e) {
+  const char* wheel = e.wheel == WheelKind::Emote ? "emote" : e.wheel == WheelKind::Ask ? "ask" : "ping";
   auto pt = [&](const char* type) {
     return std::string("{\"type\":\"") + type + "\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) +
-           ",\"wheel\":\"" + (e.wheel == WheelKind::Emote ? "emote" : "ping") + "\"}";
+           ",\"wheel\":\"" + wheel + "\"}";
   };
   switch (e.kind) {
     case Emit::Kind::WheelOpen: return pt("wheelOpen");
@@ -18,6 +19,9 @@ std::string formatEmit(const Emit& e) {
     case Emit::Kind::Toggled: return std::string("{\"type\":\"toggled\",\"enabled\":") + (e.enabled ? "true" : "false") + "}";
     case Emit::Kind::TextRequested: return "{\"type\":\"textRequested\"}";
     case Emit::Kind::Panel: return std::string("{\"type\":\"panel\",\"show\":") + (e.show ? "true" : "false") + "}";
+    case Emit::Kind::TriggerUp: return std::string("{\"type\":\"triggerUp\",\"wheel\":\"") + wheel + "\"}";
+    case Emit::Kind::AskWords: return "{\"type\":\"askWords\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) + "}";
+    case Emit::Kind::Scroll: return "{\"type\":\"scroll\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) + "}";
   }
   return "{}";
 }
@@ -41,8 +45,8 @@ void Output::line(std::string s) {
 
 void Output::emit(const Emit& e) { line(formatEmit(e)); }
 
-// Version 4: the config takes a panel key and can emit panel.
-void Output::ready() { line("{\"type\":\"ready\",\"version\":4}"); }
+// Version 6: the config takes askDoubleTap; askWords and scroll events and the staleWatch command are new.
+void Output::ready() { line("{\"type\":\"ready\",\"version\":6}"); }
 
 void Output::error(const std::string& message) { line("{\"type\":\"error\",\"message\":\"" + jsonEscape(message) + "\"}"); }
 

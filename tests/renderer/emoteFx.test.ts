@@ -9,6 +9,7 @@ class FakeElement {
   src = '';
   alt = '';
   draggable = true;
+  readonly dataset: Record<string, string> = {};
   parent: FakeElement | null = null;
   children: FakeElement[] = [];
   readonly style: Record<string, unknown> & { setProperty(k: string, v: string): void } = { setProperty: () => undefined };
@@ -145,6 +146,57 @@ describe('EmoteStage', () => {
     fail(new Error('404'));
     await flush();
     expect(layer.find('emote')).toHaveLength(0);
+  });
+});
+
+describe('EmoteStage kept emotes', () => {
+  it('holds a kept bundled emote as its icon after the animation, until it is cleared', async () => {
+    vi.useFakeTimers();
+    try {
+      const layer = new FakeElement('div');
+      const stage = new EmoteStage(layer as unknown as HTMLElement, () => Promise.resolve(new Blob(['x'])));
+      stage.spawn('mate', { kind: 'bundled', slug: 'facepalm' }, 10, 20, { sizePx: 150, keep: true });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      const [emote] = layer.find('emote');
+      expect(emote).toBeDefined();
+      expect(emote.find('sheet')).toHaveLength(0);
+      expect(emote.find('still')[0].src).toMatch(/facepalm\.png$/);
+      stage.clear('mate');
+      expect(layer.find('emote')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the icon when the animation arrives after the swap', async () => {
+    vi.useFakeTimers();
+    try {
+      const layer = new FakeElement('div');
+      let arrive: (b: Blob) => void = () => undefined;
+      const stage = new EmoteStage(layer as unknown as HTMLElement, () => new Promise((resolve) => (arrive = resolve)));
+      stage.spawn('mate', { kind: 'bundled', slug: 'facepalm' }, 10, 20, { sizePx: 150, keep: true });
+      await vi.advanceTimersByTimeAsync(3_200);
+      arrive(new Blob(['x']));
+      await vi.advanceTimersByTimeAsync(0);
+      const [still] = layer.find('emote')[0].find('still');
+      expect(still.src).toMatch(/facepalm\.png$/);
+      stage.clear('mate');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still removes an emote that is not kept after its time', async () => {
+    vi.useFakeTimers();
+    try {
+      const layer = new FakeElement('div');
+      const stage = new EmoteStage(layer as unknown as HTMLElement, () => Promise.resolve(new Blob(['x'])));
+      stage.spawn('mate', { kind: 'bundled', slug: 'facepalm' }, 10, 20, { sizePx: 150 });
+      await vi.advanceTimersByTimeAsync(3_200);
+      expect(layer.find('emote')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -12,6 +12,14 @@ export interface PingFxOptions {
   tag?: PingTag;
   /** Stays after its animation, until the caller removes it. */
   keep?: boolean;
+  /** 'mate': the teammate's, which 'mate:clear' and 'mate:fade' find by its data-owner. */
+  owner?: 'mate';
+  /** The teammate's words for this spot, next to the ping. */
+  label?: string;
+  /** Animated dots on the tag: the teammate is still thinking. */
+  thinking?: boolean;
+  /** Only the tag (and label): no ground, rings or art. */
+  tagOnly?: boolean;
 }
 
 function img(name: string, cls = ''): HTMLImageElement {
@@ -33,27 +41,34 @@ const div = (cls: string): HTMLDivElement => {
 
 /** Adds one animated ping at (x, y) and removes it when its animation ends, unless `opts.keep`. Returns its element. */
 export function spawnPing(layer: HTMLElement, def: PingDef, x: number, y: number, opts: PingFxOptions): HTMLElement {
-  const root = div(opts.keep ? 'ping kept' : 'ping');
+  const root = div(['ping', opts.keep ? 'kept' : '', opts.tagOnly ? 'tag-only' : ''].filter(Boolean).join(' '));
   root.style.left = `${x}px`;
   root.style.top = `${y}px`;
   root.style.setProperty('--c', def.color);
   root.style.setProperty('--size', `${opts.sizePx}px`);
   root.style.setProperty('--dur', `${opts.durationS}s`);
-  root.append(div('ground'), div('ring'), div('ring r2'), div('ring r3'));
-
-  const art = div('art');
-  if (def.art.length === 2) {
-    const clash = div('clash');
-    clash.append(img(def.art[0], 'a1'), img(def.art[1], 'a2'));
-    art.append(clash, div('flash'));
-  } else {
-    const pop = div('pop');
-    pop.append(img(def.art[0]));
-    art.append(pop);
+  if (opts.owner) root.dataset.owner = opts.owner;
+  if (!opts.tagOnly) {
+    root.append(div('ground'), div('ring'), div('ring r2'), div('ring r3'));
+    const art = div('art');
+    if (def.art.length === 2) {
+      const clash = div('clash');
+      clash.append(img(def.art[0], 'a1'), img(def.art[1], 'a2'));
+      art.append(clash, div('flash'));
+    } else {
+      const pop = div('pop');
+      pop.append(img(def.art[0]));
+      art.append(pop);
+    }
+    root.append(art);
   }
-  root.append(art);
+  if (opts.label) {
+    const label = div('label');
+    label.textContent = opts.label; // never HTML: the words come from a model
+    root.append(label);
+  }
   if (opts.tag) {
-    const tag = div('tag');
+    const tag = div(opts.thinking ? 'tag dots' : 'tag');
     tag.textContent = opts.tag.name; // never HTML: the name comes from another machine
     tag.style.setProperty('--tag', tagColorCss(opts.tag.color, opts.tag.rgb));
     root.append(tag);

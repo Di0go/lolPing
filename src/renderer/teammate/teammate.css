@@ -1,0 +1,190 @@
+html,
+body {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* Thin rounded scrollbars in the theme's colours, not Chromium's light default with arrows. Only the ::-webkit
+   pseudo-elements: setting scrollbar-width or scrollbar-color would switch Chromium to the standard, square ones. */
+:root {
+  color-scheme: light dark;
+  --mate-thumb: rgba(0, 0, 0, .2);
+  --mate-thumb-near: rgba(0, 0, 0, .32);
+  --mate-thumb-hover: rgba(0, 0, 0, .46);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --mate-thumb: rgba(255, 255, 255, .16);
+    --mate-thumb-near: rgba(255, 255, 255, .28);
+    --mate-thumb-hover: rgba(255, 255, 255, .42);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* The transparent border is padding round the thumb, so it reads as a 6 px pill inside a 12 px hit area. */
+::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: var(--mate-thumb);
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--mate-thumb-near);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--mate-thumb-hover);
+}
+
+html[data-view='history'],
+html[data-view='history'] body {
+  height: 100%;
+  overflow: auto;
+}
+
+/* Markdown from the model, already sanitised: text, lists, code and tables. */
+.mate-md {
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  overflow-wrap: anywhere;
+}
+
+.mate-md > :first-child {
+  margin-top: 0;
+}
+
+.mate-md > :last-child {
+  margin-bottom: 0;
+}
+
+.mate-md h1,
+.mate-md h2,
+.mate-md h3,
+.mate-md h4 {
+  font-size: var(--fontSizeBase400);
+  margin: 12px 0 4px;
+}
+
+.mate-md p,
+.mate-md ul,
+.mate-md ol,
+.mate-md blockquote {
+  margin: 6px 0;
+}
+
+.mate-md ul,
+.mate-md ol {
+  padding-left: 20px;
+}
+
+.mate-md blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--colorNeutralStroke1);
+  color: var(--colorNeutralForeground2);
+}
+
+.mate-md code {
+  font-family: var(--fontFamilyMonospace);
+  font-size: var(--fontSizeBase200);
+  background: var(--colorNeutralBackground3);
+  border-radius: var(--borderRadiusSmall);
+  padding: 1px 4px;
+}
+
+.mate-md pre {
+  position: relative;
+  background: var(--colorNeutralBackground3);
+  border-radius: var(--borderRadiusMedium);
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+.mate-md pre code {
+  padding: 0;
+  background: none;
+}
+
+.mate-md table {
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+
+.mate-md th,
+.mate-md td {
+  border: 1px solid var(--colorNeutralStroke2);
+  padding: 2px 6px;
+}
+
+.mate-md [data-link] {
+  color: var(--colorBrandForegroundLink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color var(--durationFaster) var(--curveEasyEase),
+    text-decoration-color var(--durationFaster) var(--curveEasyEase);
+}
+
+.mate-md [data-link]:hover {
+  color: var(--colorBrandForegroundLinkHover);
+  text-decoration-color: currentColor;
+}
+
+.mate-copy-code {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font: inherit;
+  font-size: var(--fontSizeBase100);
+  color: var(--colorNeutralForeground2);
+  background: var(--colorNeutralBackground1);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--borderRadiusSmall);
+  padding: 0 6px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--durationFast) var(--curveDecelerateMid),
+    transform var(--durationFast) var(--curveDecelerateMid),
+    background-color var(--durationFaster) var(--curveEasyEase);
+}
+
+.mate-copy-code:hover {
+  background: var(--colorNeutralBackground1Hover);
+}
+
+.mate-md pre:hover .mate-copy-code,
+.mate-copy-code:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mate-copy-code,
+  .mate-md [data-link] {
+    transition: none;
+  }
+}
+
+html[data-view='history'] #root {
+  height: 100%;
+}

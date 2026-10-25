@@ -183,6 +183,11 @@ CGEventRef tapCallback(CGEventTapProxy, CGEventType type, CGEventRef event, void
       if (!mouseButton(event, e.btn)) return event;
       e.kind = type == kCGEventOtherMouseDown ? EvKind::MouseDown : EvKind::MouseUp;
       break;
+    // A scroll is only reported (while the stale watch is on), never swallowed.
+    case kCGEventScrollWheel:
+      e.kind = EvKind::Scroll;
+      apply(g_decision->onEvent(e));
+      return event;
     default:
       return event;
   }
@@ -199,6 +204,7 @@ void handleCommand(const std::string& text) {
     case Command::Kind::Config: apply(g_decision->setConfig(c.config)); break;
     case Command::Kind::SetEnabled: apply(g_decision->setEnabled(c.flag)); break;
     case Command::Kind::Suspend: apply(g_decision->setSuspended(c.flag)); break;
+    case Command::Kind::StaleWatch: apply(g_decision->setStaleWatch(c.flag)); break;
     case Command::Kind::Shutdown: CFRunLoopStop(CFRunLoopGetCurrent()); break;
     default: g_out->error("invalid command: " + text); break;
   }
@@ -220,7 +226,8 @@ int runHooks(Output& out) {
       CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) |
       CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp) |
       CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventLeftMouseDragged) |
-      CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged);
+      CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged) |
+      CGEventMaskBit(kCGEventScrollWheel);
   g_tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, tapCallback, nullptr);
   if (g_tap == nullptr) {
     out.error("noAccess", "Can't read input: lolPing needs Accessibility permission");
