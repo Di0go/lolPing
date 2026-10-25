@@ -209,6 +209,8 @@ interface Run {
   box: Rect | null;
   /** What the action runner is given with each call of this ask; made at the first one. */
   info: RunInfo | null;
+  /** The page under its marks moved: no more of its pings or emotes are drawn, and its later bubble isn't watched. */
+  stale: boolean;
 }
 
 const isAction = (c: ToolCall): c is ActionCall => (
@@ -314,7 +316,8 @@ function routeLabel(reason: RouteReason, t: TeammateSettings, lang: Lang): strin
 /**
  * Turns an ask into an answer on screen: capture, model turns, then the receipt, the line, the teammate's pings and
  * emotes, the card and the history entry. One ask at a time; anything from an ask that was replaced or cancelled is
- * dropped. Emits 'state' (running: boolean) when an ask starts or ends.
+ * dropped. Emits 'state' (running: boolean) when an ask starts or ends, and 'watch' ({ window } of the ask whose
+ * marks or bubble came up, or null once both are gone) for the stale watch.
  */
 export class AskController extends EventEmitter {
   private run: Run | null = null;
@@ -328,6 +331,8 @@ export class AskController extends EventEmitter {
   private bubbleEndsAt = 0;
   private fadeTimer: Timer | null = null;
   private readonly pingTimers = new Set<Timer>();
+  /** The run the stale watch is on, from its first mark or bubble until both are gone. */
+  private watched: Run | null = null;
   private nextPingAt = 0;
   /** When the answer on screen finished or failed; its marks stay MARKS_MIN_MS from then. Null while it is coming. */
   private answeredAt: number | null = null;
@@ -409,7 +414,7 @@ export class AskController extends EventEmitter {
       rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
-      system: null, fields: [], box: null, info: null,
+      system: null, fields: [], box: null, info: null, stale: false,
     };
     this.run = run;
     this.shown = run;
@@ -503,7 +508,7 @@ export class AskController extends EventEmitter {
    */
   hideBubbleForPut(): void {
     if (!this.bubbleShown) return this.deps.windows.hideNow('bubble'); // one still fading out from a hide just before
-    this.hideBubble(true);
+    this.hideBubble('now');
     this.hiddenForPut = this.shown;
   }
 
@@ -529,6 +534,22 @@ export class AskController extends EventEmitter {
     this.answeredAt = null;
     this.shown = null;
     this.viewed = null;
+  }
+
+  /**
+   * The page under the teammate's marks moved: its pings, emotes and bubble fade (the card stays, it holds the answer
+   * apart from the page), and a running ask draws no more of them.
+   */
+  stale(): void {
+    for (const timer of this.pingTimers) clearTimeout(timer);
+    this.pingTimers.clear();
+    for (const run of [this.shown, this.watched]) if (run) run.stale = true;
+    if (this.marksShown) {
+      this.deps.overlay.fadeMate();
+      this.marksShown = false;
+    }
+    this.hideBubble('stale');
+    this.watchGone();
   }
 
   /**
@@ -661,7 +682,7 @@ export class AskController extends EventEmitter {
       folder: '', cwd: null, session: null, agentRun: null, shot: null, app: '', title: '', window: '', thumb: '',
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null,
-      info: null,
+      info: null, stale: false,
     };
   }
 
@@ -968,6 +989,7 @@ export class AskController extends EventEmitter {
       ...at, id: 'omw', thinking: true, keep: true, silent: !t.receiptSound, tag: run.tag, ...tagOnly,
     });
     this.marksShown = true;
+    this.watchShown(run);
   }
 
   /** Draws one round of tool calls and says what each one did, for the model's next round. */
@@ -1081,6 +1103,7 @@ export class AskController extends EventEmitter {
   }
 
   private placePing(run: Run, c: Extract<ToolCall, { tool: 'ping' }>): void {
+    if (run.stale) return;
     const point = this.target(run, c.at);
     const at = point ? this.deps.overlay.toLocal(point) : null;
     if (!point || !at) return;
@@ -1095,8 +1118,10 @@ export class AskController extends EventEmitter {
     const when = Math.max(now, this.nextPingAt);
     this.nextPingAt = when + PING_GAP_MS;
     const show = () => {
+      if (run.stale) return;
       this.deps.overlay.spawnMate(ping);
       this.marksShown = true;
+      this.watchShown(run);
     };
     if (when <= now) {
       show();
@@ -1110,18 +1135,22 @@ export class AskController extends EventEmitter {
   }
 
   private placeEmote(run: Run, c: Extract<ToolCall, { tool: 'emote' }>): void {
+    if (run.stale) return;
     const point = this.target(run, c.at);
     const at = point ? this.deps.overlay.toLocal(point) : null;
     if (!point || !at) return;
     run.marks.push(point);
     this.deps.overlay.spawnMateEmote({ ...at, slug: c.slug, keep: true, tag: run.tag });
     this.marksShown = true;
+    this.watchShown(run);
   }
 
   private say(run: Run, text: string): void {
     if (run.line) {
       run.markdown.push(text);
-      this.refresh(run);
+      // The page moved and its line faded, but the user still wants the answer: the line comes back with it.
+      if (run.stale && !this.bubbleShown && !this.cardShown) this.showLine(run, run.line);
+      else this.refresh(run);
       return;
     }
     const { line, rest } = splitLine(text, run.lang);
@@ -1230,10 +1259,11 @@ export class AskController extends EventEmitter {
     run.machine.fail(reason);
     this.stopRun();
     this.clearMarks();
-    const at = this.deps.overlay.toLocal(run.receipt);
+    const at = run.stale ? null : this.deps.overlay.toLocal(run.receipt);
     if (at) {
       this.deps.overlay.spawnMate({ ...at, id: 'missing', keep: true, tag: run.tag });
       this.marksShown = true;
+      this.watchShown(run);
     }
     if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, false));
     this.showLine(run, line ?? strings(run.lang).teammate.ask.failed[reason]);
@@ -1259,6 +1289,7 @@ export class AskController extends EventEmitter {
     if (this.bubbleShown) this.deps.windows.updateBubble(state);
     else this.deps.windows.showBubble(this.popupAt(run), state);
     this.bubbleShown = true;
+    this.watchShown(run);
     this.armBubble(run, line);
   }
 
@@ -1345,6 +1376,7 @@ export class AskController extends EventEmitter {
       if (!this.marksShown) return;
       this.deps.overlay.fadeMate();
       this.marksShown = false;
+      this.watchGone();
     });
   }
 
@@ -1354,17 +1386,37 @@ export class AskController extends EventEmitter {
     if (!this.marksShown) return;
     this.deps.overlay.clearMate();
     this.marksShown = false;
+    this.watchGone();
   }
 
-  /** Any hide but the runner's own (a dismiss, the line's time, a new ask, a pause) keeps the bubble from coming back. */
-  private hideBubble(now = false): void {
+  /**
+   * Any hide but the runner's own (a dismiss, the line's time, a new ask, a pause) keeps the bubble from coming back.
+   * `now`: without the leave motion; `stale`: the slow fade of a page that moved.
+   */
+  private hideBubble(how: 'fast' | 'now' | 'stale' = 'fast'): void {
     this.hiddenForPut = null;
     this.clearTimer('bubble');
     this.bubbleEndsAt = 0;
     if (!this.bubbleShown) return;
-    if (now) this.deps.windows.hideNow('bubble');
+    if (how === 'now') this.deps.windows.hideNow('bubble');
+    else if (how === 'stale') this.deps.windows.hideBubble({ stale: true });
     else this.deps.windows.hideBubble();
     this.bubbleShown = false;
+    this.watchGone();
+  }
+
+  /** `run`'s mark or bubble came up: the stale watch follows it, from its own window. */
+  private watchShown(run: Run): void {
+    if (run.stale || this.watched === run) return;
+    this.watched = run;
+    this.emit('watch', { window: run.window });
+  }
+
+  /** Nothing of the teammate's that the page can leave behind is up: the watch ends. */
+  private watchGone(): void {
+    if (this.marksShown || this.bubbleShown || this.watched === null) return;
+    this.watched = null;
+    this.emit('watch', null);
   }
 
   private hideCard(): void {

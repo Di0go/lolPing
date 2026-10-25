@@ -242,7 +242,7 @@ function harness(opts: HarnessOptions = {}) {
         log.push(['bubble', s]);
       },
       updateBubble: (s) => log.push(['bubble', s]),
-      hideBubble: () => log.push(['bubbleHidden', null]),
+      hideBubble: (o) => log.push(['bubbleHidden', o ?? null]),
       hideNow: (view) => log.push(['hiddenNow', view]),
       showCard: (at, s, o) => {
         cardOpens.push({ at, focus: o?.focus ?? false });
@@ -870,6 +870,125 @@ describe('AskController', () => {
       expect(h.of('fade')).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
       expect(h.of('fade')).toHaveLength(1);
+    });
+  });
+
+  describe('when the page under the marks moves', () => {
+    const answered = () => harness({
+      steps: [answers([
+        call('say', { text: 'Line 3 divides by zero.' }),
+        call('answer', { markdown: 'B3 is 0, so =A3/B3 fails.' }),
+        call('ping', { type: 'danger', x: 600, y: 400 }, 'p'),
+        call('emote', { slug: 'facepalm', x: 200, y: 100 }, 'e'),
+      ])],
+    });
+    const watching = (h: ReturnType<typeof harness>): unknown[] => {
+      const seen: unknown[] = [];
+      h.ctl.on('watch', (w: unknown) => seen.push(w));
+      return seen;
+    };
+
+    it('fades marks and bubble on stale and keeps the card', async () => {
+      const h = answered();
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      h.ctl.stale();
+      expect(h.of('fade')).toHaveLength(1);
+      expect(h.of('clear')).toHaveLength(0);
+      expect(h.of('bubbleHidden')).toEqual([{ stale: true }]);
+      // The usual fade finds nothing left to fade.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.of('fade')).toHaveLength(1);
+      expect(h.of('bubbleHidden')).toHaveLength(1);
+
+      const c = answered();
+      c.ctl.ask([spot('danger')]);
+      await flush();
+      c.ctl.onTeammateAction('bubble', { t: 'more' });
+      c.ctl.stale();
+      expect(c.of('fade')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(c.of('cardHidden')).toHaveLength(0);
+      expect(c.of('fade')).toHaveLength(1);
+    });
+
+    it('draws no more pings of an ask that went stale', async () => {
+      let finish: (r: TurnResult) => void = () => undefined;
+      const say = call('say', { text: 'Line 3 divides by zero.' });
+      const slow: Step = (_req, s) => {
+        s.accepted();
+        s.call?.(say);
+        return new Promise((resolve) => { finish = resolve; });
+      };
+      const h = harness({ steps: [slow] });
+      const watches = watching(h);
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      expect(h.pings('omw')).toHaveLength(1);
+      h.ctl.stale();
+      expect(watches).toEqual([{ window: '263544' }, null]);
+
+      finish({
+        text: '', calls: [
+          say,
+          call('ping', { type: 'danger', x: 600, y: 400 }, 'p'),
+          call('emote', { slug: 'facepalm', x: 200, y: 100 }, 'e'),
+          call('say', { text: 'B4 is empty too.' }, 's2'),
+        ],
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.pings('danger')).toEqual([]);
+      expect(h.of('emote')).toEqual([]);
+      // The answer still comes: a later say brings its line back, and that bubble isn't watched again.
+      expect(h.popupsAt).toHaveLength(2);
+      expect(h.bubbles().at(-1)).toEqual(expect.objectContaining({ line: 'Line 3 divides by zero.', more: true }));
+      expect(watches).toEqual([{ window: '263544' }, null]);
+      expect(h.of('fade')).toHaveLength(1);
+    });
+
+    it('drops the pings still waiting their turn', async () => {
+      const h = harness({
+        steps: [answers([
+          call('say', { text: 'Three things.' }),
+          call('ping', { type: 'danger', x: 600, y: 400 }, 'p1'),
+          call('ping', { type: 'danger', x: 700, y: 400 }, 'p2'),
+          call('ping', { type: 'danger', x: 800, y: 400 }, 'p3'),
+        ])],
+      });
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      expect(h.pings('danger')).toHaveLength(1);
+      h.ctl.stale();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.pings('danger')).toHaveLength(1);
+    });
+
+    it('watches while its marks or bubble are up', async () => {
+      const h = harness({
+        steps: [
+          answers([call('say', { text: 'Short.' }), call('ping', { type: 'danger', x: 600, y: 400 })]),
+          answers([call('say', { text: 'Two.' }), call('ping', { type: 'danger', x: 600, y: 400 })]),
+          hangs({ accept: true }),
+        ],
+      });
+      const watches = watching(h);
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      expect(watches).toEqual([{ window: '263544' }]);
+      await vi.advanceTimersByTimeAsync(bubbleMs('Short.') + 1_000); // the bubble went, the marks stay
+      expect(watches).toEqual([{ window: '263544' }]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(watches).toEqual([{ window: '263544' }, null]);
+
+      // A new ask while the last one's marks are up watches again from its own start.
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      h.ctl.ask([spot('danger', 1200, 900)]);
+      await flush();
+      expect(watches).toEqual([{ window: '263544' }, null, { window: '263544' }, null, { window: '263544' }]);
+      h.ctl.cancel('user');
+      expect(watches.at(-1)).toBeNull();
     });
   });
 

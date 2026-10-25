@@ -67,6 +67,7 @@ import { HistoryStore } from './teammate/historyStore';
 import { MateWindows } from './teammate/mateWindows';
 import { createAdapter } from './teammate/providers';
 import { SecretStore } from './teammate/secrets';
+import { StaleWatcher } from './teammate/staleWatcher';
 import { UsageLog } from './teammate/usage';
 import { onSettingsWindowGone, openSettingsWindow, settingsWindow } from './settingsWindow';
 import { closeTextWindow, onTextWindowGone, openTextWindow, registerTextWindow } from './textWindow';
@@ -147,6 +148,8 @@ interface Mate {
   windows: MateWindows;
   actions: ActionRunner;
   controller: AskController;
+  /** Fades the teammate's marks when the page under them moves. */
+  stale: StaleWatcher;
   agents: AgentRunner;
   /** lolPing's end of the MCP bridge once it listens; null when it couldn't, and then agent asks ask for a restart. */
   mcp: Promise<BridgeServer | null>;
@@ -702,7 +705,9 @@ function start(): void {
       // A restarted helper starts unsuspended: re-apply an active key capture.
       if (capturing || textOpen || wordsOpen) syncSuspended();
       panels.hideRoster(); // a restarted helper lost the panel key's up, so a shown roster would stay up
-    } else if (ev.type === 'error') console.warn('[helper]', ev.code ?? '', ev.message);
+      mate?.stale.helperReady();
+    } else if (ev.type === 'scroll') mate?.stale.scroll({ x: ev.x, y: ev.y });
+    else if (ev.type === 'error') console.warn('[helper]', ev.code ?? '', ev.message);
     else if (ev.type === 'triggerUp') {
       // Only the key that asks sends the spots held so far; the emote key's up, or the ping key's outside it, doesn't.
       if (ev.wheel === 'ask' || (ev.wheel === 'ping' && asksOnPing(settings))) gesture.keyUp();
@@ -966,10 +971,26 @@ function start(): void {
       console.warn('[teammate] could not open the agent connection:', err);
       return null;
     });
+    const stale = new StaleWatcher({
+      front: (signal) => context.front(signal),
+      busy: () => context.busy,
+      ownPid: process.pid, // the teammate's windows and Settings belong to the main process
+      helper: (on) => bridge.send({ type: 'staleWatch', on }),
+      own: (at) => {
+        const dip = overlays.toDip(at);
+        return dip !== null && windows.contains(dip);
+      },
+      stale: () => controller.stale(),
+      every: (ms, fn) => {
+        const timer = setInterval(fn, ms);
+        return () => clearInterval(timer);
+      },
+    });
+    controller.on('watch', (w: { window: string } | null) => (w ? stale.start(w.window) : stale.stop()));
     controller.on('state', pushMateTray);
     windows.on('action', onMateAction);
     windows.on('dragged', (view: MateView) => controller.onDragged(view));
-    return { secrets, history, usage, context, windows, actions, controller, agents, mcp };
+    return { secrets, history, usage, context, windows, actions, controller, stale, agents, mcp };
   };
   /** Takes the teammate down; settles once its context helper has exited and its usage is on disk. */
   const stopMate = (): Promise<unknown> => {
@@ -981,6 +1002,7 @@ function start(): void {
     gesture.cancel();
     m.agents.killAll(); // also on quitting: no agent, nor anything it started, outlives lolPing
     m.controller.removeAllListeners();
+    m.stale.stop(); // the helper's watch goes off with the teammate
     m.actions.removeAllListeners();
     m.windows.removeAllListeners();
     m.windows.destroy();

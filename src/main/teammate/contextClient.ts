@@ -55,6 +55,8 @@ export class ContextClient {
   private readonly timeoutMs: number;
   /** Ids of the pastes the helper is running, until their reply or the helper's end. */
   private readonly pastes = new Set<string>();
+  /** Ids sent to the helper and not yet answered, aborted ones too: the helper still runs them, in order. */
+  private readonly unanswered = new Set<string>();
 
   constructor(private readonly opts: ContextClientOptions) {
     this.timeoutMs = opts.timeoutMs ?? 3000;
@@ -102,7 +104,7 @@ export class ContextClient {
 
   /** A request is waiting for its reply: the helper answers in order, so a poll now would wait behind it. */
   get busy(): boolean {
-    return this.pending.size > 0;
+    return this.unanswered.size > 0;
   }
 
   /**
@@ -194,6 +196,7 @@ export class ContextClient {
           reject(e);
         },
       });
+      this.unanswered.add(id);
       this.write(child, make(id));
     });
   }
@@ -231,6 +234,7 @@ export class ContextClient {
     const reply = parseContextLine(line);
     if (!reply) return;
     this.pastes.delete(reply.id); // done in the helper, even when its ask was cancelled meanwhile
+    this.unanswered.delete(reply.id);
     const p = this.pending.get(reply.id); // none when aborted or timed out already
     if (p) {
       if (reply.type === 'error') p.reject(new ContextError(reply.code, reply.message));
@@ -245,9 +249,10 @@ export class ContextClient {
     }
   }
 
-  /** Called whenever the helper goes away, so no paste is still running in it either. */
+  /** Called whenever the helper goes away, so no paste nor any other request is still running in it either. */
   private failAll(code: ContextFailure, message: string): void {
     this.pastes.clear();
+    this.unanswered.clear();
     for (const p of [...this.pending.values()]) p.reject(new ContextError(code, message));
   }
 

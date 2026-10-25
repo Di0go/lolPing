@@ -269,6 +269,20 @@ describe('MateWindows', () => {
     expect(h.windows[0].bounds).toMatchObject({ width: 480, height: 300 });
   });
 
+  it('tells whether a point is over one of its windows on screen', () => {
+    mate.showBubble({ x: 100, y: 100 }, bubble);
+    mate.showCard({ x: 1000, y: 500 }, card);
+    expect(mate.contains({ x: 150, y: 120 })).toBe(false); // not on screen before its page loads
+    h.windows[0].webContents.emit('did-finish-load');
+    h.windows[1].webContents.emit('did-finish-load');
+    expect(mate.contains({ x: 150, y: 120 })).toBe(true);
+    expect(mate.contains({ x: 1100, y: 600 })).toBe(true);
+    expect(mate.contains({ x: 99, y: 120 })).toBe(false);
+    expect(mate.contains({ x: 700, y: 300 })).toBe(false);
+    mate.hideNow('bubble');
+    expect(mate.contains({ x: 150, y: 120 })).toBe(false);
+  });
+
   it('opens the history as a normal window and sends its state', () => {
     mate.showHistory(history);
     const w = h.windows[0];

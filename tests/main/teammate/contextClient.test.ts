@@ -109,6 +109,32 @@ describe('ContextClient', () => {
     expect(c.busy).toBe(false);
   });
 
+  it('stays busy until the helper answers an aborted request', async () => {
+    const { c } = client(['lagged']);
+    const ac = new AbortController();
+    const waiting = c.foreground(ac.signal); // the lagged helper answers it after 300 ms
+    ac.abort();
+    await expect(waiting).rejects.toMatchObject({ code: 'aborted' });
+    // The helper answers in order: a poll sent now would still wait behind the aborted request.
+    expect(c.busy).toBe(true);
+    await vi.waitFor(() => expect(c.busy).toBe(false), { timeout: 3000, interval: 20 });
+  });
+
+  it('is not busy once the helper that had a request waiting is gone', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { c } = client(['silent', 'ok']);
+    const ac = new AbortController();
+    const waiting = c.foreground(ac.signal).catch((e: unknown) => e);
+    ac.abort();
+    await waiting;
+    expect(c.busy).toBe(true);
+    // A later request times out and restarts the helper: the old one's unanswered requests are gone with it.
+    const timedOut = c.foreground(signal()).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await timedOut).toMatchObject({ code: 'timeout' });
+    expect(c.busy).toBe(false);
+  });
+
   it('passes on the helper\'s error code', async () => {
     const { c } = client(['denied']);
     await expect(c.capture({ display, spots: [], dir: tempDir() }, signal())).rejects.toMatchObject({ code: 'permission' });

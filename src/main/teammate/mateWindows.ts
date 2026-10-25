@@ -168,6 +168,16 @@ export class MateWindows extends EventEmitter {
     w.hide();
   }
 
+  /** Whether a screen point in DIPs is over a teammate window on screen: a scroll there is the user reading it. */
+  contains(dip: Point): boolean {
+    return VIEWS.some((view) => {
+      const w = this.slots[view].win;
+      if (!w || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return false;
+      const b = w.getBounds();
+      return dip.x >= b.x && dip.x < b.x + b.width && dip.y >= b.y && dip.y < b.y + b.height;
+    });
+  }
+
   /** Whether the open card, or the one just closed, has had keyboard focus. Cleared when the next card opens. */
   cardHadFocus(): boolean {
     return this.slots.card.hadFocus;
