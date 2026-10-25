@@ -185,6 +185,7 @@ CGEventRef tapCallback(CGEventTapProxy, CGEventType type, CGEventRef event, void
       break;
     // A scroll is only reported (while the stale watch is on), never swallowed.
     case kCGEventScrollWheel:
+      e.kind = EvKind::Scroll;
       apply(g_decision->onEvent(e));
       return event;
     default:

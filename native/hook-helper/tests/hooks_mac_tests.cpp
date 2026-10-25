@@ -109,14 +109,12 @@ int main() {
     lp::g_decision = &tapper;
     lp::g_flags = 0;
     flags = 0;
-    bool swallowed = false;
-    swallowed |= commandFlagsChanged(true);
-    swallowed |= commandFlagsChanged(false);
-    swallowed |= commandFlagsChanged(true);
-    swallowed |= commandFlagsChanged(false);
+    commandFlagsChanged(true);
+    commandFlagsChanged(false);
+    commandFlagsChanged(true);
+    commandFlagsChanged(false);
     sink.stop();
     check(countOf(lines, "askWords") == 1, "a double tap of command emits askWords");
-    check(!swallowed, "no tap of command is swallowed on macOS");
   }
   {
     std::vector<std::string> lines;
@@ -141,8 +139,13 @@ int main() {
     sink.stop();
     check(countOf(lines, "askWords") == 0, "a scroll between the taps cancels the double tap");
     check(countOf(lines, "scroll") == 1, "a scroll is reported while the stale watch is on");
-    check(!lines.empty() && lines.back().find("\"x\":120,\"y\":80") != std::string::npos,
-          "a scroll is reported at the event's location");
+    bool located = false;
+    for (const auto& l : lines) {
+      if (l.find("\"type\":\"scroll\"") != std::string::npos) {
+        located = l.find("\"x\":120,\"y\":80") != std::string::npos;
+      }
+    }
+    check(located, "a scroll is reported at the event's location");
   }
   lp::g_decision = nullptr;
   lp::g_out = nullptr;

@@ -275,11 +275,12 @@ bool front(FrontWindow& out, Failure&) {
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate date]];
     NSRunningApplication* app = NSWorkspace.sharedWorkspace.frontmostApplication;
     if (!app) return true;  // nothing in front: all stay empty
+    // The pid stays even with no window on screen, so main can tell lolPing in front from nothing in front.
+    out.pid = static_cast<uint32_t>(app.processIdentifier);
     CGRect box = CGRectZero;
     if (!frontWindowInfo(app.processIdentifier, out.window, out.title, box)) return true;
     out.box = Rect{static_cast<int>(std::lround(box.origin.x)), static_cast<int>(std::lround(box.origin.y)),
                    static_cast<int>(std::lround(box.size.width)), static_cast<int>(std::lround(box.size.height))};
-    out.pid = static_cast<uint32_t>(app.processIdentifier);
     return true;
   }
 }
