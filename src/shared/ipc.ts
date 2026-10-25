@@ -201,6 +201,8 @@ export const OVERLAY_ASSETS = 'overlay:assets';
 export const OVERLAY_PINGED = 'overlay:pinged';
 /** overlay renderer → main: {ref, x, y} of an emote the wheel just placed, so it can be shared with the room. */
 export const OVERLAY_EMOTED = 'overlay:emoted';
+/** overlay renderer → main: true once nothing has been on the overlay for a moment, false when something shows again. */
+export const OVERLAY_IDLE = 'overlay:idle';
 
 export interface AppStatus {
   enabled: boolean;

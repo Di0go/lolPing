@@ -14,6 +14,7 @@ import { DEFAULT_SETTINGS, overlaySettings, soundLevel, type OverlaySettings } f
 import '../shared/emoteFx.css';
 import { EmoteStage } from './emoteStage';
 import { GlowStage } from './glowFx';
+import { IdleWatch } from './idleWatch';
 import { spawnPing } from './pingFx';
 import { SoundBank } from './soundBank';
 import { showToast } from './toast';
@@ -186,6 +187,17 @@ window.overlay.on('mate:glow', (raw) => {
   const g = parseMateGlow(raw);
   if (g && !staleMate(g)) glows.spawn(g);
 });
+
+// Every ping, emote, line, glow and toast lives in one of these layers, and the wheels are drawn while open.
+const layers = [pingLayer, emoteLayer, textLayer, toastLayer];
+const idle = new IdleWatch(
+  () => !pingWheel.isOpen && !emoteWheel.isOpen && layers.every((l) => l.childElementCount === 0),
+  (v) => window.overlay.reportIdle(v),
+);
+const changes = new MutationObserver(() => idle.check());
+for (const l of layers) changes.observe(l, { childList: true });
+for (const svg of [pingSvg, emoteSvg]) changes.observe(svg, { attributes: true, attributeFilter: ['class'] });
+idle.check();
 
 /** Resolves with `label` when the image at `url` doesn't load. */
 const probe = (url: string, label: string): Promise<string | null> =>

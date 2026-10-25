@@ -19,6 +19,9 @@ const api: OverlayApi = {
   reportEmote() {
     // nor emotes
   },
+  reportIdle() {
+    // the page is the overlay, so there is no window to hide
+  },
 };
 window.overlay = api;
 

@@ -2,7 +2,7 @@ import { BrowserWindow, ipcMain, screen, type Display, type Rectangle, type WebC
 import { EventEmitter } from 'node:events';
 import { isEmoteRefShape, type EmoteArt, type EmoteRef } from '../shared/emotes';
 import {
-  OVERLAY_ASSETS, OVERLAY_EMOTED, OVERLAY_PINGED, type OverlayChannel, type OverlayEvents, type PingTag,
+  OVERLAY_ASSETS, OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, type OverlayChannel, type OverlayEvents, type PingTag,
 } from '../shared/ipc';
 import { WHEEL, pickSlice } from '../shared/geometry';
 import { isPingId, type PingId } from '../shared/pings';
@@ -87,6 +87,8 @@ export class OverlayManager extends EventEmitter {
   private wheelAt: { local: LocalPoint; phys: { x: number; y: number } } | null = null;
   private mateTicket: string | null = null;
   private captureExcluded = false;
+  /** Overlays whose page last said it has nothing on it (Windows only). */
+  private readonly idleWindows = new WeakSet<BrowserWindow>();
 
   /** `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here. */
   constructor(private settings: OverlaySettings, private readonly resolveArt: (ref: EmoteRef, remote: boolean) => EmoteArt) {
@@ -114,6 +116,24 @@ export class OverlayManager extends EventEmitter {
       this.emit('sharedEmote', { ref: p.ref, displayId, x: p.x, y: p.y } satisfies SharedEmote);
       // The wheel's own overlay already shows it. Another display may still hold an earlier one of ours.
       this.clearElsewhere(displayId, 'self');
+    });
+    ipcMain.on(OVERLAY_IDLE, (event, idle: unknown) => {
+      // Screenshot tools on Windows take a shown overlay for a window over the whole display (#127): hide an empty one.
+      if (IS_MAC || IS_LINUX || typeof idle !== 'boolean') return;
+      const displayId = this.displayOf(event.sender);
+      const win = displayId === undefined ? undefined : this.windows.get(displayId);
+      if (!win || win.isDestroyed()) return;
+      if (idle) {
+        this.idleWindows.add(win);
+        win.hide();
+        return;
+      }
+      this.idleWindows.delete(win);
+      if (win.isVisible()) return;
+      win.showInactive();
+      win.setAlwaysOnTop(true, 'screen-saver');
+      const d = screen.getAllDisplays().find((x) => x.id === displayId);
+      if (d) win.setBounds(overlayBounds(d)); // as at ready-to-show: a first show can be sized wrong on mixed DPI
     });
     this.rebuild();
     screen.on('display-added', () => this.rebuild());
@@ -452,7 +472,7 @@ export class OverlayManager extends EventEmitter {
     }
     win.webContents.on('did-finish-load', () => win.webContents.send('overlay:settings', this.settings));
     win.once('ready-to-show', () => {
-      win.showInactive();
+      if (!this.idleWindows.has(win)) win.showInactive(); // a page that already said it is empty stays hidden
       win.setBounds(overlayBounds(d)); // re-apply: mixed-DPI setups can size the first frame wrong
     });
     void loadPage(win, 'overlay');

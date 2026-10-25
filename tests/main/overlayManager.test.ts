@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EmoteArt } from '../../src/shared/emotes';
-import { OVERLAY_EMOTED, OVERLAY_PINGED } from '../../src/shared/ipc';
+import { OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED } from '../../src/shared/ipc';
 import { DEFAULT_SETTINGS, overlaySettings } from '../../src/shared/settings';
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
       onTop: string[];
       hiddenInMissionControl: boolean;
       contentProtection: boolean[];
+      visible: boolean;
     }>,
     handlers: new Map<string, (event: unknown, raw: unknown) => void>(),
     isMac: false,
@@ -71,7 +72,16 @@ vi.mock('electron', async () => {
     setBounds(r: Rect): void {
       this.bounds = r;
     }
-    showInactive(): void {}
+    visible = false;
+    showInactive(): void {
+      this.visible = true;
+    }
+    hide(): void {
+      this.visible = false;
+    }
+    isVisible(): boolean {
+      return this.visible;
+    }
     isDestroyed(): boolean {
       return false;
     }
@@ -618,6 +628,59 @@ describe('OverlayManager z-order', () => {
     mac.handle({ type: 'wheelOpen', x: 100, y: 200, wheel: 'ping' });
     mac.previewPing('danger');
     expect(raised()).toEqual([[], []]);
+  });
+});
+
+describe('OverlayManager idle windows', () => {
+  const idle = (i: number, value: unknown): void => h.handlers.get(OVERLAY_IDLE)!({ sender: h.windows[i].webContents }, value);
+  const shownAtStart = (): void => {
+    for (const w of h.windows) w.emit('ready-to-show');
+  };
+
+  it('hides an overlay on Windows while its page has nothing on it, so screenshot tools do not take it for a window', () => {
+    shownAtStart();
+    idle(0, true);
+    expect(h.windows.map((w) => w.visible)).toEqual([false, true]);
+  });
+
+  it('shows it again without focus, back on top, as soon as its page draws something', () => {
+    shownAtStart();
+    idle(0, true);
+    const levels = h.windows[0].onTop.length;
+    idle(0, false);
+    expect(h.windows[0].visible).toBe(true);
+    expect(h.windows[0].onTop.slice(levels)).toEqual(['screen-saver']);
+  });
+
+  it('keeps an overlay hidden when its page said it was empty before the window was ready to show', () => {
+    idle(0, true);
+    shownAtStart();
+    expect(h.windows.map((w) => w.visible)).toEqual([false, true]);
+    idle(0, false);
+    expect(h.windows[0].visible).toBe(true);
+    expect(h.windows[0].bounds).toEqual({ x: 0, y: 0, width: 1920, height: 1079 });
+  });
+
+  it('ignores a malformed report', () => {
+    shownAtStart();
+    idle(0, 'yes');
+    idle(0, 1);
+    expect(h.windows.map((w) => w.visible)).toEqual([true, true]);
+  });
+
+  it('keeps the overlays shown on macOS and Linux', async () => {
+    for (const platform of ['mac', 'linux'] as const) {
+      h.windows.length = 0;
+      h.handlers.clear();
+      h.isMac = platform === 'mac';
+      h.isLinux = platform === 'linux';
+      vi.resetModules();
+      const { OverlayManager } = await import('../../src/main/overlayManager');
+      new OverlayManager(overlaySettings(DEFAULT_SETTINGS), resolveArt).start();
+      shownAtStart();
+      idle(0, true);
+      expect(h.windows.map((w) => w.visible)).toEqual([true, true]);
+    }
   });
 });
 
