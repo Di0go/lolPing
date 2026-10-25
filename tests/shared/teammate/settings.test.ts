@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TEAMMATE, normalizeTeammate } from '../../../src/shared/teammate/settings';
+import { canDoubleTap, DEFAULT_TEAMMATE, normalizeTeammate } from '../../../src/shared/teammate/settings';
 
 const win = { platform: 'win', trigger: 'alt', emoteTrigger: 'ctrl' } as const;
 
@@ -15,8 +15,21 @@ const validAgent = {
 
 describe('normalizeTeammate', () => {
   it('fills every default from nothing', () => {
-    expect(normalizeTeammate(undefined, win)).toEqual({ ...DEFAULT_TEAMMATE, askClick: true });
-    expect(normalizeTeammate(undefined, { ...win, platform: 'mac' })).toEqual({ ...DEFAULT_TEAMMATE, askClick: false });
+    expect(normalizeTeammate(undefined, win)).toEqual({ ...DEFAULT_TEAMMATE, askClick: true, askDoubleTap: false });
+    expect(normalizeTeammate(undefined, { ...win, platform: 'mac' })).toEqual({ ...DEFAULT_TEAMMATE, askClick: false, askDoubleTap: true });
+  });
+
+  it('turns double tap on by default only on macOS', () => {
+    expect(normalizeTeammate({}, win).askDoubleTap).toBe(false);
+    expect(normalizeTeammate({}, { ...win, platform: 'mac' }).askDoubleTap).toBe(true);
+    expect(normalizeTeammate({ askDoubleTap: false }, { ...win, platform: 'mac' }).askDoubleTap).toBe(false);
+    expect(normalizeTeammate({ askDoubleTap: true }, win).askDoubleTap).toBe(true);
+    expect(normalizeTeammate({ askDoubleTap: 'yes' }, { ...win, platform: 'mac' }).askDoubleTap).toBe(true);
+  });
+
+  it('offers double tap for a modifier key only', () => {
+    for (const k of ['alt', 'ctrl', 'shift', 'win'] as const) expect(canDoubleTap(k), k).toBe(true);
+    for (const k of ['capslock', 'mouse4', 'mouse5', { vk: 0x47 }] as const) expect(canDoubleTap(k), JSON.stringify(k)).toBe(false);
   });
 
   it('moves an ask key equal to the ping key to Win: only an explicit same shares the ping key', () => {

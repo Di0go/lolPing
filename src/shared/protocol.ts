@@ -1,5 +1,6 @@
 import { featureOn } from './features';
 import type { Settings } from './settings';
+import { canDoubleTap } from './teammate/settings';
 
 /** Which wheel a gesture belongs to: the ping trigger's, the emote key's or the teammate's ask key. */
 export type WheelKind = 'ping' | 'emote' | 'ask';
@@ -21,8 +22,12 @@ export type HelperEvent =
   | { type: 'toggled'; enabled: boolean }
   | { type: 'textRequested' }
   | { type: 'panel'; show: boolean }
-  /** A wheel's trigger key came up after a release or click while it was held. */
+  /** A wheel's trigger key came up after a release or click while held, or right after a release it was let go before. */
   | { type: 'triggerUp'; wheel: WheelKind }
+  /** The ask key was double-tapped: open the words box here. */
+  | { type: 'askWords'; x: number; y: number }
+  /** A scroll while the stale watch is on; the helper sends at most one per 100 ms. */
+  | { type: 'scroll'; x: number; y: number }
   | { type: 'error'; message: string; code?: string }
   | { type: 'sim'; swallow: boolean; inject: string };
 
@@ -59,6 +64,9 @@ export function parseHelperLine(line: string): HelperEvent | null {
       return typeof o.show === 'boolean' ? { type: 'panel', show: o.show } : null;
     case 'triggerUp':
       return isWheel(o.wheel) ? { type: 'triggerUp', wheel: o.wheel } : null;
+    case 'askWords':
+    case 'scroll':
+      return isInt(o.x) && isInt(o.y) ? { type: o.type, x: o.x, y: o.y } : null;
     case 'error':
       if (typeof o.message !== 'string') return null;
       return typeof o.code === 'string' ? { type: 'error', message: o.message, code: o.code } : { type: 'error', message: o.message };
@@ -94,6 +102,8 @@ export type HelperCommand =
       askTrigger: HelperTrigger | 'off';
       askTriggerVk: number;
       askClick: boolean;
+      /** Tapping the ask key twice opens the words box. Only sent for Alt, Ctrl, Shift and Win. */
+      askDoubleTap: boolean;
       dragThresholdPx: number;
       toggleMods: number;
       toggleVk: number;
@@ -104,6 +114,8 @@ export type HelperCommand =
     }
   | { type: 'setEnabled'; enabled: boolean }
   | { type: 'suspend'; on: boolean }
+  /** Report scrolls. Its own command, not a config field: a config cancels a gesture the user may be in. */
+  | { type: 'staleWatch'; on: boolean }
   | { type: 'shutdown' };
 
 /**
@@ -122,6 +134,7 @@ export function configCommand(
   const a = featureOn(s, 'teammate') && s.teammate.askTrigger !== 'same' ? s.teammate.askTrigger : 'off';
   // ...and a ping-key click opens the words box, so the helper reports clicks even with click to ping off.
   const sameWords = featureOn(s, 'teammate') && s.teammate.askTrigger === 'same' && s.teammate.askClick;
+  const tapKey = s.teammate.askTrigger === 'same' ? s.trigger : s.teammate.askTrigger;
   return {
     type: 'config',
     trigger: typeof t === 'object' ? 'vk' : t,
@@ -134,6 +147,7 @@ export function configCommand(
     askTrigger: typeof a === 'object' ? 'vk' : a,
     askTriggerVk: typeof a === 'object' ? a.vk : 0,
     askClick: s.teammate.askClick && a !== 'off',
+    askDoubleTap: featureOn(s, 'teammate') && s.teammate.askDoubleTap && canDoubleTap(tapKey),
     dragThresholdPx: s.dragThresholdPx,
     toggleMods: s.toggleHotkey.mods,
     toggleVk: s.toggleHotkey.vk,

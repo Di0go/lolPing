@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { configCommand, parseHelperLine, serializeCommand } from '../../src/shared/protocol';
 import { DEFAULT_FEATURES } from '../../src/shared/features';
-import { DEFAULT_SETTINGS } from '../../src/shared/settings';
+import { DEFAULT_SETTINGS, type Settings } from '../../src/shared/settings';
+import type { AskTrigger } from '../../src/shared/teammate/settings';
 
 describe('parseHelperLine', () => {
   it('parses every event type', () => {
@@ -41,6 +42,16 @@ describe('parseHelperLine', () => {
     }
   });
 
+  it('reads askWords and scroll', () => {
+    expect(parseHelperLine('{"type":"askWords","x":10,"y":-20}')).toEqual({ type: 'askWords', x: 10, y: -20 });
+    expect(parseHelperLine('{"type":"scroll","x":3,"y":4}')).toEqual({ type: 'scroll', x: 3, y: 4 });
+    for (const type of ['askWords', 'scroll']) {
+      for (const rest of ['', ',"x":1', ',"y":2', ',"x":1.5,"y":2', ',"x":"1","y":2', ',"x":null,"y":2']) {
+        expect(parseHelperLine(`{"type":"${type}"${rest}}`), `${type}${rest}`).toBeNull();
+      }
+    }
+  });
+
   it('rejects malformed lines', () => {
     for (const line of ['', 'nope', '42', 'null', '{"type":"wheelOpen","x":1}', '{"type":"click","x":1.5,"y":2}',
       '{"type":"toggled"}', '{"type":"panel"}', '{"type":"panel","show":"yes"}', '{"type":"mystery"}', '{"x":1,"y":2}']) {
@@ -54,7 +65,7 @@ describe('commands', () => {
     expect(configCommand(DEFAULT_SETTINGS, true)).toEqual({
       type: 'config', trigger: 'alt', triggerVk: 0, clickPing: false, gameCheck: true,
       emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false, askTrigger: 'off', askTriggerVk: 0, askClick: false,
-      dragThresholdPx: 8,
+      askDoubleTap: false, dragThresholdPx: 8,
       toggleMods: 3, toggleVk: 0x50, textMods: 2, textVk: 0, panelVk: 0, enabled: true,
     });
   });
@@ -104,6 +115,27 @@ describe('commands', () => {
       .toMatchObject({ askTrigger: 'vk', askTriggerVk: 0x47, askClick: false });
     expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...teammate, askTrigger: 'same' }, features: on }, true))
       .toMatchObject({ trigger: 'alt', askTrigger: 'off', askTriggerVk: 0, askClick: false });
+  });
+
+  it('sends double tap only for a modifier ask key', () => {
+    const on = { ...DEFAULT_FEATURES, teammate: true };
+    const ask = (askTrigger: AskTrigger, askDoubleTap = true) =>
+      configCommand({ ...DEFAULT_SETTINGS, teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger, askDoubleTap }, features: on }, true);
+    for (const k of ['alt', 'ctrl', 'shift', 'win'] as const) expect(ask(k), k).toMatchObject({ askDoubleTap: true });
+    for (const k of ['capslock', 'mouse4', 'mouse5', { vk: 0x47 }] as const) {
+      expect(ask(k), JSON.stringify(k)).toMatchObject({ askDoubleTap: false });
+    }
+    expect(ask('win', false)).toMatchObject({ askDoubleTap: false });
+    // The teammate off: the helper never taps.
+    expect(configCommand({ ...DEFAULT_SETTINGS, teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'win', askDoubleTap: true } }, true))
+      .toMatchObject({ askDoubleTap: false });
+    // Same mode follows the ping key.
+    const same = (trigger: Settings['trigger']) => configCommand({
+      ...DEFAULT_SETTINGS, trigger, teammate: { ...DEFAULT_SETTINGS.teammate, askTrigger: 'same', askDoubleTap: true }, features: on,
+    }, true);
+    expect(same('shift')).toMatchObject({ askDoubleTap: true });
+    expect(same('mouse5')).toMatchObject({ askDoubleTap: false });
+    expect(same({ vk: 0x56 })).toMatchObject({ askDoubleTap: false });
   });
 
   it('reports ping-key clicks for the words box when the ask key is the ping key, and only then', () => {

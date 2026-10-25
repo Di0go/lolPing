@@ -107,6 +107,34 @@ describe('hook-helper --simulate', () => {
     expect(events.at(-1)).toEqual({ type: 'sim', swallow: true, inject: 'kdown:252,kup:252,kup:91' });
   });
 
+  it('opens the words box on a double tap and reports scrolls while watching', async () => {
+    const events = await simulate([
+      { ...config, askTrigger: 'win', askTriggerVk: 0, askDoubleTap: true },
+      sim('move', { x: 40, y: 50, t: 0 }),
+      sim('kdown', { vk: WIN, t: 10 }),
+      sim('kup', { vk: WIN, t: 100 }),
+      sim('kdown', { vk: WIN, t: 200 }),
+      sim('kup', { vk: WIN, t: 300 }),
+      // No watch yet: a scroll is not reported.
+      sim('scroll', { x: 41, y: 51, t: 1000 }),
+      { type: 'staleWatch', on: true },
+      sim('scroll', { x: 42, y: 52, t: 1100 }),
+      // Within 100 ms of the last report: coalesced.
+      sim('scroll', { x: 43, y: 53, t: 1150 }),
+      sim('scroll', { x: 44, y: 54, t: 1300 }),
+      { type: 'staleWatch', on: false },
+      sim('scroll', { x: 45, y: 55, t: 2000 }),
+    ]);
+    expect(events.filter((e) => e.type !== 'sim' && e.type !== 'ready')).toEqual([
+      { type: 'askWords', x: 40, y: 50 },
+      { type: 'scroll', x: 42, y: 52 },
+      { type: 'scroll', x: 44, y: 54 },
+    ]);
+    // A scroll is never swallowed.
+    const scrolls = events.filter((e) => e.type === 'sim').slice(-5);
+    expect(scrolls.every((e) => e.type === 'sim' && !e.swallow)).toBe(true);
+  });
+
   it('replays a plain Alt+click', async () => {
     const events = await simulate([
       config,

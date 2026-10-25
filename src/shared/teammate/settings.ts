@@ -86,7 +86,7 @@ export interface TeammateSettings {
 /** The separate ask key a clash falls back to. */
 const FALLBACK_ASK: TriggerKey = 'win';
 
-/** `askClick` is per platform (off on macOS); normalizeTeammate sets it, this value is the Windows and Linux one. */
+/** `askClick` (off on macOS) and `askDoubleTap` (on only on macOS) are per platform; normalizeTeammate sets them, these values are the Windows and Linux ones. */
 export const DEFAULT_TEAMMATE: TeammateSettings = {
   askTrigger: FALLBACK_ASK,
   askClick: true,
@@ -123,6 +123,9 @@ export const INTENT_INSTRUCTION_MAX = 2000;
 export const TAG_NAME_MAX = 12;
 const FIELD_MAX = 2048;
 const MAX_PERMISSIONS = 200;
+
+/** Double tap is offered only for a modifier key: a letter or Caps Lock would type or toggle. */
+export const canDoubleTap = (k: TriggerKey): boolean => k === 'alt' || k === 'ctrl' || k === 'shift' || k === 'win';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const bool = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback);
@@ -294,7 +297,7 @@ export function normalizeTeammate(
   return {
     askTrigger: askTrigger(r.askTrigger, ctx),
     askClick: bool(r.askClick, ctx.platform !== 'mac'),
-    askDoubleTap: bool(r.askDoubleTap, DEFAULT_TEAMMATE.askDoubleTap),
+    askDoubleTap: bool(r.askDoubleTap, ctx.platform === 'mac'),
     tagName,
     tagColor: isTagColor(r.tagColor) ? r.tagColor : DEFAULT_TEAMMATE.tagColor,
     tagColorCustom: isTagRgb(r.tagColorCustom) ? readableTagRgb(r.tagColorCustom) : null,
