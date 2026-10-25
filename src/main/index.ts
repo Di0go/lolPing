@@ -601,6 +601,8 @@ function start(): void {
     },
     held: () => askKeyHeld(settings),
     ask: (spots) => mate?.controller.ask(spots),
+    prepare: (spots) => mate?.controller.prepare(spots),
+    drop: () => mate?.controller.dropPrepared(),
     words: openWords,
     note: (spot, why) => {
       const at = overlays.toLocal(spot.phys);
@@ -998,9 +1000,9 @@ function start(): void {
     const m = mate;
     if (!m) return Promise.resolve();
     closeWords();
+    gesture.cancel(); // while `mate` is still set, so a read made for held spots stops too
     mate = null;
     m.controller.cancel('user');
-    gesture.cancel();
     m.agents.killAll(); // also on quitting: no agent, nor anything it started, outlives lolPing
     m.controller.removeAllListeners();
     m.stale.stop(); // the helper's watch goes off with the teammate

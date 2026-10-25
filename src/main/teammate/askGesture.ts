@@ -12,11 +12,16 @@ export interface AskGestureDeps {
   words: (spots: Spot[]) => void;
   /** A short line at the spot: 'full' or 'display'. */
   note: (spot: Spot, why: 'full' | 'display') => void;
+  /** Reads the screen for the held spots so far, in place of the read before; the ask on the same spots takes it. */
+  prepare: (spots: Spot[]) => void;
+  /** Drops that read. */
+  drop: () => void;
 }
 
 /**
  * Turns ask-wheel releases into asks: while a keyboard ask key is held each release adds a spot, and the ask goes with
- * all of them when the key comes up, or LOST_KEY_UP_MS after the last release when its up never comes.
+ * all of them when the key comes up, or LOST_KEY_UP_MS after the last release when its up never comes. Each held
+ * release reads the screen ahead, so the key-up only sends.
  */
 export class AskGesture {
   private readonly spots: SpotCollector;
@@ -38,6 +43,7 @@ export class AskGesture {
       const spots = this.spots.take();
       if (spots.length > 0) this.deps.ask(spots);
     });
+    this.deps.prepare(this.spots.held);
   }
 
   /**
@@ -46,6 +52,7 @@ export class AskGesture {
    */
   click(spot: Spot): void {
     if (this.spots.size > 0) {
+      this.deps.drop(); // the words box reads when its words are sent
       const r = this.spots.add(spot, true);
       if (r.t === 'refused') this.deps.note(spot, r.why);
     }
@@ -65,6 +72,7 @@ export class AskGesture {
   cancel(): void {
     this.spots.clear();
     this.disarm();
+    this.deps.drop();
   }
 
   private disarm(): void {

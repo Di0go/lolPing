@@ -10,6 +10,8 @@ function harness(opts: { held?: boolean } = {}) {
   const asks: Spot[][] = [];
   const words: Spot[][] = [];
   const notes: Array<[Spot, 'full' | 'display']> = [];
+  const reads: Spot[][] = [];
+  let drops = 0;
   const gesture = new AskGesture({
     now: () => clock,
     timer: (ms, fn) => {
@@ -23,6 +25,10 @@ function harness(opts: { held?: boolean } = {}) {
     ask: (spots) => void asks.push(spots),
     words: (spots) => void words.push(spots),
     note: (s, why) => void notes.push([s, why]),
+    prepare: (spots) => void reads.push(spots),
+    drop: () => {
+      drops += 1;
+    },
   });
   /** Moves the clock and fires the timers that come due on the way. */
   const advance = (ms: number): void => {
@@ -33,7 +39,7 @@ function harness(opts: { held?: boolean } = {}) {
       t.fn();
     }
   };
-  return { gesture, asks, words, notes, advance };
+  return { gesture, asks, words, notes, reads, drops: () => drops, advance };
 }
 
 describe('AskGesture', () => {
@@ -148,5 +154,46 @@ describe('AskGesture', () => {
     h.gesture.release(c);
     h.gesture.keyUp();
     expect(h.asks).toEqual([[c]]);
+  });
+
+  it('reads ahead at each held release with every spot so far', () => {
+    const h = harness();
+    const a = spot('missing', 100);
+    const b = spot('danger', 200);
+    h.gesture.release(a);
+    h.gesture.release(b);
+    expect(h.reads).toEqual([[a], [a, b]]);
+    // A refused spot leaves the read as it is.
+    h.gesture.release(spot('missing', 300, 2));
+    expect(h.reads).toHaveLength(2);
+    h.gesture.keyUp();
+    expect(h.asks).toEqual([[a, b]]);
+    expect(h.drops()).toBe(0); // the ask takes the read over
+  });
+
+  it('drops the read when the gesture is cancelled', () => {
+    const h = harness();
+    h.gesture.release(spot('missing', 100));
+    h.gesture.cancel();
+    expect(h.drops()).toBe(1);
+    h.gesture.keyUp();
+    expect(h.asks).toEqual([]);
+  });
+
+  it('never reads ahead for a mouse ask key or a click', () => {
+    const mouse = harness({ held: false });
+    mouse.gesture.release(spot('missing', 100));
+    expect(mouse.asks).toHaveLength(1);
+    expect(mouse.reads).toEqual([]);
+
+    const h = harness();
+    h.gesture.click(spot('generic', 100));
+    expect(h.words).toHaveLength(1);
+    expect(h.reads).toEqual([]);
+    // The words box reads when its words are sent: a read made for the held spots goes.
+    h.gesture.release(spot('missing', 200));
+    h.gesture.click(spot('generic', 300));
+    expect(h.reads).toHaveLength(1);
+    expect(h.drops()).toBe(1);
   });
 });

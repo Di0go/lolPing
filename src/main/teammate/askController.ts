@@ -37,7 +37,7 @@ import type { ActionRunner, RunInfo } from './actions';
 import { AgentStartError, type AgentRun, type AgentRunner } from './agents/runner';
 import { ContextError, type Capture, type ContextClient } from './contextClient';
 import type { Doc } from './files';
-import { FILE_READ_LIMIT, gather, readFileTool, type GatherDeps, type UsedItem } from './gather';
+import { FILE_READ_LIMIT, gather, readFileTool, type GatherDeps, type Gathered, type UsedItem } from './gather';
 import type { HistoryStore } from './historyStore';
 import type { MateWindows } from './mateWindows';
 import { agentAsk, aimsExactly, canLook, firstTurn, systemPrompt, type AskContext } from './prompt';
@@ -197,6 +197,8 @@ interface Run {
   marks: Point[];
   /** This ask's capture folder, removed when the ask ends however it ends. */
   dir: string;
+  /** The screen read at the held releases, which this ask took over; null: it reads when it starts. */
+  reading: Reading | null;
   /** Controls and text lines near the spot, which the teammate's pings snap onto. */
   screenMarks: Mark[];
   /** The whole file behind the window, which read_file serves. */
@@ -216,6 +218,53 @@ interface Run {
   /** Its bubble went with the stale fade (or its line hadn't come yet): a later say brings the line back, once. */
   bubbleBack: boolean;
 }
+
+/** What an ask is read for: its spots, the last one, its intent, display, language and folder. */
+interface ReadAt {
+  spots: Spot[];
+  spot: Spot;
+  intent: ReturnType<typeof intentFor>;
+  display: { id: number; rect: Rect } | null;
+  lang: Lang;
+  dir: string;
+}
+
+/** The window in front and where the ask goes: a built-in profile with its key (null: none), or an agent. */
+interface Front {
+  app: string;
+  title: string;
+  window: string;
+  profile: Profile | null;
+  key: string | null;
+  route: string;
+}
+
+/** The context around the spots and the capture it framed. */
+interface Scene {
+  layers: Gathered;
+  cap: Capture;
+  shot: Shot;
+  overviewJpeg: Buffer;
+  zoomJpegs: Buffer[];
+}
+
+/** Everything of an ask before anything is sent; made at the ask, or ahead of it at the held releases. */
+interface Reading {
+  spots: Spot[];
+  dir: string;
+  abort: AbortController;
+  /** Null when the read was stopped. */
+  front: Promise<Front | null>;
+  /** Starts the context read and the capture at the first call; later calls share them. Null when stopped. */
+  scene: () => Promise<Scene | null>;
+  /** Settles once nothing of the read can write into its folder. */
+  settled: () => Promise<void>;
+}
+
+/** A read made ahead serves an ask on the same spots, in the same order. */
+const sameSpots = (a: readonly Spot[], b: readonly Spot[]): boolean => a.length === b.length && a.every((s, i) => (
+  s.intent === b[i].intent && s.displayId === b[i].displayId && s.phys.x === b[i].phys.x && s.phys.y === b[i].phys.y
+));
 
 const isAction = (c: ToolCall): c is ActionCall => (
   c.tool === 'copy' || c.tool === 'event' || c.tool === 'paste' || c.tool === 'fill' || c.tool === 'open'
@@ -357,6 +406,8 @@ export class AskController extends EventEmitter {
   /** A consent card or form preview waits for the user: the bubble under it keeps its line and button till it goes. */
   private asking = false;
   private readonly visitorRate: RateLimiter;
+  /** The screen read for the spots held so far; the ask on them takes it over. */
+  private prepared: Reading | null = null;
 
   constructor(private readonly deps: AskDeps) {
     super();
@@ -382,6 +433,7 @@ export class AskController extends EventEmitter {
   ask(spots: readonly Spot[], words?: { text: string; newThread: boolean }): void {
     const spot = spots.at(-1);
     if (!spot) return;
+    const reading = this.adopt(spots);
     // An agent's unprompted marks aren't the teammate's: asking on one doesn't continue a thread.
     const prev = this.shown?.visitor ? null : this.shown;
     const settings = this.deps.settings();
@@ -409,14 +461,14 @@ export class AskController extends EventEmitter {
     const display = this.deps.overlay.displayAt(spot.phys);
 
     const run: Run = {
-      machine, abort: new AbortController(), deadlines: [], ended: false, spots: [...spots], spot, display,
-      receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
+      machine, abort: reading?.abort ?? new AbortController(), deadlines: [], ended: false, spots: [...spots], spot,
+      display, receipt: display ? receiptPoint(spot.phys, display.rect) : spot.phys,
       intent, words: words?.text ?? null, thread, autoCard: intent.def.autoCard || samePush, lang,
       tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, emotes: t.emotes,
       profile: null, route: '', agent: null, visitor: null, folder: '', cwd: null, session: null, agentRun: null,
       shot: null, app: '', title: '', window: '', thumb: '', text: '', line: '', said: '',
       rest: '', markdown: [], tokens: null,
-      calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
+      calls: [], early: [], pings: 0, marks: [], dir: reading?.dir ?? join(this.deps.tempDir(), machine.id), reading,
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
     };
@@ -427,6 +479,36 @@ export class AskController extends EventEmitter {
     this.emit('state', true);
     if (this.cardShown) this.deps.windows.updateCard(this.cardState(run, true));
     this.go(run).catch((err: unknown) => console.warn('[teammate] ask failed:', err));
+  }
+
+  /**
+   * Reads the screen for held spots before their ask goes: the window in front, the route, the context and the
+   * capture. Nothing on screen changes and the running ask goes on; the ask on the same spots takes it over.
+   */
+  prepare(spots: readonly Spot[]): void {
+    this.dropPrepared();
+    const spot = spots.at(-1);
+    if (!spot) return;
+    const t = this.deps.settings().teammate;
+    const lang = this.deps.lang();
+    const display = this.deps.overlay.displayAt(spot.phys);
+    const reading = this.read({
+      spots: [...spots], spot, intent: intentFor(t, spot.intent, lang), display, lang,
+      dir: join(this.deps.tempDir(), `read-${randomUUID()}`),
+    }, new AbortController());
+    this.prepared = reading;
+    // An ask that fails before its capture (no profile or key, no display) doesn't capture ahead either.
+    reading.front.then((f) => {
+      const goes = f?.profile && (!isBuiltin(f.profile) || f.key !== null) && display;
+      return goes ? reading.scene() : null;
+    }).catch(() => undefined);
+  }
+
+  /** The held spots went without an ask: their read stops and its folder goes. */
+  dropPrepared(): void {
+    const reading = this.prepared;
+    this.prepared = null;
+    if (reading) this.drop(reading);
   }
 
   /** The thread the next ask continues: the last answer's, or one History made current. */
@@ -687,8 +769,8 @@ export class AskController extends EventEmitter {
       tag: this.visitorTag(client), emotes: t.emotes, profile: null, route: '', agent: null, visitor: { point },
       folder: '', cwd: null, session: null, agentRun: null, shot: null, app: '', title: '', window: '', thumb: '',
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
-      dir: '', screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null,
-      info: null, stale: false, bubbleBack: false,
+      dir: '', reading: null, screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [],
+      box: null, info: null, stale: false, bubbleBack: false,
     };
   }
 
@@ -710,32 +792,28 @@ export class AskController extends EventEmitter {
 
   private async answer(run: Run): Promise<void> {
     const { deps } = this;
-    const t = deps.settings().teammate;
     const signal = run.abort.signal;
-    // The total time runs from the first helper call, so a capture, helper or file read that hangs can't hold it up.
+    // The total time runs from the first helper call, or from the send for a read made ahead, so a capture, helper or
+    // file read that hangs can't hold it up.
     this.deadline(run, TOTAL_MS, () => this.fail(run, 'timeout'));
-    const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '', window: '', pid: 0 }));
-    if (!this.alive(run)) return;
-    run.app = fg.app;
-    run.title = fg.title;
-    // Asked from the card's reply box or Whole picture: the page the marks point at is the next window in front.
-    run.window = fg.pid === deps.ownPid ? '' : fg.window;
-    deps.seenApp?.(fg.app);
-    const routed = route(t, { intent: run.spot.intent, deep: run.intent.def.deep, app: run.app, title: run.title });
-    const routeText = routed ? routeLabel(routed.reason, t, run.lang) : '';
-    if (routed && !isBuiltin(routed.profile)) return this.askAgent(run, routed.profile, routeText);
-    const profile = routed && isBuiltin(routed.profile) ? routed.profile : null;
-    const stored = profile && deps.secrets.available() ? deps.secrets.key(profile.id) : null;
-    const key = stored ?? (profile && !needsKey(profile) ? '' : null);
+    const reading = run.reading ?? this.read(run, run.abort);
+    const front = await reading.front;
+    if (!front || !this.alive(run)) return;
+    run.app = front.app;
+    run.title = front.title;
+    run.window = front.window;
+    if (front.profile && !isBuiltin(front.profile)) return this.askAgent(run, front.profile, front.route, reading);
+    const profile = front.profile && isBuiltin(front.profile) ? front.profile : null;
+    const { key } = front;
     if (!profile || key === null) return this.fail(run, 'noProfile');
     if (!run.display) return this.fail(run, 'capture');
     run.profile = profile;
-    run.route = routeText;
+    run.route = front.route;
     run.machine.startGathering();
 
-    const prepared = await this.prepare(run, t, run.display.rect);
-    if (!prepared) return;
-    const { ctx } = prepared;
+    const scene = await reading.scene();
+    if (!scene || !this.alive(run)) return;
+    const ctx = this.useScene(run, scene);
     const adapter = deps.adapter(profile, key);
     const system = systemPrompt(ctx);
     let tools = toolsFor(run, ctx);
@@ -774,29 +852,90 @@ export class AskController extends EventEmitter {
     await this.finish(run);
   }
 
-  /** Reads the context, then the capture it frames, for either kind of profile; null when the ask ended meanwhile. */
-  private async prepare(
-    run: Run, t: TeammateSettings, display: Rect,
-  ): Promise<{ ctx: AskContext; cap: Capture } | null> {
+  /** The ask on `spots` takes the read made ahead for them; any other read made ahead stops. */
+  private adopt(spots: readonly Spot[]): Reading | null {
+    const reading = this.prepared;
+    this.prepared = null;
+    if (reading && sameSpots(reading.spots, spots)) return reading;
+    if (reading) this.drop(reading);
+    return null;
+  }
+
+  private drop(reading: Reading): void {
+    reading.abort.abort();
+    // As for an ask (go): the folder goes once nothing of the read can write into it.
+    reading.settled()
+      .then(() => this.files.removeDir(reading.dir))
+      .catch(() => undefined);
+  }
+
+  /**
+   * Starts the part of an ask before anything is sent, for either kind of profile: the window in front and the route,
+   * then, at the first `scene()`, the context and the capture it frames. `abort` stops it.
+   */
+  private read(at: ReadAt, abort: AbortController): Reading {
     const { deps } = this;
-    const signal = run.abort.signal;
+    const { signal } = abort;
+    const front = (async (): Promise<Front | null> => {
+      const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '', window: '', pid: 0 }));
+      if (signal.aborted) return null;
+      deps.seenApp?.(fg.app);
+      const t = deps.settings().teammate;
+      const routed = route(t, { intent: at.spot.intent, deep: at.intent.def.deep, app: fg.app, title: fg.title });
+      const builtin = routed && isBuiltin(routed.profile) ? routed.profile : null;
+      const stored = builtin && deps.secrets.available() ? deps.secrets.key(builtin.id) : null;
+      return {
+        app: fg.app, title: fg.title,
+        // Asked from the card's reply box or Whole picture: the page the marks point at is the next window in front.
+        window: fg.pid === deps.ownPid ? '' : fg.window,
+        profile: routed?.profile ?? null, key: stored ?? (builtin && !needsKey(builtin) ? '' : null),
+        route: routed ? routeLabel(routed.reason, t, at.lang) : '',
+      };
+    })();
+    let scene: Promise<Scene | null> | null = null;
+    return {
+      spots: at.spots, dir: at.dir, abort, front,
+      scene: () => {
+        scene ??= front.then((f) => (f ? this.readScene(at, f.title, signal) : null));
+        return scene;
+      },
+      settled: async () => {
+        await front;
+        await scene?.catch(() => null);
+      },
+    };
+  }
+
+  /** Reads the context, then the capture it frames; null when the read was stopped meanwhile. */
+  private async readScene(at: ReadAt, title: string, signal: AbortSignal): Promise<Scene | null> {
+    const { deps } = this;
+    const rect = at.display?.rect;
+    if (signal.aborted) return null;
+    if (!rect) throw new ContextError('capture', 'no display under the spot');
     // The context comes first: the boxes around the spot decide what the capture shows.
-    await this.files.makeDir(run.dir);
-    const allin = run.intent.def.id === 'allin';
-    const phys = run.spots.map((s) => s.phys);
+    await this.files.makeDir(at.dir);
+    const allin = at.intent.def.id === 'allin';
+    const phys = at.spots.map((s) => s.phys);
     const layers = await gather({ context: deps.context, ...deps.readers }, {
-      settings: t.context, spots: phys, dir: run.dir, allin, title: run.title,
-      act: run.intent.def.kind === 'act',
+      settings: deps.settings().teammate.context, spots: phys, dir: at.dir, allin, title,
+      act: at.intent.def.kind === 'act',
     }, signal);
-    if (!this.alive(run)) return null;
-    const framing = frameSpots(run.intent.def.id, layers.boxes, display, phys);
-    const cap = await this.capture(run, phys, framing);
-    if (!this.alive(run)) return null;
+    if (signal.aborted) return null;
+    const framing = frameSpots(at.intent.def.id, layers.boxes, rect, phys);
+    const cap = await this.capture({ rect, dir: at.dir, signal }, phys, framing);
+    if (signal.aborted) return null;
     const shot: Shot = { area: framing.area, overview: cap.overview, zooms: cap.zooms.map((z) => z.rect) };
-    run.shot = shot;
     const overviewJpeg = await this.files.read(cap.overviewPath);
     const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
-    if (!this.alive(run)) return null;
+    if (signal.aborted) return null;
+    return { layers, cap, shot, overviewJpeg, zoomJpegs };
+  }
+
+  /** The run takes what its read found; returns the context its prompt is made from. */
+  private useScene(run: Run, scene: Scene): AskContext {
+    const { deps } = this;
+    const { layers, shot, overviewJpeg, zoomJpegs } = scene;
+    run.shot = shot;
     run.thumb = deps.thumbnail(zoomJpegs.at(-1) ?? overviewJpeg); // the last spot's close-up: the ask sits there
     run.screenMarks = layers.marks;
     run.system = layers.system;
@@ -806,20 +945,19 @@ export class AskController extends EventEmitter {
     // Marks are read for every ask so pings snap, but only the asks whose prompt lists them used them.
     run.used = aimsExactly(run.intent.def.id) ? layers.used : layers.used.filter((u) => u.kind !== 'marks');
     run.skipped = layers.skipped;
-    const ctx: AskContext = {
+    return {
       lang: run.lang, intent: run.intent, words: run.words, app: run.app, title: run.title,
-      shot, spots: phys.map((p) => physicalToOverview(shot, p)), overviewJpeg, zoomJpegs, thread: run.thread,
+      shot, spots: run.spots.map((s) => physicalToOverview(shot, s.phys)), overviewJpeg, zoomJpegs, thread: run.thread,
       instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
       file: layers.file, fields: layers.fields,
     };
-    return { ctx, cap };
   }
 
   /**
    * An agent answers the ask: it runs headless with the ask written into the ask's folder, and draws through lolPing's
    * bridge, which calls agentTools and agentCall. Its exit ends the ask.
    */
-  private async askAgent(run: Run, profile: AgentProfile, routeText: string): Promise<void> {
+  private async askAgent(run: Run, profile: AgentProfile, routeText: string, reading: Reading): Promise<void> {
     const { agents } = this.deps;
     const words = strings(run.lang).teammate.ask;
     run.profile = profile;
@@ -839,9 +977,10 @@ export class AskController extends EventEmitter {
     if (!run.display) return this.fail(run, 'capture');
     run.machine.startGathering();
 
-    const prepared = await this.prepare(run, this.deps.settings().teammate, run.display.rect);
-    if (!prepared) return;
-    const { ctx, cap } = prepared;
+    const scene = await reading.scene();
+    if (!scene || !this.alive(run)) return;
+    const ctx = this.useScene(run, scene);
+    const { cap } = scene;
     // dsh resumes a session only in the folder it was recorded in.
     const resume = run.thread?.agent?.profileId === profile.id ? run.thread.agent : null;
     const folder = agentFolder(profile, { app: run.app, title: run.title }, agents, run.lang);
@@ -970,14 +1109,17 @@ export class AskController extends EventEmitter {
    * Overlays and teammate windows stay out of the grab; a count, so an older ask's capture can't let them back in.
    * Without a framing the overview is the whole display and each close-up a fixed crop around its spot.
    */
-  private async capture(run: Run, spots: Point[], framing?: { area: Rect; crops: Rect[] }): Promise<Capture> {
-    const rect = run.display?.rect;
+  private async capture(
+    to: { rect: Rect | undefined; dir: string; signal: AbortSignal }, spots: Point[],
+    framing?: { area: Rect; crops: Rect[] },
+  ): Promise<Capture> {
+    const { rect, dir, signal } = to;
     if (!rect) throw new ContextError('capture', 'no display under the spot');
     try {
       this.excluded += 1;
       if (this.excluded === 1) this.exclude(true);
-      await this.files.makeDir(run.dir);
-      return await this.deps.context.capture({ display: rect, spots, dir: run.dir, ...framing }, run.abort.signal);
+      await this.files.makeDir(dir);
+      return await this.deps.context.capture({ display: rect, spots, dir, ...framing }, signal);
     } finally {
       this.excluded -= 1;
       if (this.excluded === 0) this.exclude(false);
@@ -1086,7 +1228,7 @@ export class AskController extends EventEmitter {
     const centre = run.shot ? overviewToPhysical(run.shot, { x: area.x + area.w / 2, y: area.y + area.h / 2 }) : null;
     if (!centre) return [{ text: 'That area is outside the screen.' }];
     try {
-      const cap = await this.capture(run, [centre]);
+      const cap = await this.capture({ rect: run.display?.rect, dir: run.dir, signal: run.abort.signal }, [centre]);
       const zoom = cap.zooms[0];
       if (!zoom) return [{ text: 'Could not look closer.' }];
       const data = await this.files.read(zoom.path);

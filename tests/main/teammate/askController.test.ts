@@ -126,6 +126,8 @@ function harness(opts: HarnessOptions = {}) {
   const states: boolean[] = [];
   let current: ThreadRecord | null = null;
   let captures = 0;
+  /** Context reads (gather's helper call). */
+  let gathers = 0;
   let skew = 0;
   const popupsAt: Array<{ x: number; y: number }> = [];
   const cardOpens: Array<{ at: { x: number; y: number }; focus: boolean }> = [];
@@ -177,6 +179,7 @@ function harness(opts: HarnessOptions = {}) {
         };
       },
       read: async (req, signal) => {
+        gathers += 1;
         const { system } = screen;
         if (req.text && system === 'hangs') {
           return new Promise((_resolve, reject) => {
@@ -300,7 +303,7 @@ function harness(opts: HarnessOptions = {}) {
     dragBubble: (to: { x: number; y: number } | null) => {
       bubblePlace = to;
     },
-    takenRuns, runner, dones, amends, putClicks, runnerCancels: () => runnerCancels, thumbs,
+    takenRuns, runner, dones, amends, putClicks, runnerCancels: () => runnerCancels, thumbs, gathers: () => gathers,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -1947,6 +1950,107 @@ describe('AskController', () => {
     expect(h.requests).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.timeout]);
+    expect(h.ctl.running).toBe(false);
+  });
+
+  it('sends to the model as soon as the key comes up after a read-ahead', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Fine.' })])] });
+    const spots = [spot('danger', 1000, 800), spot('missing', 2000, 1200)];
+    h.ctl.prepare(spots);
+    await flush();
+    expect(h.of('capture')).toHaveLength(1);
+    expect(h.gathers()).toBe(1);
+    expect(h.requests).toEqual([]);
+    expect(h.ctl.running).toBe(false);
+
+    h.ctl.ask(spots);
+    await flush();
+    expect(h.requests).toHaveLength(1);
+    expect(h.of('capture')).toHaveLength(1);
+    expect(h.gathers()).toBe(1);
+    expect(h.bubbles().map((b) => b.line)).toEqual(['Fine.']);
+    expect([...h.disk]).toEqual([]);
+  });
+
+  it('starts the ask\'s clocks at the key-up, not at the read-ahead', async () => {
+    const h = harness({ steps: [hangs({ accept: false })] });
+    h.ctl.prepare([spot('danger')]);
+    await flush();
+    await vi.advanceTimersByTimeAsync(55_000);
+    h.ctl.ask([spot('danger')]);
+    await flush();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(h.ctl.running).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.notReceived]);
+  });
+
+  it('reads again when the spots changed after the read-ahead', async () => {
+    const h = harness({ steps: [answers([call('say', { text: 'Fine.' })])] });
+    h.ctl.prepare([spot('danger', 1000, 800)]);
+    await flush();
+    h.ctl.ask([spot('danger', 1000, 800), spot('missing', 2000, 1200)]);
+    await flush();
+    expect(h.of('capture')).toEqual([[{ x: 1000, y: 800 }], [{ x: 1000, y: 800 }, { x: 2000, y: 1200 }]]);
+    expect(h.gathers()).toBe(2);
+    expect(h.requests).toHaveLength(1);
+    expect([...h.disk]).toEqual([]); // the read-ahead's folder went too
+  });
+
+  it('changes nothing on screen while it reads ahead', async () => {
+    const h = harness({ steps: [hangs({ accept: true })], recordActions: true });
+    h.ctl.ask([spot('danger')]);
+    await flush();
+    const seen = h.log.length;
+    const cancels = h.runnerCancels();
+    h.ctl.prepare([spot('missing', 2000, 1200)]);
+    await flush();
+    const quiet = new Set(['capture', 'framed', 'overlaysExcluded', 'windowsExcluded']);
+    expect(h.log.slice(seen).filter((e) => !quiet.has(e[0]))).toEqual([]);
+    expect(h.of('capture')).toHaveLength(2);
+    expect(h.tickets).toHaveLength(1);
+    expect(h.states).toEqual([true]);
+    expect(h.runnerCancels()).toBe(cancels);
+    expect(h.signals[0].aborted).toBe(false);
+    expect(h.ctl.running).toBe(true);
+  });
+
+  it('removes the folder of a read-ahead that is dropped or replaced', async () => {
+    const h = harness();
+    h.ctl.prepare([spot('danger')]);
+    await flush();
+    expect(h.dirs).toHaveLength(1);
+    expect(h.disk.has(h.dirs[0])).toBe(true);
+    h.ctl.prepare([spot('danger'), spot('missing', 2000, 1200)]);
+    await flush();
+    expect(h.dirs).toHaveLength(2);
+    expect([...h.disk]).toEqual([h.dirs[1]]);
+    h.ctl.dropPrepared();
+    await flush();
+    expect([...h.disk]).toEqual([]);
+
+    // Dropped while its capture runs: lolPing's windows come back into captures, and the folder goes.
+    const hung = harness({ captureHangs: true });
+    hung.ctl.prepare([spot('danger')]);
+    await flush();
+    expect(hung.of('overlaysExcluded')).toEqual([true]);
+    hung.ctl.dropPrepared();
+    await flush();
+    expect(hung.of('overlaysExcluded')).toEqual([true, false]);
+    expect(hung.of('windowsExcluded')).toEqual([true, false]);
+    expect([...hung.disk]).toEqual([]);
+  });
+
+  it('fails an adopted ask whose read failed', async () => {
+    const h = harness({ captureThrows: true });
+    h.ctl.prepare([spot('danger')]);
+    await flush();
+    expect(h.bubbles()).toEqual([]);
+    h.ctl.ask([spot('danger')]);
+    await flush();
+    expect(h.of('capture')).toHaveLength(1);
+    expect(h.adapters).toEqual([]);
+    expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.capture]);
     expect(h.ctl.running).toBe(false);
   });
 });

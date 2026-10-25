@@ -204,7 +204,7 @@ function harness(opts: Options = {}) {
   };
   const ctl = new AskController(deps);
   return {
-    ctl, pings, bubbles, cards, started, asks, written, appends, prompts,
+    ctl, pings, bubbles, cards, started, asks, written, appends, prompts, captures: () => captures,
     lines: () => bubbles.map((b) => b.line),
     /** The ask token the latest agent was given. */
     token: () => started.at(-1)?.spec.bridge.env.LOLPING_ASK ?? '',
@@ -623,5 +623,28 @@ describe('AskController with an agent', () => {
     await h.ctl.agentCall(h.token(), 'say', { text: 'Fixed it.' });
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards.at(-1)?.footer.route).toBe(t.ask.route.doIt);
+  });
+
+  it('reads ahead for an agent profile and spawns the agent only at the key-up', async () => {
+    const h = harness({ teammate: { profiles: [agent({ timeoutS: 120 })], defaultProfile: 'cc' } });
+    h.ctl.prepare([spot('danger')]);
+    await flush();
+    expect(h.captures()).toBe(1);
+    expect(h.asks).toEqual([]);
+    expect(h.started).toEqual([]);
+    await vi.advanceTimersByTimeAsync(100_000);
+
+    h.ctl.ask([spot('danger')]);
+    await flush();
+    expect(h.captures()).toBe(1);
+    expect(h.started).toHaveLength(1);
+    const { spec } = h.started[0];
+    expect(h.written.get(join(spec.askDir, 'ask.md'))).toContain('overview-c1.jpg');
+    // The profile's time limit runs from the key-up.
+    h.ctl.agentTools(h.token());
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(h.ctl.running).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.lines()).toEqual([t.ask.failed.timeout]);
   });
 });

@@ -51,6 +51,11 @@ export class SpotCollector {
     this.spots = [];
   }
 
+  /** The collected spots, kept. */
+  get held(): Spot[] {
+    return [...this.spots];
+  }
+
   get size(): number {
     return this.spots.length;
   }
