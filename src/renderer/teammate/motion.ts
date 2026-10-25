@@ -2,7 +2,11 @@ import { makeStyles, tokens } from '@fluentui/react-components';
 import type { CSSProperties } from 'react';
 
 /** Reduce motion (Windows animation effects off, macOS Reduce motion) turns every animation here off. */
-const REDUCED = '@media (prefers-reduced-motion: reduce)';
+const REDUCED_QUERY = '(prefers-reduced-motion: reduce)';
+const REDUCED = `@media ${REDUCED_QUERY}`;
+
+/** Whether motion is off right now; read it when needed, so a change of the OS setting counts at once. */
+export const reducedMotion = (): boolean => matchMedia(REDUCED_QUERY).matches;
 const still = { [REDUCED]: { animationName: 'none' } };
 
 /** Delay between items that arrive together; the stagger stops growing after this many. */

@@ -6,16 +6,16 @@ import {
   Checkmark16Regular, Copy16Regular, Dismiss16Regular, History16Regular, Send16Regular,
 } from '@fluentui/react-icons';
 import {
-  useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject,
 } from 'react';
 import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type CardState, type MateAction, type MateLeave } from '../../shared/teammateIpc';
 import { useSurfaceStyles } from './Bubble';
 import { cardButtons, copyText, footerText, PutGuard, putLabel } from './cardText';
 import { dragHandle } from './drag';
-import { HEIGHT_TARGET } from './easedHeight';
+import { contentHeight, HEIGHT_TARGET } from './easedHeight';
 import { renderMarkdown } from './markdown';
-import { stagger, useMotion } from './motion';
+import { reducedMotion, stagger, useMotion } from './motion';
 import { NameTag } from './NameTag';
 
 type Ui = Strings['teammate']['ui'];
@@ -72,21 +72,34 @@ const useStyles = makeStyles({
 });
 
 /**
- * The height the card should ease to: its content's, up to its maximum. The body shrinks when the card is held
- * shorter than its content, so the content's height is the card's plus what the body scrolls past.
+ * The height the card should ease to: its content's, up to its maximum. It is worked out from the children's own
+ * heights (the body by what it scrolls), not from the card's box, which is held at the last target while it eases.
  */
 function useContentHeight(card: RefObject<HTMLElement | null>, body: RefObject<HTMLElement | null>): number | undefined {
   const [height, setHeight] = useState<number | undefined>(undefined);
-  // After every render: the text streams in without the card's own box changing, so nothing else would notice.
-  useLayoutEffect(() => {
+  const watcher = useRef<ResizeObserver | null>(null);
+  const measure = useCallback((): void => {
     const c = card.current;
-    const b = body.current;
-    if (!c || !b) return;
-    const max = parseFloat(getComputedStyle(c).maxHeight);
-    const natural = c.offsetHeight - b.clientHeight + b.scrollHeight;
-    const next = Number.isFinite(max) ? Math.min(natural, max) : natural;
+    if (!c) return;
+    const css = getComputedStyle(c);
+    const chrome = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+      .reduce((sum, k) => sum + (parseFloat(css[k as 'paddingTop']) || 0), 0);
+    const flow = [...c.children].filter((el) => getComputedStyle(el).position !== 'absolute');
+    const heights = flow.map((el) => (el === body.current ? el.scrollHeight : (el as HTMLElement).offsetHeight));
+    const next = contentHeight(chrome, parseFloat(css.rowGap) || 0, heights, parseFloat(css.maxHeight) || Infinity);
     setHeight((h) => (h === next ? h : next));
+  }, [card, body]);
+  // After every render, and whenever a child changes size without one (a font arriving, Markdown laying out).
+  useLayoutEffect(() => {
+    measure();
+    const c = card.current;
+    if (!c) return;
+    watcher.current ??= new ResizeObserver(measure);
+    for (const el of [...c.children, ...(body.current?.children ?? [])]) {
+      if (el !== body.current) watcher.current.observe(el);
+    }
   });
+  useEffect(() => () => watcher.current?.disconnect(), []);
   return height;
 }
 
@@ -160,7 +173,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
   useEffect(() => {
     const el = bodyRef.current;
     if (!el || !s.streaming) return;
-    const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const smooth = !reducedMotion();
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   }, [s]);
 

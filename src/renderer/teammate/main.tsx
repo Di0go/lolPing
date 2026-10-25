@@ -9,6 +9,7 @@ import { Consent } from './Consent';
 import { HEIGHT_TARGET, heightStep } from './easedHeight';
 import { FormPreview } from './FormPreview';
 import { History } from './History';
+import { reducedMotion } from './motion';
 import { Words } from './Words';
 import './teammate.css';
 
@@ -49,15 +50,18 @@ function Sized({ children }: { children: ReactNode }) {
       const ahead = card ? Number(card.getAttribute(HEIGHT_TARGET)) - card.offsetHeight : 0;
       return { width: el.offsetWidth, height: el.offsetHeight + (Number.isFinite(ahead) ? ahead : 0), eased: !!card };
     };
+    // The height the pending shrink will settle at; a different one is a new shrink and waits out its own ease.
+    let settling = 0;
     const report = (): void => {
       const { width, height, eased } = measure();
-      const reduced = !eased || matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const step = heightStep(sent.height, height, reduced);
+      const step = heightStep(sent.height, height, !eased || reducedMotion());
       send(width, step.window);
       if (step.settleMs === 0) {
         clearTimeout(settle);
         settle = undefined;
-      } else if (settle === undefined) {
+      } else if (settle === undefined || settling !== height) {
+        clearTimeout(settle);
+        settling = height;
         settle = setTimeout(() => {
           settle = undefined;
           const now = measure();

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Strings } from '../../shared/i18n';
 import type { HistoryState, MateAction } from '../../shared/teammateIpc';
 import { groupByDay, type Day } from './historyDays';
-import { stagger, useMotion } from './motion';
+import { reducedMotion, stagger, useMotion } from './motion';
 
 /** Typing pauses this long before the list is searched again. */
 const SEARCH_WAIT_MS = 150;
@@ -64,7 +64,6 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
   // Rows that have scrolled into view, each with its place in the group that arrived together (for the stagger).
   const [seen, setSeen] = useState<ReadonlyMap<string, number>>(new Map());
   const watcher = useRef<IntersectionObserver | null>(null);
-  const reduced = useMemo(() => matchMedia('(prefers-reduced-motion: reduce)').matches, []);
 
   const watch = useCallback((el: HTMLElement | null) => {
     if (!el) return;
@@ -105,7 +104,12 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
     setRemoving((r) => new Set(r).add(id));
     setTimeout(() => act({ t: 'delete', id }), DELETE_MS);
   };
-  const shown = (id: string): boolean => reduced || seen.has(id);
+  const shown = (id: string): boolean => reducedMotion() || seen.has(id);
+  // A day's name arrives with its first row.
+  const dayShown = (g: { threads: readonly { id: string }[] }): boolean => {
+    const first = g.threads[0];
+    return first === undefined || shown(first.id);
+  };
 
   return (
     <div className={st.page}>
@@ -132,7 +136,12 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
           )}
           {groups.map((g) => (
             <section key={String(g.day)}>
-              <Body1Strong className={mergeClasses(st.day, m.rise)}>{dayName(g.day)}</Body1Strong>
+              <Body1Strong
+                className={mergeClasses(st.day, dayShown(g) ? m.rise : st.unseen)}
+                style={dayShown(g) ? stagger(seen.get(g.threads[0]?.id ?? '') ?? 0) : undefined}
+              >
+                {dayName(g.day)}
+              </Body1Strong>
               {g.threads.map((th) => (
                 <div
                   key={th.id}

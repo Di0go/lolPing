@@ -12,3 +12,12 @@ export function heightStep(shown: number, target: number, reduced: boolean): { w
   if (reduced) return { window: target, settleMs: 0 };
   return { window: Math.max(shown, target), settleMs: target < shown ? EASE_MS : 0 };
 }
+
+/**
+ * The height a column of boxes needs, whatever height it is held at now: the room round it (padding and border),
+ * its children's own heights and the gaps between them, up to `max`.
+ */
+export function contentHeight(chrome: number, gap: number, children: readonly number[], max: number): number {
+  const gaps = Math.max(children.length - 1, 0) * gap;
+  return Math.min(chrome + gaps + children.reduce((sum, h) => sum + h, 0), max);
+}
