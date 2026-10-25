@@ -4,7 +4,7 @@ This file is for everyone who changes code here: maintainers, contributors, and 
 
 ## What lolPing is
 
-A League of Legends ping wheel for the Windows and macOS desktop. Hold a key, drag, release on a slice, and a League ping appears with its sound. Emotes and rooms (pinging with friends over the local network or public Nostr relays) are built on the same wheel. It starts with the system, sits in the tray, and stays out of the way of normal mouse and keyboard use.
+A League of Legends ping wheel for the Windows and macOS desktop. Hold a key, drag, release on a slice, and a League ping appears with its sound. Emotes, rooms (pinging with friends over the local network or public Nostr relays) and the AI teammate (an ask wheel whose pings an AI model or a coding agent answers at the spot) are built on the same wheel. It starts with the system, sits in the tray, and stays out of the way of normal mouse and keyboard use.
 
 Supported today: Windows 11 x64, macOS 13+ on Apple Silicon, and Linux x64 on X11 (experimental, no Wayland).
 
@@ -16,19 +16,20 @@ Whatever a change adds, the app keeps doing these:
 2. **Both platforms.** A change for one OS doesn't change behaviour on the other. Gate it with `src/shared/platform.ts` in TypeScript, or put it in the platform's own file in `native/hook-helper/src` (`hooks_win.cpp`, `hooks_mac.cpp`, `hooks_linux.cpp`). Linux code is gated the same way.
 3. **Both languages.** Every user-facing string lives in `src/shared/i18n.ts` with an English and a Simplified Chinese entry. No hard-coded UI text. A README change goes into both `README.md` and `README.zh-CN.md`.
 4. **Old settings and old peers keep working.** `normalizeSettings` in `src/shared/settings.ts` turns any old or broken settings file into valid settings, so new fields need a default there. Room messages (`src/shared/roomProtocol.ts`) stay readable by older apps; when that can't be done, bump `PROTOCOL_VERSION` so older peers show "needs update". A new relay list keeps at least 3 relays from the old one (see `src/main/relays.ts`).
-5. **Network use is visible.** The app talks to GitHub for update checks, and to the relays and the local network while the user is in a room. Say so in the pull request when a change adds a new host, and describe it in the README's privacy notes.
+5. **Network use is visible.** The app talks to GitHub for update checks, to the relays and the local network while the user is in a room, and to the AI providers the user sets up while the teammate answers an ask. Say so in the pull request when a change adds a new host, and describe it in the README's privacy notes.
 6. **Bundled League assets come from `tools/extract-assets`,** so they can be extracted again after a patch.
 
 ## Layout
 
 | Path | What lives there |
 | --- | --- |
-| `native/hook-helper/` | C++ input helper: global hooks (Windows), event tap (macOS), or XInput2/XTest (Linux X11). The gesture state machine is `decision.cpp`, tested by `tests/helper_tests.cpp`. Talks to Electron in JSON lines (`src/shared/protocol.ts`). |
-| `src/main/` | Electron main process: helper bridge, overlays, settings store, rooms, updater, tray |
+| `native/hook-helper/` | C++ input helper: global hooks (Windows), event tap (macOS), or XInput2/XTest (Linux X11). The gesture state machine is `decision.cpp`, tested by `tests/helper_tests.cpp`. Talks to Electron in JSON lines (`src/shared/protocol.ts`). The same folder builds the context helper (`src/context_*`, tested by `tests/context_tests.cpp`), a separate process that captures the screen, reads text and fields, and pastes for the teammate, so none of that runs next to the input hooks (`src/shared/teammate/contextProtocol.ts`). |
+| `src/main/` | Electron main process: helper bridge, overlays, settings store, rooms, updater, tray. The teammate's glue is in `teammate/` (asks, context client, file readers, model providers, agent runner, history, secrets) and the MCP bridge for coding agents in `mcp/`. |
 | `src/preload/` | The bridge each window gets. Expose only what that window needs. |
 | `src/renderer/overlay/` | The wheel and pings, plain TypeScript and DOM, no framework |
 | `src/renderer/settings/` | The settings window, React + Fluent UI v9 |
-| `src/shared/` | Pure code used by every process: settings, protocols, i18n, ping tables. No Electron or Node imports. |
+| `src/renderer/teammate/` | The teammate's windows (bubble, card, consent card, form preview, words box, history, first-run card), React + Fluent UI v9 |
+| `src/shared/` | Pure code used by every process: settings, protocols, i18n, ping tables, and the teammate's rules in `teammate/`. No Electron or Node imports. |
 | `tests/` | Vitest tests, mirroring `src/` |
 | `site/` | The browser demo, reusing the overlay code |
 | `tools/` | Asset extraction, media capture, room and relay test tools |
@@ -56,7 +57,7 @@ npm run test:helper
 npm test
 ```
 
-- TypeScript tests live in `tests/<area>/<module>.test.ts`, mirroring `src/<area>/<module>.ts`. Native tests go in `native/hook-helper/tests/helper_tests.cpp`.
+- TypeScript tests live in `tests/<area>/<module>.test.ts`, mirroring `src/<area>/<module>.ts`. Native tests go in `native/hook-helper/tests/helper_tests.cpp`, or `context_tests.cpp` for the context helper.
 - One `describe` per module or class, named after it. Each `it` states the behaviour in plain words: `it('caps the total even when every packet claims a different source')`.
 - New logic comes with tests. A bug fix comes with a test that fails without the fix, unless the bug is only reachable through the OS or the screen. Then say how you checked it by hand.
 - Test behaviour, not mocks. A test that only checks a mock was called doesn't test the feature.
