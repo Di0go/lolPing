@@ -168,19 +168,21 @@ bool writeJpeg(const Image& img, int quality, const std::string& path, Failure& 
   return SUCCEEDED(r);
 }
 
-bool foreground(std::string& app, std::string& title, std::string& windowId, Failure&) {
+bool foreground(std::string& app, std::string& title, std::string& windowId, uint32_t& pid, Failure&) {
   app.clear();
   title.clear();
   windowId.clear();
+  pid = 0;
   const HWND w = GetForegroundWindow();
   if (!w) return true;  // nothing in front (the desktop or a secure screen): all stay empty
   windowId = std::to_string(reinterpret_cast<uintptr_t>(w));
   wchar_t text[512];
   const int n = GetWindowTextW(w, text, 512);
   title = utf8(std::wstring(text, n > 0 ? static_cast<size_t>(n) : 0));
-  DWORD pid = 0;
-  GetWindowThreadProcessId(w, &pid);
-  if (const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+  DWORD owner = 0;
+  GetWindowThreadProcessId(w, &owner);
+  pid = static_cast<uint32_t>(owner);
+  if (const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, owner)) {
     wchar_t image[MAX_PATH];
     DWORD size = MAX_PATH;
     if (QueryFullProcessImageNameW(proc, 0, image, &size)) {

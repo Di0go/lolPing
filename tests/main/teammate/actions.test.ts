@@ -101,7 +101,7 @@ function harness(opts: Options = {}) {
       foreground: async () => {
         const window = next(front) ?? '';
         log.push(['foreground', window]);
-        return { app: 'Chrome', title: '', window };
+        return { app: 'Chrome', title: '', window, pid: 4242 };
       },
     },
     clipboard: { write: async (item) => void log.push(['clip', item]) },

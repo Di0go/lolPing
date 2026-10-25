@@ -70,6 +70,15 @@ describe('StaleRule', () => {
     expect(r.front({ ...page, window: '5150' })).toBe(true);
   });
 
+  it('an ask made from lolPing\'s own window takes its baseline from the next window in front', () => {
+    // Asked from the card's reply box: no ask window, and lolPing's own polls don't set the baseline.
+    const r = rule('');
+    expect(r.front(settings)).toBe(false);
+    expect(r.front(page)).toBe(false);
+    expect(r.front(page)).toBe(false);
+    expect(r.front({ ...page, title: 'Other tab - Chrome' })).toBe(true);
+  });
+
   it('ignores lolPing\'s own window in front', () => {
     const r = rule();
     r.front(page);

@@ -66,7 +66,7 @@ describe('ContextClient', () => {
     expect(err).toBeInstanceOf(ContextError);
     expect((err as ContextError).code).toBe('timeout');
     expect(starts()).toBe(2);
-    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
+    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544', pid: 4242 });
   });
 
   it('rejects when aborted and ignores the late reply', async () => {
@@ -76,7 +76,7 @@ describe('ContextClient', () => {
     ac.abort();
     await expect(shot).rejects.toMatchObject({ code: 'aborted' });
     // The helper still answers the capture before this; that late line must not settle anything else.
-    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
+    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544', pid: 4242 });
     expect(starts()).toBe(1);
   });
 
@@ -90,7 +90,7 @@ describe('ContextClient', () => {
 
   it('reads the foreground app and title', async () => {
     const { c } = client(['ok']);
-    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
+    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544', pid: 4242 });
   });
 
   it('reads the window in front', async () => {
@@ -185,7 +185,7 @@ describe('ContextClient', () => {
     expect(got.marks?.count).toBe(1);
     expect(got.file).toBeNull();
     // The old helper is on its way out and reads nothing more: this request must go to a fresh one.
-    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
+    await expect(c.foreground(signal())).resolves.toEqual({ app: 'notepad', title: 'notes.txt - Notepad', window: '263544', pid: 4242 });
     expect(starts()).toBe(2);
   });
 

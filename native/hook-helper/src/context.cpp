@@ -705,12 +705,14 @@ Reply handleCommand(const Command& cmd, const ContextPlatform& platform, int bud
       case Command::Kind::Capture: return Reply{handleCapture(cmd, platform)};
       case Command::Kind::Foreground: {
         std::string app, title, windowId;
+        uint32_t pid = 0;
         Failure fail;
-        if (!platform.foreground(app, title, windowId, fail)) {
+        if (!platform.foreground(app, title, windowId, pid, fail)) {
           return Reply{formatError(cmd.id, fail.code, fail.message)};
         }
         return Reply{"{\"type\":\"foreground\",\"id\":\"" + jsonEscape(cmd.id) + "\",\"app\":\"" + jsonEscape(app) +
-                     "\",\"title\":\"" + jsonEscape(title) + "\",\"window\":\"" + jsonEscape(windowId) + "\"}"};
+                     "\",\"title\":\"" + jsonEscape(title) + "\",\"window\":\"" + jsonEscape(windowId) +
+                     "\",\"pid\":" + std::to_string(pid) + "}"};
       }
       case Command::Kind::Front: {
         if (!platform.front) return Reply{formatError(cmd.id, "bad", "front is not available here")};
@@ -1082,8 +1084,9 @@ std::string resultLine(const char* type, const std::string& id, const std::strin
 std::string frontWindow(const ContextPlatform& p) {
   if (p.frontWindowId) return p.frontWindowId();
   std::string app, title, window;
+  uint32_t pid = 0;
   Failure fail;
-  return p.foreground(app, title, window, fail) ? window : std::string();
+  return p.foreground(app, title, window, pid, fail) ? window : std::string();
 }
 
 bool hasPasteRoute(const ContextPlatform& p) {

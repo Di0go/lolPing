@@ -75,6 +75,8 @@ interface HarnessOptions {
   done?: string[];
   /** The helper never says which window is in front. */
   foregroundHangs?: boolean;
+  /** The process that owns the window in front; OWN_PID is lolPing's. */
+  foregroundPid?: number;
   /** Hears the foreground app of each ask. */
   seenApp?: (app: string) => void;
 }
@@ -92,6 +94,7 @@ interface Screen {
   boxes: Rect[];
 }
 
+const OWN_PID = 1000;
 const NO_TEXT: SystemTextLayer = { selection: '', spotTexts: [], focus: null, address: '' };
 
 function harness(opts: HarnessOptions = {}) {
@@ -151,7 +154,7 @@ function harness(opts: HarnessOptions = {}) {
     context: {
       foreground: async () => (opts.foregroundHangs
         ? new Promise<never>(() => undefined)
-        : { app: 'notepad.exe', title: 'notes.txt', window: '263544' }),
+        : { app: 'notepad.exe', title: 'notes.txt', window: '263544', pid: opts.foregroundPid ?? 4242 }),
       capture: async (req, signal) => {
         captures += 1;
         log.push(['capture', req.spots]);
@@ -196,6 +199,7 @@ function harness(opts: HarnessOptions = {}) {
         };
       },
     },
+    ownPid: OWN_PID,
     readers: {
       readFile: async (path) => (path.endsWith('fields.jsonl') ? screen.fields : screen.marksFile),
       readDocument: async () => {
@@ -1065,6 +1069,17 @@ describe('AskController', () => {
       expect(watches).toEqual([{ window: '263544' }, null, { window: '263544' }, null, { window: '263544' }]);
       h.ctl.cancel('user');
       expect(watches.at(-1)).toBeNull();
+    });
+
+    it('watches with no window when the ask was made from lolPing\'s own window', async () => {
+      const h = harness({
+        foregroundPid: OWN_PID, // the card's reply box had the keyboard
+        steps: [answers([call('say', { text: 'Short.' }), call('ping', { type: 'danger', x: 600, y: 400 })])],
+      });
+      const watches = watching(h);
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      expect(watches).toEqual([{ window: '' }]);
     });
   });
 

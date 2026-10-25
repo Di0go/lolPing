@@ -175,10 +175,11 @@ struct Fake {
       written.emplace_back(path, img);
       return true;
     };
-    p.foreground = [](std::string& app, std::string& title, std::string& windowId, Failure&) {
+    p.foreground = [](std::string& app, std::string& title, std::string& windowId, uint32_t& pid, Failure&) {
       app = "notepad";
       title = "a \"note\".txt";
       windowId = "263544";
+      pid = 4242;
       return true;
     };
     return p;
@@ -259,6 +260,7 @@ static void test_foreground_and_pong_replies() {
   CHECK(f.at("type") == "foreground" && f.at("id") == "f1" && f.at("app") == "notepad");
   CHECK(f.at("title") == "a \"note\".txt");
   CHECK(f.at("window") == "263544");
+  CHECK(f.at("pid") == "4242");
   const auto p = fields(handleCommand(parseCommand(R"({"type":"ping","id":"p1"})"), fake.platform()).line);
   CHECK(p.at("type") == "pong" && p.at("id") == "p1");
   const auto b = fields(handleCommand(parseCommand(R"({"type":"capture","id":"b1"})"), fake.platform()).line);
@@ -939,7 +941,7 @@ ClipFormat format(unsigned id, const std::string& name, const std::string& bytes
 
 ContextPlatform pastePlatform(const std::shared_ptr<PasteState>& s) {
   ContextPlatform p;
-  p.foreground = [s](std::string& app, std::string& title, std::string& windowId, Failure&) {
+  p.foreground = [s](std::string& app, std::string& title, std::string& windowId, uint32_t&, Failure&) {
     app = "notepad";
     title = "notes.txt - Notepad";
     windowId = s->fg;
@@ -1367,7 +1369,7 @@ static void test_paste_refuses_when_the_clipboard_cannot_be_saved() {
 static void test_paste_asks_the_front_window_without_calling_into_the_app() {
   const auto s = std::make_shared<PasteState>();
   ContextPlatform p = pastePlatform(s);
-  p.foreground = [s](std::string&, std::string&, std::string&, Failure&) {
+  p.foreground = [s](std::string&, std::string&, std::string&, uint32_t&, Failure&) {
     s->note("foreground");
     return false;
   };
@@ -1390,7 +1392,7 @@ static void test_paste_asks_the_front_window_without_calling_into_the_app() {
 static void test_setfield_asks_the_front_window_without_calling_into_the_app() {
   const auto s = std::make_shared<PasteState>();
   ContextPlatform p = pastePlatform(s);
-  p.foreground = [s](std::string&, std::string&, std::string&, Failure&) {
+  p.foreground = [s](std::string&, std::string&, std::string&, uint32_t&, Failure&) {
     s->note("foreground");
     return false;
   };

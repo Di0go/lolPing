@@ -72,7 +72,7 @@ describe('an agent answering an ask', () => {
       lang: () => 'en',
       secrets: { available: () => true, key: () => null, instructions: () => '' },
       context: {
-        foreground: async () => ({ app: 'notepad.exe', title: 'notes.txt', window: '1' }),
+        foreground: async () => ({ app: 'notepad.exe', title: 'notes.txt', window: '1', pid: 4242 }),
         capture: async (req) => {
           captures += 1;
           await mkdir(req.dir, { recursive: true });
@@ -90,6 +90,7 @@ describe('an agent answering an ask', () => {
           fields: null, marks: null, text: null, file: null, boxes: req.boxes ? req.spots.map(() => []) : null,
         }),
       },
+      ownPid: 1000,
       readers: {
         readFile: async () => '',
         readDocument: async () => {

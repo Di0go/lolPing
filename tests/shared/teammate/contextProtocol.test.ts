@@ -68,13 +68,14 @@ describe('contextProtocol', () => {
   it('reads errors, foreground and pong', () => {
     expect(parseContextLine(JSON.stringify({ type: 'error', id: '', code: 'bad', message: 'no id' })))
       .toEqual({ type: 'error', id: '', code: 'bad', message: 'no id' });
-    expect(parseContextLine(JSON.stringify({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '263544' })))
-      .toEqual({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '263544' });
-    expect(parseContextLine(JSON.stringify({ type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '' })))
-      .toMatchObject({ window: '' });
-    const noWindow = { type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts' };
+    const fg = { type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', window: '263544', pid: 4242 };
+    expect(parseContextLine(JSON.stringify(fg))).toEqual(fg);
+    expect(parseContextLine(JSON.stringify({ ...fg, window: '', pid: 0 }))).toMatchObject({ window: '', pid: 0 });
+    const noWindow = { type: 'foreground', id: 'r2', app: 'Code', title: 'a.ts', pid: 4242 };
     expect(parseContextLine(JSON.stringify(noWindow))).toBeNull();
     expect(parseContextLine(JSON.stringify({ ...noWindow, window: '12x' }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...fg, pid: undefined }))).toBeNull();
+    expect(parseContextLine(JSON.stringify({ ...fg, pid: -1 }))).toBeNull();
     expect(parseContextLine(JSON.stringify({ type: 'pong', id: 'r3' }))).toEqual({ type: 'pong', id: 'r3' });
   });
 

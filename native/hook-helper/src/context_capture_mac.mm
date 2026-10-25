@@ -238,15 +238,17 @@ bool writeJpeg(const Image& img, int quality, const std::string& path, Failure& 
   }
 }
 
-bool foreground(std::string& app, std::string& title, std::string& windowId, Failure&) {
+bool foreground(std::string& app, std::string& title, std::string& windowId, uint32_t& pid, Failure&) {
   @autoreleasepool {
     app.clear();
     title.clear();
     windowId.clear();
+    pid = 0;
     // NSWorkspace learns about app switches from run loop notifications; this process blocks on stdin otherwise.
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate date]];
     NSRunningApplication* front = NSWorkspace.sharedWorkspace.frontmostApplication;
     if (!front) return true;
+    pid = static_cast<uint32_t>(front.processIdentifier);
     if (front.localizedName) app = front.localizedName.UTF8String;
     windowId = frontWindowId(front.processIdentifier);
     AXUIElementRef el = AXUIElementCreateApplication(front.processIdentifier);

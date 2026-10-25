@@ -93,8 +93,8 @@ export interface ReadResult {
 export type ContextReply =
   | { type: 'captured'; id: string; overview: string; ow: number; oh: number; zooms: { path: string; rect: Rect }[] }
   | ({ type: 'read'; id: string } & ReadResult)
-  /** `window` is the window's id (the HWND in decimal on Windows), or '' where the helper has none. */
-  | { type: 'foreground'; id: string; app: string; title: string; window: string }
+  /** `window` is the window's id (the HWND in decimal on Windows), or '' where the helper has none; `pid` its process. */
+  | { type: 'foreground'; id: string; app: string; title: string; window: string; pid: number }
   /** The window in front, read without calling into its app; no window and a zero box when nothing is in front. */
   | {
     type: 'front'; id: string; window: string; title: string; x: number; y: number; w: number; h: number; pid: number;
@@ -381,8 +381,8 @@ export function parseContextLine(line: string): ContextReply | null {
     }
     case 'foreground':
       if (typeof o.app !== 'string' || typeof o.title !== 'string') return null;
-      if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window)) return null;
-      return { type: 'foreground', id, app: o.app, title: o.title, window: o.window };
+      if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window) || !isCount(o.pid)) return null;
+      return { type: 'foreground', id, app: o.app, title: o.title, window: o.window, pid: o.pid };
     case 'front':
       if (typeof o.window !== 'string' || !/^[0-9]*$/.test(o.window) || typeof o.title !== 'string') return null;
       if (!isInt(o.x) || !isInt(o.y) || !isCount(o.w) || !isCount(o.h) || !isCount(o.pid)) return null;

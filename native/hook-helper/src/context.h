@@ -214,8 +214,12 @@ struct ContextPlatform {
   std::function<bool(const Rect& display, Image& out, Failure& fail)> grab;
   std::function<bool(const Image& in, int w, int h, Image& out)> resize;
   std::function<bool(const Image& img, int quality, const std::string& path, Failure& fail)> writeJpeg;
-  /** `windowId` names the window for later commands (the HWND in decimal on Windows); empty where there is none. */
-  std::function<bool(std::string& app, std::string& title, std::string& windowId, Failure& fail)> foreground;
+  /**
+   * `windowId` names the window for later commands (the HWND in decimal on Windows); empty where there is none.
+   * `pid`: the process that owns it (0 when nothing is in front), so main can tell its own windows apart.
+   */
+  std::function<bool(std::string& app, std::string& title, std::string& windowId, uint32_t& pid, Failure& fail)>
+      foreground;
   /**
    * The window in front by foreground's id, its caption, box and process id, without calling into its app (no
    * Accessibility or UI Automation call). Nothing in front: empty window, zero box. Optional: unset answers `bad`.

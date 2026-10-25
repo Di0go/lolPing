@@ -56,6 +56,8 @@ export interface AskDeps {
   lang: () => Lang;
   secrets: Pick<SecretStore, 'key' | 'instructions' | 'available'>;
   context: Pick<ContextClient, 'capture' | 'foreground' | 'read'>;
+  /** lolPing's main process, which owns the card and the words box: an ask made from one isn't made in that window. */
+  ownPid: number;
   /** What gather reads the marks file and the file behind the window with. */
   readers: Omit<GatherDeps, 'context'>;
   adapter: (p: BuiltinProfile, key: string) => ProviderAdapter;
@@ -712,11 +714,12 @@ export class AskController extends EventEmitter {
     const signal = run.abort.signal;
     // The total time runs from the first helper call, so a capture, helper or file read that hangs can't hold it up.
     this.deadline(run, TOTAL_MS, () => this.fail(run, 'timeout'));
-    const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '', window: '' }));
+    const fg = await deps.context.foreground(signal).catch(() => ({ app: '', title: '', window: '', pid: 0 }));
     if (!this.alive(run)) return;
     run.app = fg.app;
     run.title = fg.title;
-    run.window = fg.window;
+    // Asked from the card's reply box or Whole picture: the page the marks point at is the next window in front.
+    run.window = fg.pid === deps.ownPid ? '' : fg.window;
     deps.seenApp?.(fg.app);
     const routed = route(t, { intent: run.spot.intent, deep: run.intent.def.deep, app: run.app, title: run.title });
     const routeText = routed ? routeLabel(routed.reason, t, run.lang) : '';

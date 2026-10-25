@@ -59,7 +59,7 @@ function harness(opts: Options = {}) {
     context: {
       foreground: () => (opts.holdAsk
         ? new Promise(() => undefined)
-        : Promise.resolve({ app: '', title: '', window: '' })),
+        : Promise.resolve({ app: '', title: '', window: '', pid: 0 })),
       // Only the user's own ask, which the tests that need an answer on screen start, reads the screen.
       capture: async (req) => ({
         overviewPath: `${req.dir}/overview.jpg`,
@@ -71,6 +71,7 @@ function harness(opts: Options = {}) {
         fields: null, marks: null, text: null, file: null, boxes: req.boxes ? req.spots.map(() => []) : null,
       }),
     },
+    ownPid: 1000,
     readers: {
       readFile: async () => '',
       readDocument: async () => {

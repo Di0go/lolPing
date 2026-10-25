@@ -88,11 +88,14 @@ export class ContextClient {
     return { status: r.status, marks: r.marks, text: r.text, file: r.file, boxes: r.boxes, fields: r.fields };
   }
 
-  /** `window` is the window's id (the HWND in decimal on Windows), kept for pasting and filling into it later. */
-  async foreground(signal: AbortSignal): Promise<{ app: string; title: string; window: string }> {
+  /**
+   * `window` is the window's id (the HWND in decimal on Windows), kept for pasting and filling into it later; `pid` is
+   * the process that owns it (0 when nothing is in front).
+   */
+  async foreground(signal: AbortSignal): Promise<{ app: string; title: string; window: string; pid: number }> {
     const r = await this.request((id) => ({ type: 'foreground', id }), 'foreground', signal);
     if (r.type !== 'foreground') throw new ContextError('bad', `unexpected reply ${r.type}`);
-    return { app: r.app, title: r.title, window: r.window };
+    return { app: r.app, title: r.title, window: r.window, pid: r.pid };
   }
 
   /** The window in front, read without calling into its app, so a frozen app cannot stall it. */

@@ -17,7 +17,7 @@ import type { BubbleState, CardState } from '../../../src/shared/teammateIpc';
 
 const DISPLAY = { x: 0, y: 0, w: 3200, h: 2000 };
 const t = strings('en').teammate;
-const VSCODE = { app: 'Code.exe', title: 'app.ts - lolPing - Visual Studio Code', window: '42' };
+const VSCODE = { app: 'Code.exe', title: 'app.ts - lolPing - Visual Studio Code', window: '42', pid: 4242 };
 
 const agent = (over: Partial<AgentProfile> = {}): AgentProfile => ({
   id: 'cc', kind: 'agent', name: 'My Claude', tagColor: 1, tagColorCustom: null, preset: 'claude', command: 'claude',
@@ -44,7 +44,7 @@ interface Started {
 
 interface Options {
   teammate?: Partial<TeammateSettings>;
-  foreground?: { app: string; title: string; window: string };
+  foreground?: { app: string; title: string; window: string; pid: number };
   startThrows?: AgentStartError;
   /** The bridge server isn't listening: no command for an agent. */
   bridgeDown?: boolean;
@@ -141,6 +141,7 @@ function harness(opts: Options = {}) {
         fields: null, marks: null, text: null, file: null, boxes: req.boxes ? req.spots.map(() => []) : null,
       }),
     },
+    ownPid: 1000,
     readers: {
       readFile: async () => '',
       readDocument: async () => {

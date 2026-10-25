@@ -65,7 +65,7 @@ async function handle(cmd) {
   if (cmd.type === 'capture') capture(cmd);
   else if (cmd.type === 'foreground') {
     await later(300);
-    reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544' });
+    reply({ type: 'foreground', id: cmd.id, app: 'notepad', title: 'notes.txt - Notepad', window: '263544', pid: 4242 });
   }
   else if (cmd.type === 'front') {
     reply({ type: 'front', id: cmd.id, window: '263544', title: 'notes.txt - Notepad', x: -1920, y: 40, w: 900, h: 700, pid: 4242 });

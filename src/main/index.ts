@@ -935,6 +935,7 @@ function start(): void {
       lang: mateLang,
       secrets,
       context,
+      ownPid: process.pid,
       readers: {
         readFile: (path) => readFile(path, 'utf8'),
         readDocument: (path, opts) => readDocument(path, { ...pdf, ...opts }),
