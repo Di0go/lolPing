@@ -188,7 +188,8 @@ export function WheelEditor<T extends string>({
                 onClick={() => clickTarget(i, { from: 'slot', id, slot: i })}
                 onKeyDown={activate(() => clickTarget(i, { from: 'slot', id, slot: i }))}
                 onContextMenu={(e) => openFx(id, e)}>
-                <img src={icon(id)} alt="" />
+                {/* Keyed by ping, so a ping dropped here pops in. */}
+                <img key={id} src={icon(id)} alt="" />
               </div>
             );
           })}
@@ -198,7 +199,7 @@ export function WheelEditor<T extends string>({
             {...dragProps({ from: 'center', id: center })} {...dropProps('center')}
             onClick={() => clickTarget('center', { from: 'center', id: center })}
             onKeyDown={activate(() => clickTarget('center', { from: 'center', id: center }))}>
-            <img src={icon(center)} alt="" />
+            <img key={center} src={icon(center)} alt="" />
             <span>{t.wheelCenter}</span>
           </div>
         </div>

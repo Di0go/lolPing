@@ -91,7 +91,7 @@ export function KeyCapture(props: {
         }}
       >
         {listening ? (
-          <span className="desc">{hint ?? t.pressKey}</span>
+          <span className="desc keyListen">{hint ?? t.pressKey}</span>
         ) : (
           <span className="keys">{props.parts.map((p) => <kbd key={p}>{p}</kbd>)}</span>
         )}
