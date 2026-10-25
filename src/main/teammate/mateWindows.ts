@@ -36,6 +36,8 @@ const START_SIZE: Record<MateView, Size> = {
 const LEAVE_MS: Record<MateLeave, number> = { fast: 170, stale: 620 };
 /** If the words box has no keyboard focus by then, it cancels instead of sitting there (as the text box does). */
 const FOCUS_WAIT_MS = 2000;
+/** The words box's ask waits this long at most for the box to close and hand the keyboard back. */
+const CLOSE_WAIT_MS = 500;
 
 interface Slot {
   view: MateView;
@@ -58,12 +60,14 @@ interface Slot {
   focusOnShow: boolean;
   /** Where the window was when the user started dragging it; null when no drag is on. */
   dragFrom: Point | null;
+  /** Sends the words box's ask, which waits for the box to close; null when none is waiting. */
+  sendAsk: (() => void) | null;
 }
 
 const emptySlot = (view: MateView): Slot => ({
   view, win: null, loaded: false, state: null, shown: false, at: { x: 0, y: 0 }, size: { ...START_SIZE[view] }, ended: false,
   leaveTimer: null, hadFocus: false, formIds: new Set(), focusOnShow: false,
-  dragFrom: null,
+  dragFrom: null, sendAsk: null,
 });
 
 /**
@@ -196,6 +200,7 @@ export class MateWindows extends EventEmitter {
    */
   showWords(at: Point, s: WordsState): void {
     const old = this.slots.words;
+    old.sendAsk?.(); // the last box's ask goes before this box's spots replace its own
     if (old.win && !old.win.isDestroyed()) this.endWords(old, { t: 'cancel' });
     const slot: Slot = { ...emptySlot('words'), at, state: s, shown: true };
     this.slots.words = slot;
@@ -358,8 +363,21 @@ export class MateWindows extends EventEmitter {
   private endWords(slot: Slot, action: MateAction): void {
     if (slot.ended) return;
     slot.ended = true;
-    this.emit('action', { view: 'words', action });
-    if (slot.win && !slot.win.isDestroyed()) slot.win.close();
+    const w = slot.win;
+    if (action.t !== 'ask' || !w || w.isDestroyed()) {
+      this.emit('action', { view: 'words', action });
+      if (w && !w.isDestroyed()) w.close();
+      return;
+    }
+    // The ask reads the window in front and pastes into it: it goes once the box has handed the keyboard back.
+    const timer = setTimeout(() => slot.sendAsk?.(), CLOSE_WAIT_MS);
+    slot.sendAsk = () => {
+      slot.sendAsk = null;
+      clearTimeout(timer);
+      this.emit('action', { view: 'words', action });
+    };
+    w.once('closed', () => slot.sendAsk?.());
+    w.close();
   }
 
   private workArea(at: Point): Electron.Rectangle {

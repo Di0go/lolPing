@@ -153,13 +153,14 @@ beforeEach(async () => {
 });
 
 describe('MateWindows', () => {
-  it('passes on only the actions the sending window may ask for', () => {
+  it('passes on only the actions the sending window may ask for', async () => {
     mate.showBubble({ x: 10, y: 10 }, bubble);
     mate.showWords({ x: 10, y: 10 }, words);
     sendAction(0, { t: 'more' });
     sendAction(0, { t: 'ask', text: 'hi', newThread: false });
     sendAction(1, { t: 'ask', text: 'hi', newThread: false });
     h.handlers.get('mate:action')?.({ sender: {} }, { t: 'more' });
+    await vi.waitFor(() => expect(h.windows[1].destroyed).toBe(true));
     expect(actions).toEqual([
       { view: 'bubble', action: { t: 'more' } },
       { view: 'words', action: { t: 'ask', text: 'hi', newThread: false } },
@@ -242,6 +243,7 @@ describe('MateWindows', () => {
     await vi.waitFor(() => expect(a.destroyed).toBe(true)); // the old box's blur and close don't touch the new one
     sendAction(0, { t: 'ask', text: 'old', newThread: false });
     sendAction(1, { t: 'ask', text: 'new', newThread: false });
+    await vi.waitFor(() => expect(b.destroyed).toBe(true));
     expect(actions).toEqual([
       { view: 'words', action: { t: 'cancel' } },
       { view: 'words', action: { t: 'ask', text: 'new', newThread: false } },
@@ -260,7 +262,43 @@ describe('MateWindows', () => {
     await vi.waitFor(() => expect(a.destroyed).toBe(true));
     expect(b.destroyed).toBe(false);
     sendAction(1, { t: 'ask', text: 'hi', newThread: true });
+    await vi.waitFor(() => expect(b.destroyed).toBe(true));
     expect(actions).toEqual([{ view: 'words', action: { t: 'ask', text: 'hi', newThread: true } }]);
+  });
+
+  it('sends the words box ask once the box has closed, so the window in front is the app again', async () => {
+    mate.showWords({ x: 10, y: 10 }, words);
+    const w = h.windows[0];
+    w.emit('focus');
+    sendAction(0, { t: 'ask', text: 'hi', newThread: false });
+    expect(actions).toEqual([]);
+    await vi.waitFor(() => expect(w.destroyed).toBe(true));
+    expect(actions).toEqual([{ view: 'words', action: { t: 'ask', text: 'hi', newThread: false } }]);
+  });
+
+  it('sends the words box ask after 500 ms when the box never closes', () => {
+    vi.useFakeTimers();
+    try {
+      mate.showWords({ x: 10, y: 10 }, words);
+      const w = h.windows[0];
+      w.close = () => undefined;
+      sendAction(0, { t: 'ask', text: 'hi', newThread: false });
+      vi.advanceTimersByTime(499);
+      expect(actions).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(actions).toEqual([{ view: 'words', action: { t: 'ask', text: 'hi', newThread: false } }]);
+      w.emit('closed'); // closing late sends nothing more
+      expect(actions).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends a waiting ask at once when the next words box opens', () => {
+    mate.showWords({ x: 10, y: 10 }, words);
+    sendAction(0, { t: 'ask', text: 'old', newThread: false });
+    mate.showWords({ x: 300, y: 300 }, words);
+    expect(actions).toEqual([{ view: 'words', action: { t: 'ask', text: 'old', newThread: false } }]);
   });
 
   it('resizes a window to the size its page reports, within its view limits', () => {
