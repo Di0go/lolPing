@@ -1646,7 +1646,8 @@ static void test_a_mouse_move_between_the_taps_keeps_the_double_tap() {
   d.onEvent(mv(500, 400, 80));
   d.onEvent(kdAt(WIN, 100));
   d.onEvent(mv(520, 410, 120));
-  const Emit* w = findEmit(d.onEvent(kuAt(WIN, 150)), Emit::Kind::AskWords);
+  const Result up = d.onEvent(kuAt(WIN, 150));
+  const Emit* w = findEmit(up, Emit::Kind::AskWords);
   CHECK(w != nullptr && w->x == 520 && w->y == 410);
 }
 
@@ -1755,7 +1756,8 @@ static void test_scroll_is_coalesced_to_one_per_100ms() {
   CHECK(findEmit(d.onEvent(scrollAt(1, 1, 5000)), Emit::Kind::Scroll) != nullptr);
   CHECK(d.onEvent(scrollAt(2, 2, 5030)).emits.empty());
   CHECK(d.onEvent(scrollAt(3, 3, 5099)).emits.empty());
-  const Emit* s = findEmit(d.onEvent(scrollAt(4, 4, 5100)), Emit::Kind::Scroll);
+  const Result scrolled = d.onEvent(scrollAt(4, 4, 5100));
+  const Emit* s = findEmit(scrolled, Emit::Kind::Scroll);
   CHECK(s != nullptr && s->x == 4 && s->y == 4);
   // The gap counts from the last one reported, not the last one seen.
   CHECK(d.onEvent(scrollAt(5, 5, 5150)).emits.empty());
