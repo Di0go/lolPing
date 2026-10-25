@@ -19,6 +19,10 @@ export function onTextWindowGone(cb: () => void): void {
   goneListeners.push(cb);
 }
 
+export function textWindow(): BrowserWindow | null {
+  return win && !win.isDestroyed() ? win : null;
+}
+
 /** Closes the box if it is open, for when the room it was opened for is gone. */
 export function closeTextWindow(): void {
   if (win && !win.isDestroyed()) win.close();

@@ -10,6 +10,18 @@ import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from '../paths';
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
 
+/** What `overShownWindow` reads of a window. */
+export type ShownWindow = Pick<BrowserWindow, 'isDestroyed' | 'isVisible' | 'isMinimized' | 'getBounds'>;
+
+/** Whether a screen point in DIPs is over one of `wins` that is on screen: lolPing's own windows for the stale watch. */
+export function overShownWindow(dip: Point, wins: readonly (ShownWindow | null)[]): boolean {
+  return wins.some((w) => {
+    if (!w || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return false;
+    const b = w.getBounds();
+    return dip.x >= b.x && dip.x < b.x + b.width && dip.y >= b.y && dip.y < b.y + b.height;
+  });
+}
+
 const VIEWS: readonly MateView[] = ['bubble', 'card', 'words', 'history', 'consent', 'form'];
 /** First size of each window in DIPs; the bubble and the card then take the size their page reports. */
 const START_SIZE: Record<MateView, Size> = {
@@ -170,12 +182,7 @@ export class MateWindows extends EventEmitter {
 
   /** Whether a screen point in DIPs is over a teammate window on screen: a scroll there is the user reading it. */
   contains(dip: Point): boolean {
-    return VIEWS.some((view) => {
-      const w = this.slots[view].win;
-      if (!w || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return false;
-      const b = w.getBounds();
-      return dip.x >= b.x && dip.x < b.x + b.width && dip.y >= b.y && dip.y < b.y + b.height;
-    });
+    return overShownWindow(dip, VIEWS.map((view) => this.slots[view].win));
   }
 
   /** Whether the open card, or the one just closed, has had keyboard focus. Cleared when the next card opens. */

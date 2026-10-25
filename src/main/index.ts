@@ -64,13 +64,13 @@ import { ContextClient } from './teammate/contextClient';
 import { installedEditors } from './teammate/editors';
 import { fetchWebPdf, pdfAssetDirs, readDocument, readPdfBuffer } from './teammate/files';
 import { HistoryStore } from './teammate/historyStore';
-import { MateWindows } from './teammate/mateWindows';
+import { MateWindows, overShownWindow } from './teammate/mateWindows';
 import { createAdapter } from './teammate/providers';
 import { SecretStore } from './teammate/secrets';
 import { StaleWatcher } from './teammate/staleWatcher';
 import { UsageLog } from './teammate/usage';
 import { onSettingsWindowGone, openSettingsWindow, settingsWindow } from './settingsWindow';
-import { closeTextWindow, onTextWindowGone, openTextWindow, registerTextWindow } from './textWindow';
+import { closeTextWindow, onTextWindowGone, openTextWindow, registerTextWindow, textWindow } from './textWindow';
 import { AppTray, trayUpdateFrom, type TrayMode } from './tray';
 import { trayUpdateHandlers } from './trayUpdate';
 import { MacBackend, RELEASES_API } from './updateMac';
@@ -978,7 +978,7 @@ function start(): void {
       helper: (on) => bridge.send({ type: 'staleWatch', on }),
       own: (at) => {
         const dip = overlays.toDip(at);
-        return dip !== null && windows.contains(dip);
+        return dip !== null && (windows.contains(dip) || overShownWindow(dip, [settingsWindow(), textWindow()]));
       },
       stale: () => controller.stale(),
       every: (ms, fn) => {

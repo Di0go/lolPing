@@ -650,3 +650,25 @@ describe('MateWindows capture exclusion', () => {
     expect(h.windows.at(-1)?.opts.type).toBe('panel');
   });
 });
+
+describe('overShownWindow', () => {
+  const win = (bounds: Rect, state: { visible?: boolean; minimized?: boolean; destroyed?: boolean } = {}) => ({
+    isDestroyed: () => state.destroyed ?? false,
+    isVisible: () => state.visible ?? true,
+    isMinimized: () => state.minimized ?? false,
+    getBounds: () => bounds,
+  });
+  const settings = { x: 200, y: 100, width: 800, height: 600 };
+
+  it('counts a point over a window on screen, such as Settings or the text box', () => {
+    expect(mod.overShownWindow({ x: 500, y: 400 }, [null, win(settings)])).toBe(true);
+    expect(mod.overShownWindow({ x: 1000, y: 400 }, [win(settings)])).toBe(false);
+    expect(mod.overShownWindow({ x: 500, y: 400 }, [null])).toBe(false);
+  });
+
+  it('leaves out a window that is hidden, minimized or gone', () => {
+    for (const state of [{ visible: false }, { minimized: true }, { destroyed: true }]) {
+      expect(mod.overShownWindow({ x: 500, y: 400 }, [win(settings, state)])).toBe(false);
+    }
+  });
+});
