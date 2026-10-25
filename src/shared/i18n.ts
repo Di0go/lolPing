@@ -417,6 +417,26 @@ const enMateSettings = {
   privacy: 'Nothing is captured until you ask. An ask sends a picture of the display under the spot, a closer view around it, the app and window title, the thread so far and Your instructions to the provider of the profile, and to no one else. Keys and history stay on this computer, encrypted by the system.',
 };
 
+/** The first-run card that opens when the teammate is switched on. */
+const enMateFirstRun = {
+  title: 'Set up your teammate',
+  close: 'Close',
+  stepOf: (n: number, total: number) => `Step ${n} of ${total}`,
+  steps: { askKey: 'Ask key', profile: 'Who answers', screen: 'Screen Recording', done: 'Ready' },
+  back: 'Back',
+  next: 'Next',
+  done: 'Done',
+  skip: 'Skip',
+  askKeyIntro: 'Hold this key, drag to a spot and let go to ask.',
+  profileIntro: 'Choose who answers. You can add more later in Settings → Teammate.',
+  editors: (agent: string, doIt: string, wrong: string) => `Send ${doIt} and ${wrong} in my editors to ${agent}`,
+  screenOn: 'Screen Recording is on.',
+  ready: (key: string) => `Hold ${key}, drag, and let go on ? to ask about anything.`,
+  readyClick: (key: string) => `${key} + click to ask in your own words.`,
+  readyDoubleTap: (key: string) => `Double-tap ${key} to ask in your own words.`,
+  readyKept: 'Your asks and answers are kept on this computer, encrypted. You can pause or clear them in the tray or in Settings → Teammate.',
+};
+
 const en = {
   lang: 'en' as Lang,
   on: 'On',
@@ -693,11 +713,13 @@ const en = {
     ui: enMateUi,
     ask: enMateAsk,
     settings: enMateSettings,
+    firstRun: enMateFirstRun,
   } as {
     intent: Record<PingId, { label: string; instruction: string }>;
     ui: typeof enMateUi;
     ask: MateAskText;
     settings: typeof enMateSettings;
+    firstRun: typeof enMateFirstRun;
   },
 
   // main process
@@ -1438,6 +1460,24 @@ const zh: Strings = {
       usageValue: (input, output) => `输入 ${input} · 输出 ${output}`,
       privacy: '你提问之前，不会截取任何内容。提问时，会把该位置所在显示器的截图、周围的放大图、应用和窗口标题、当前对话和“你的说明”发送给配置中的服务商，不会发给其他人。密钥和历史只保存在这台电脑上，由系统加密。',
     },
+    firstRun: {
+      title: '设置你的队友',
+      close: '关闭',
+      stepOf: (n, total) => `第 ${n} 步，共 ${total} 步`,
+      steps: { askKey: '提问键', profile: '谁来回答', screen: '屏幕录制', done: '准备好了' },
+      back: '返回',
+      next: '下一步',
+      done: '完成',
+      skip: '跳过',
+      askKeyIntro: '按住这个键，拖到某处再松开，就能提问。',
+      profileIntro: '选择谁来回答。以后可以在“设置 → 队友”里添加更多。',
+      editors: (agent, doIt, wrong) => `把我编辑器里的“${doIt}”和“${wrong}”发给 ${agent}`,
+      screenOn: '屏幕录制已开启。',
+      ready: (key) => `按住 ${key} 拖动，在 ? 上松开，就能问屏幕上的任何东西。`,
+      readyClick: (key) => `${key} + 单击，用文字提问。`,
+      readyDoubleTap: (key) => `连按两下 ${key}，用文字提问。`,
+      readyKept: '你的提问和回答加密保存在这台电脑上，可以在托盘或 设置 → 队友 里暂停或清除。',
+    },
   },
 
   limitations: [
@@ -1653,17 +1693,27 @@ const MAC_MATE_UI: Record<Lang, Partial<Strings['teammate']['ui']>> = {
   },
 };
 
-const withMateUi = (base: Strings, ui: Partial<Strings['teammate']['ui']>): Strings => ({
+const MAC_MATE_FIRST_RUN: Record<Lang, Partial<Strings['teammate']['firstRun']>> = {
+  en: {
+    readyKept: 'Your asks and answers are kept on this computer, encrypted. You can pause or clear them in the menu bar or in Settings → Teammate.',
+  },
+  'zh-CN': {
+    readyKept: '你的提问和回答加密保存在这台电脑上，可以在菜单栏或 设置 → 队友 里暂停或清除。',
+  },
+};
+
+const withMateUi = (base: Strings, ui: Partial<Strings['teammate']['ui']>,
+  firstRun: Partial<Strings['teammate']['firstRun']>): Strings => ({
   ...base,
-  teammate: { ...base.teammate, ui: { ...base.teammate.ui, ...ui } },
+  teammate: { ...base.teammate, ui: { ...base.teammate.ui, ...ui }, firstRun: { ...base.teammate.firstRun, ...firstRun } },
 });
 
 const TABLES: Record<Platform, Record<Lang, Strings>> = {
   win: { en, 'zh-CN': zh },
   linux: { en: { ...en, ...LINUX.en }, 'zh-CN': { ...zh, ...LINUX['zh-CN'] } },
   mac: {
-    en: withMateUi({ ...en, ...MAC.en }, MAC_MATE_UI.en),
-    'zh-CN': withMateUi({ ...zh, ...MAC['zh-CN'] }, MAC_MATE_UI['zh-CN']),
+    en: withMateUi({ ...en, ...MAC.en }, MAC_MATE_UI.en, MAC_MATE_FIRST_RUN.en),
+    'zh-CN': withMateUi({ ...zh, ...MAC['zh-CN'] }, MAC_MATE_UI['zh-CN'], MAC_MATE_FIRST_RUN['zh-CN']),
   },
 };
 

@@ -34,7 +34,7 @@ const KEY_MAX = 4096;
 /** Turning "same as the ping key" off picks the first of these that no other lolPing key uses. */
 const ASK_KEYS: readonly TriggerKey[] = ['win', 'alt', 'ctrl', 'shift', 'mouse5', 'mouse4'];
 
-type Patch = (p: Partial<TeammateSettings>) => void;
+export type Patch = (p: Partial<TeammateSettings>) => void;
 
 /** Short and unique enough for a handful of profiles; the same shape the settings file accepts. */
 const newProfileId = (): string => `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -291,7 +291,7 @@ function HistoryRows({ s, patch, secrets }: { s: TeammateSettings; patch: Patch;
 }
 
 /** macOS only: shown while Screen Recording is off. Same shape as the Accessibility card. */
-function ScreenAccessCard() {
+export function ScreenAccessCard() {
   const t = useText();
   const m = t.teammate.settings;
   return (
@@ -311,6 +311,125 @@ function ScreenAccessCard() {
   );
 }
 
+/** The Add profile menu: a provider, a coding agent on this computer, or a custom command. */
+export function AddProfileMenu({ mate, patch, onAdded }: {
+  mate: TeammateSettings; patch: Patch; onAdded(id: string): void;
+}) {
+  const t = useText();
+  const m = t.teammate.settings;
+  const addProfile = (id: ProviderId) => {
+    const preset = PROVIDERS.find((p) => p.id === id);
+    if (!preset) return;
+    const profile: BuiltinProfile = {
+      id: newProfileId(), kind: 'builtin', name: preset.name, tagColor: mate.tagColor, tagColorCustom: null,
+      provider: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, model: '',
+    };
+    onAdded(profile.id);
+    patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
+  };
+  const addAgent = (preset: AgentPresetId | 'custom') => {
+    const profile = newAgentProfile({ id: newProfileId(), preset, customName: m.agentCustom, tagColor: mate.tagColor });
+    onAdded(profile.id);
+    patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
+  };
+  return (
+    <Dropdown style={{ minWidth: 190 }} placeholder={m.addProfile} value="" selectedOptions={[]}
+      onOptionSelect={(_, d) => {
+        const agent = AGENT_PRESET_IDS.find((id) => `agent:${id}` === d.optionValue);
+        if (agent) addAgent(agent);
+        else if (d.optionValue === 'agent:custom') addAgent('custom');
+        else {
+          const preset = PROVIDERS.find((p) => p.id === d.optionValue);
+          if (preset) addProfile(preset.id);
+        }
+      }}>
+      <OptionGroup label={m.providerCloud}>
+        {PROVIDERS.filter((p) => p.group === 'cloud').map((p) => (
+          <Option key={p.id} value={p.id}>{p.name}</Option>
+        ))}
+      </OptionGroup>
+      <OptionGroup label={m.providerLocal}>
+        {PROVIDERS.filter((p) => p.group === 'local').map((p) => (
+          <Option key={p.id} value={p.id}>{p.name}</Option>
+        ))}
+      </OptionGroup>
+      <OptionGroup label={m.providerAgents}>
+        {AGENT_PRESET_IDS.map((id) => (
+          <Option key={id} value={`agent:${id}`} text={AGENT_PRESETS[id].name}>
+            {m.agentOption(AGENT_PRESETS[id].name, AGENT_PRESETS[id].checked)}
+          </Option>
+        ))}
+        <Option value="agent:custom" text={m.agentCustom}>{m.agentCustom}</Option>
+      </OptionGroup>
+    </Dropdown>
+  );
+}
+
+/** One card per profile; the one `open` returns true for starts open. */
+export function ProfileCards({ mate, patch, open }: { mate: TeammateSettings; patch: Patch; open(id: string): boolean }) {
+  const changeProfile = (id: string, p: Partial<BuiltinProfile>) =>
+    patch({ profiles: mate.profiles.map((x) => (x.id === id && isBuiltin(x) ? { ...x, ...p } : x)) });
+  const changeAgent = (id: string, p: Partial<AgentProfile>) =>
+    patch({ profiles: mate.profiles.map((x) => (x.id === id && x.kind === 'agent' ? { ...x, ...p } : x)) });
+  const removeProfile = (id: string) => {
+    if (mate.profiles.some((x) => x.id === id && isBuiltin(x))) void api.setTeammateKey(id, ''); // its key goes with it
+    const profiles = mate.profiles.filter((x) => x.id !== id);
+    patch({
+      profiles,
+      defaultProfile: mate.defaultProfile === id ? profiles[0]?.id ?? null : mate.defaultProfile,
+      deepProfile: mate.deepProfile === id ? null : mate.deepProfile,
+    });
+  };
+  return (
+    <>
+      {mate.profiles.map((p) => (p.kind === 'agent'
+        ? <AgentProfileCard key={p.id} p={p} open={open(p.id)} onChange={(x) => changeAgent(p.id, x)}
+          onRemove={() => removeProfile(p.id)} />
+        : <ProfileCard key={p.id} p={p} open={open(p.id)} onChange={(x) => changeProfile(p.id, x)}
+          onRemove={() => removeProfile(p.id)} />))}
+    </>
+  );
+}
+
+/**
+ * The rows under Ask key: "same as the ping key", the key itself and how to ask in words. `words` 'all' shows both
+ * switches (the page); 'platform' shows the one this platform uses (click on Windows, double tap on a Mac).
+ */
+export function AskKeyRows({ s, patch, words }: { s: Settings; patch: Patch; words: 'all' | 'platform' }) {
+  const t = useText();
+  const m = t.teammate.settings;
+  const mate = s.teammate;
+  const same = mate.askTrigger === 'same';
+  const askKey = mate.askTrigger === 'same' ? s.trigger : mate.askTrigger;
+  const askLabel = triggerLabel(askKey, t.lang, api.platform);
+  const ownAskKey = ASK_KEYS.find((k) => !sameTrigger(k, s.trigger) && !sameTrigger(k, s.emoteTrigger)) ?? 'win';
+  const mac = api.platform === 'mac';
+  return (
+    <>
+      <SwitchRow icon={<Keyboard24Regular />} title={m.askKeySame}
+        description={same ? m.askKeySameNote : undefined}
+        checked={same} onChange={(on) => patch({ askTrigger: on ? 'same' : ownAskKey })} />
+      {same ? null : (
+        <SettingRow icon={<Keyboard24Regular />} title={m.askKey}>
+          <TriggerPicker value={askKey}
+            blocked={[s.emoteTrigger, s.trigger]}
+            onChange={(k) => {
+              if (k !== 'off') patch({ askTrigger: k });
+            }} />
+        </SettingRow>
+      )}
+      {words === 'all' || !mac ? (
+        <SwitchRow icon={<CursorClick24Regular />} title={m.askClick(askLabel)} description={m.askClickDesc}
+          checked={mate.askClick} onChange={(askClick) => patch({ askClick })} />
+      ) : null}
+      {(words === 'all' || mac) && canDoubleTap(askKey) ? (
+        <SwitchRow icon={<CursorClick24Regular />} title={m.askDoubleTap(askLabel)} description={m.askDoubleTapDesc}
+          checked={mate.askDoubleTap} onChange={(askDoubleTap) => patch({ askDoubleTap })} />
+      ) : null}
+    </>
+  );
+}
+
 /** Settings → Teammate: profiles and keys, the ask key, intents, Your instructions, history and usage. */
 export function TeammateSection({ settings: s, update }: { settings: Settings; update: Update }) {
   const t = useText();
@@ -319,7 +438,6 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
   const patch: Patch = (p) => void update({ teammate: { ...mate, ...p } });
   const same = mate.askTrigger === 'same';
   const askLabel = triggerLabel(mate.askTrigger === 'same' ? s.trigger : mate.askTrigger, t.lang, api.platform);
-  const ownAskKey = ASK_KEYS.find((k) => !sameTrigger(k, s.trigger) && !sameTrigger(k, s.emoteTrigger)) ?? 'win';
   const profileName = (id: string | null) => mate.profiles.find((p) => p.id === id)?.name ?? m.noProfile;
   const [secrets, setSecrets] = useState(true);
   const [screenAccess, setScreenAccess] = useState<boolean | null>(null);
@@ -336,34 +454,6 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
     return () => window.removeEventListener('focus', load);
   }, []);
 
-  const addProfile = (id: ProviderId) => {
-    const preset = PROVIDERS.find((p) => p.id === id);
-    if (!preset) return;
-    const profile: BuiltinProfile = {
-      id: newProfileId(), kind: 'builtin', name: preset.name, tagColor: mate.tagColor, tagColorCustom: null,
-      provider: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, model: '',
-    };
-    setAdded(profile.id);
-    patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
-  };
-  const addAgent = (preset: AgentPresetId | 'custom') => {
-    const profile = newAgentProfile({ id: newProfileId(), preset, customName: m.agentCustom, tagColor: mate.tagColor });
-    setAdded(profile.id);
-    patch({ profiles: [...mate.profiles, profile], defaultProfile: defaultAfterAdd(mate.defaultProfile, profile) });
-  };
-  const changeProfile = (id: string, p: Partial<BuiltinProfile>) =>
-    patch({ profiles: mate.profiles.map((x) => (x.id === id && isBuiltin(x) ? { ...x, ...p } : x)) });
-  const changeAgent = (id: string, p: Partial<AgentProfile>) =>
-    patch({ profiles: mate.profiles.map((x) => (x.id === id && x.kind === 'agent' ? { ...x, ...p } : x)) });
-  const removeProfile = (id: string) => {
-    if (mate.profiles.some((x) => x.id === id && isBuiltin(x))) void api.setTeammateKey(id, ''); // its key goes with it
-    const profiles = mate.profiles.filter((x) => x.id !== id);
-    patch({
-      profiles,
-      defaultProfile: mate.defaultProfile === id ? profiles[0]?.id ?? null : mate.defaultProfile,
-      deepProfile: mate.deepProfile === id ? null : mate.deepProfile,
-    });
-  };
   const reads: { key: keyof TeammateSettings['context']; icon: ReactNode; title: string; description: string }[] = [
     { key: 'marks', icon: <ScanText24Regular />, title: m.readMarks, description: m.readMarksDesc },
     { key: 'systemText', icon: <TextField24Regular />, title: m.readSystemText, description: m.readSystemTextDesc },
@@ -389,42 +479,10 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
             {m.profiles}
             <span className="desc">{mate.profiles.length > 0 ? m.profilesDesc : `${m.profilesDesc} ${m.noProfiles}`}</span>
           </div>
-          <Dropdown style={{ minWidth: 190 }} placeholder={m.addProfile} value="" selectedOptions={[]}
-            onOptionSelect={(_, d) => {
-              const agent = AGENT_PRESET_IDS.find((id) => `agent:${id}` === d.optionValue);
-              if (agent) addAgent(agent);
-              else if (d.optionValue === 'agent:custom') addAgent('custom');
-              else {
-                const preset = PROVIDERS.find((p) => p.id === d.optionValue);
-                if (preset) addProfile(preset.id);
-              }
-            }}>
-            <OptionGroup label={m.providerCloud}>
-              {PROVIDERS.filter((p) => p.group === 'cloud').map((p) => (
-                <Option key={p.id} value={p.id}>{p.name}</Option>
-              ))}
-            </OptionGroup>
-            <OptionGroup label={m.providerLocal}>
-              {PROVIDERS.filter((p) => p.group === 'local').map((p) => (
-                <Option key={p.id} value={p.id}>{p.name}</Option>
-              ))}
-            </OptionGroup>
-            <OptionGroup label={m.providerAgents}>
-              {AGENT_PRESET_IDS.map((id) => (
-                <Option key={id} value={`agent:${id}`} text={AGENT_PRESETS[id].name}>
-                  {m.agentOption(AGENT_PRESETS[id].name, AGENT_PRESETS[id].checked)}
-                </Option>
-              ))}
-              <Option value="agent:custom" text={m.agentCustom}>{m.agentCustom}</Option>
-            </OptionGroup>
-          </Dropdown>
+          <AddProfileMenu mate={mate} patch={patch} onAdded={setAdded} />
         </div>
       </div>
-      {mate.profiles.map((p) => (p.kind === 'agent'
-        ? <AgentProfileCard key={p.id} p={p} open={p.id === added} onChange={(x) => changeAgent(p.id, x)}
-          onRemove={() => removeProfile(p.id)} />
-        : <ProfileCard key={p.id} p={p} open={p.id === added} onChange={(x) => changeProfile(p.id, x)}
-          onRemove={() => removeProfile(p.id)} />))}
+      <ProfileCards mate={mate} patch={patch} open={(id) => id === added} />
       {mate.profiles.length > 0 ? (
         <>
           <SettingRow icon={<Bot24Regular />} title={m.defaultProfile} description={m.defaultProfileDesc}>
@@ -448,24 +506,7 @@ export function TeammateSection({ settings: s, update }: { settings: Settings; u
 
       <ExpanderRow icon={<Keyboard24Regular />} title={m.askKey} description={m.askKeyDesc}
         control={<span>{same ? m.askKeySame : askLabel}</span>}>
-        <SwitchRow icon={<Keyboard24Regular />} title={m.askKeySame}
-          description={same ? m.askKeySameNote : undefined}
-          checked={same} onChange={(on) => patch({ askTrigger: on ? 'same' : ownAskKey })} />
-        {same ? null : (
-          <SettingRow icon={<Keyboard24Regular />} title={m.askKey}>
-            <TriggerPicker value={mate.askTrigger === 'same' ? s.trigger : mate.askTrigger}
-              blocked={[s.emoteTrigger, s.trigger]}
-              onChange={(k) => {
-                if (k !== 'off') patch({ askTrigger: k });
-              }} />
-          </SettingRow>
-        )}
-        <SwitchRow icon={<CursorClick24Regular />} title={m.askClick(askLabel)} description={m.askClickDesc}
-          checked={mate.askClick} onChange={(askClick) => patch({ askClick })} />
-        {canDoubleTap(mate.askTrigger === 'same' ? s.trigger : mate.askTrigger) ? (
-          <SwitchRow icon={<CursorClick24Regular />} title={m.askDoubleTap(askLabel)} description={m.askDoubleTapDesc}
-            checked={mate.askDoubleTap} onChange={(askDoubleTap) => patch({ askDoubleTap })} />
-        ) : null}
+        <AskKeyRows s={s} patch={patch} words="all" />
       </ExpanderRow>
       <ExpanderRow icon={<Person24Regular />} title={m.tagName} description={m.tagNameDesc}
         control={(

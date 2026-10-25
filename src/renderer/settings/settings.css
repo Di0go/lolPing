@@ -201,6 +201,10 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .mateRule .mateFields { margin-top: 8px; }
 .mateInstructions { display: flex; width: 100%; margin: 12px 0 8px; }
 .tagPreview { display: flex; align-items: center; gap: 8px; }
+/* First-run card: the page's own rows inside a dialog, so the expander panes lose their wide side padding. */
+.firstRunStep { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.firstRunIntro { margin: 0 0 10px; }
+[role="dialog"] .expPane { padding-left: 20px; padding-right: 20px; }
 /* Updates */
 .card.update .lbl { display: flex; flex-direction: column; gap: 4px; }
 .card.update.failed { border-color: #ff9c48; }
