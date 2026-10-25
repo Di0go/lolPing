@@ -102,6 +102,32 @@ Decision withAsk(Trigger ask = Trigger::Win, uint32_t vk = 0, bool askClick = fa
   d.setConfig(c);
   return d;
 }
+InputEvent kdAt(uint32_t vk, uint64_t t) {
+  InputEvent e = kd(vk);
+  e.timeMs = t;
+  return e;
+}
+InputEvent kuAt(uint32_t vk, uint64_t t) {
+  InputEvent e = ku(vk);
+  e.timeMs = t;
+  return e;
+}
+InputEvent scrollAt(int x, int y, uint64_t t) { return mouse(EvKind::Scroll, Btn::None, x, y, t); }
+// Double tap on `ask` (the emote key is off, so Ctrl can be the ask key too).
+Decision withDoubleTap(Trigger ask = Trigger::Win, uint32_t vk = 0, bool on = true) {
+  Config c;
+  c.askTrigger = ask;
+  c.askTriggerVk = vk;
+  c.askDoubleTap = on;
+  Decision d;
+  d.setConfig(c);
+  return d;
+}
+// One tap of `vk` from `t`: down, then up 50 ms later. Returns what the up reported.
+Result tap(Decision& d, uint32_t vk, uint64_t t) {
+  d.onEvent(kdAt(vk, t));
+  return d.onEvent(kuAt(vk, t + 50));
+}
 }  // namespace
 
 static void test_alt_drag_opens_wheel_and_releases() {
@@ -1453,6 +1479,396 @@ static void test_output_never_blocks_producer() {
   CHECK(written + out.dropped() == 10000);
 }
 
+static void test_double_tap_emits_ask_words_at_the_pointer() {
+  Decision d = withDoubleTap();
+  d.onEvent(mv(300, 200, 0));
+  Result r = d.onEvent(kdAt(WIN, 10));
+  CHECK(!r.swallow && r.emits.empty());
+  r = d.onEvent(kuAt(WIN, 60));
+  CHECK(!r.swallow && r.emits.empty() && r.injects.empty());
+  d.onEvent(mv(310, 205, 100));
+  r = d.onEvent(kdAt(WIN, 150));
+  CHECK(!r.swallow && r.emits.empty());
+  r = d.onEvent(kuAt(WIN, 200));
+  const Emit* w = findEmit(r, Emit::Kind::AskWords);
+  CHECK(w != nullptr && w->x == 310 && w->y == 205);
+  // Back to idle: a third tap starts over.
+  CHECK(tap(d, WIN, 250).emits.empty());
+  CHECK(findEmit(tap(d, WIN, 350), Emit::Kind::AskWords) != nullptr);
+}
+
+static void test_double_tap_masks_the_second_win_up_and_leaves_the_first_alone() {
+  Decision d = withDoubleTap();
+  Result r = tap(d, WIN, 0);
+  CHECK(!r.swallow && r.injects.empty());
+  r = d.onEvent(kdAt(WIN, 100));
+  CHECK(!r.swallow && r.injects.empty());
+  r = d.onEvent(kuAt(WIN, 150));
+  CHECK(findEmit(r, Emit::Kind::AskWords) != nullptr);
+  CHECK(r.swallow && r.injects.size() == 3);
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[0], InjectKind::KeyDown, Btn::None, kMaskVk));
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[1], InjectKind::KeyUp, Btn::None, kMaskVk));
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[2], InjectKind::KeyUp, Btn::None, WIN));
+  // The mask is spent: the next lone tap is left alone.
+  CHECK(!tap(d, WIN, 1000).swallow);
+  // Ctrl is no menu key: its second up passes through.
+  Decision c = withDoubleTap(Trigger::Ctrl);
+  tap(c, CTRL, 0);
+  c.onEvent(kdAt(CTRL, 100));
+  r = c.onEvent(kuAt(CTRL, 150));
+  CHECK(findEmit(r, Emit::Kind::AskWords) != nullptr && !r.swallow && r.injects.empty());
+}
+
+static void test_double_tap_on_macos_swallows_nothing() {
+  Decision d = withDoubleTap();
+  d.setMaskMenuKeys(false);
+  CHECK(!tap(d, WIN, 0).swallow);
+  CHECK(!d.onEvent(kdAt(WIN, 100)).swallow);
+  Result r = d.onEvent(kuAt(WIN, 150));
+  CHECK(findEmit(r, Emit::Kind::AskWords) != nullptr);
+  CHECK(!r.swallow && r.injects.empty());
+}
+
+static void test_a_lone_tap_passes_through_untouched() {
+  Decision d = withDoubleTap();
+  Result r = d.onEvent(kdAt(WIN, 0));
+  CHECK(!r.swallow && r.injects.empty() && r.emits.empty());
+  r = d.onEvent(kuAt(WIN, 50));
+  CHECK(!r.swallow && r.injects.empty() && r.emits.empty());
+  // Nothing follows: a tap long after is a first tap again.
+  CHECK(tap(d, WIN, 5000).emits.empty());
+}
+
+static void test_a_held_key_is_not_a_tap() {
+  Decision d = withDoubleTap();
+  d.onEvent(kdAt(WIN, 0));
+  d.onEvent(kdAt(WIN, 100));  // auto-repeat
+  d.onEvent(kuAt(WIN, 400));
+  d.onEvent(kdAt(WIN, 450));
+  Result r = d.onEvent(kuAt(WIN, 500));
+  CHECK(r.emits.empty() && !r.swallow);
+  // The second press held too long is no tap either.
+  Decision e = withDoubleTap();
+  tap(e, WIN, 0);
+  e.onEvent(kdAt(WIN, 100));
+  r = e.onEvent(kuAt(WIN, 500));
+  CHECK(r.emits.empty() && !r.swallow);
+}
+
+static void test_taps_400ms_apart_are_not_a_double_tap() {
+  Decision d = withDoubleTap();
+  tap(d, WIN, 0);  // up at 50
+  d.onEvent(kdAt(WIN, 450));
+  Result r = d.onEvent(kuAt(WIN, 500));
+  CHECK(r.emits.empty() && !r.swallow);
+  // The late press is a first tap: one more within the window completes a double.
+  CHECK(findEmit(tap(d, WIN, 520), Emit::Kind::AskWords) != nullptr);
+  // 350 ms between up and the next down still counts.
+  Decision e = withDoubleTap();
+  tap(e, WIN, 0);
+  e.onEvent(kdAt(WIN, 400));
+  CHECK(findEmit(e.onEvent(kuAt(WIN, 450)), Emit::Kind::AskWords) != nullptr);
+}
+
+static void test_a_key_between_the_taps_cancels_the_double_tap() {
+  Decision d = withDoubleTap(Trigger::Ctrl);
+  tap(d, CTRL, 0);
+  d.onEvent(kdAt(KEY_V, 70));
+  d.onEvent(kuAt(KEY_V, 80));
+  d.onEvent(kdAt(CTRL, 100));
+  CHECK(d.onEvent(kuAt(CTRL, 150)).emits.empty());
+  // Ctrl+C, Ctrl+V typed fast: the keys come between the presses.
+  Decision e = withDoubleTap(Trigger::Ctrl);
+  e.onEvent(kdAt(CTRL, 0));
+  e.onEvent(kdAt(KEY_V, 20));
+  e.onEvent(kuAt(KEY_V, 40));
+  e.onEvent(kuAt(CTRL, 60));
+  e.onEvent(kdAt(CTRL, 100));
+  e.onEvent(kdAt(KEY_V, 120));
+  e.onEvent(kuAt(KEY_V, 140));
+  CHECK(e.onEvent(kuAt(CTRL, 160)).emits.empty());
+  // The text and toggle hotkeys are keys too, though they swallow theirs.
+  Config c;
+  c.askTrigger = Trigger::Win;
+  c.askDoubleTap = true;
+  c.textVk = KEY_T;
+  c.textMods = 0;
+  Decision t;
+  t.setConfig(c);
+  tap(t, WIN, 0);
+  t.onEvent(kdAt(KEY_T, 60));
+  t.onEvent(kuAt(KEY_T, 70));
+  CHECK(findEmit(tap(t, WIN, 100), Emit::Kind::AskWords) == nullptr);
+  c.textVk = 0;
+  c.toggleMods = 0;
+  c.toggleVk = KEY_P;
+  Decision g;
+  g.setConfig(c);
+  tap(g, WIN, 0);
+  g.onEvent(kdAt(KEY_P, 60));
+  g.onEvent(kuAt(KEY_P, 70));
+  g.onEvent(kdAt(KEY_P, 80));  // on again, so the taps are live
+  g.onEvent(kuAt(KEY_P, 85));
+  CHECK(findEmit(tap(g, WIN, 100), Emit::Kind::AskWords) == nullptr);
+}
+
+static void test_a_mouse_press_between_the_taps_cancels_the_double_tap() {
+  Decision d = withDoubleTap();
+  tap(d, WIN, 0);
+  d.onEvent(md(Btn::Left, 10, 10, 60));
+  d.onEvent(mu(Btn::Left, 10, 10, 70));
+  CHECK(tap(d, WIN, 100).emits.empty());
+  // A press between the down and up of a tap, and a scroll, cancel it too.
+  Decision e = withDoubleTap();
+  e.onEvent(kdAt(WIN, 0));
+  e.onEvent(md(Btn::Left, 10, 10, 20));
+  e.onEvent(mu(Btn::Left, 10, 10, 30));
+  e.onEvent(kuAt(WIN, 50));
+  CHECK(tap(e, WIN, 100).emits.empty());
+  Decision s = withDoubleTap();
+  tap(s, WIN, 0);
+  s.onEvent(scrollAt(0, 0, 60));
+  CHECK(tap(s, WIN, 100).emits.empty());
+  // A drag with the key held is a gesture, not a tap.
+  Decision w = withDoubleTap();
+  w.onEvent(kdAt(WIN, 0));
+  w.onEvent(md(Btn::Left, 100, 100, 10));
+  w.onEvent(mv(140, 100, 20));
+  w.onEvent(mu(Btn::Left, 140, 100, 30));
+  w.onEvent(kuAt(WIN, 40));
+  CHECK(tap(w, WIN, 100).emits.empty());
+}
+
+static void test_a_mouse_move_between_the_taps_keeps_the_double_tap() {
+  Decision d = withDoubleTap();
+  tap(d, WIN, 0);
+  d.onEvent(mv(5, 5, 60));
+  d.onEvent(mv(500, 400, 80));
+  d.onEvent(kdAt(WIN, 100));
+  d.onEvent(mv(520, 410, 120));
+  const Emit* w = findEmit(d.onEvent(kuAt(WIN, 150)), Emit::Kind::AskWords);
+  CHECK(w != nullptr && w->x == 520 && w->y == 410);
+}
+
+static void test_double_tap_is_off_for_a_caps_lock_or_custom_ask_key() {
+  Decision d = withDoubleTap(Trigger::CapsLock);
+  tap(d, CAPS, 0);
+  CHECK(tap(d, CAPS, 100).emits.empty());
+  Decision c = withDoubleTap(Trigger::CustomVk, KEY_V);
+  tap(c, KEY_V, 0);
+  CHECK(tap(c, KEY_V, 100).emits.empty());
+  Decision m = withDoubleTap(Trigger::Mouse5);
+  tap(m, WIN, 0);
+  CHECK(tap(m, WIN, 100).emits.empty());
+  // A custom key whose code is a modifier is still a custom key.
+  Decision k = withDoubleTap(Trigger::CustomVk, CTRL);
+  tap(k, CTRL, 0);
+  CHECK(findEmit(tap(k, CTRL, 100), Emit::Kind::AskWords) == nullptr);
+}
+
+static void test_double_tap_uses_the_ping_key_when_the_ask_key_is_off() {
+  Decision d = withDoubleTap(Trigger::None);
+  tap(d, ALT, 0);
+  d.onEvent(kdAt(ALT, 100));
+  Result r = d.onEvent(kuAt(ALT, 150));
+  CHECK(findEmit(r, Emit::Kind::AskWords) != nullptr);
+  CHECK(r.swallow && r.injects.size() == 3);
+  CHECK(r.injects.size() == 3 && injectIs(r.injects[2], InjectKind::KeyUp, Btn::None, ALT));
+  // With an ask key set, the ping key's double tap is just two Alt taps.
+  Decision e = withDoubleTap(Trigger::Win);
+  tap(e, ALT, 0);
+  CHECK(tap(e, ALT, 100).emits.empty());
+  CHECK(tap(e, WIN, 1000).emits.empty());
+  CHECK(findEmit(tap(e, WIN, 1100), Emit::Kind::AskWords) != nullptr);
+}
+
+static void test_no_double_tap_while_ask_double_tap_is_off() {
+  Decision d = withDoubleTap(Trigger::Win, 0, false);
+  tap(d, WIN, 0);
+  Result r = tap(d, WIN, 100);
+  CHECK(r.emits.empty() && !r.swallow && r.injects.empty());
+  CHECK(!Config{}.askDoubleTap);
+}
+
+static void test_double_tap_yields_to_a_fullscreen_game_and_to_resets() {
+  Config c;
+  c.askTrigger = Trigger::Win;
+  c.askDoubleTap = true;
+  c.gameCheck = true;
+  Decision d;
+  d.setConfig(c);
+  bool game = true;
+  d.setFullscreenProbe([&](int, int) { return game; });
+  tap(d, WIN, 0);
+  d.onEvent(kdAt(WIN, 100));
+  Result r = d.onEvent(kuAt(WIN, 150));
+  CHECK(r.emits.empty() && !r.swallow && r.injects.empty());  // the game owns it: no mask either
+  game = false;
+  tap(d, WIN, 1000);
+  CHECK(findEmit(tap(d, WIN, 1100), Emit::Kind::AskWords) != nullptr);
+  // A new config, pausing and switching off each start over.
+  Decision e = withDoubleTap();
+  tap(e, WIN, 0);
+  Config again;
+  again.askTrigger = Trigger::Win;
+  again.askDoubleTap = true;
+  e.setConfig(again);
+  CHECK(tap(e, WIN, 100).emits.empty());
+  tap(e, WIN, 1000);
+  e.setSuspended(true);
+  e.setSuspended(false);
+  CHECK(tap(e, WIN, 1100).emits.empty());
+  tap(e, WIN, 2000);
+  e.setEnabled(false);
+  e.setEnabled(true);
+  CHECK(tap(e, WIN, 2100).emits.empty());
+  // Paused, nothing is reported.
+  tap(e, WIN, 3000);
+  e.setSuspended(true);
+  CHECK(tap(e, WIN, 3100).emits.empty());
+}
+
+static void test_scroll_is_reported_only_while_the_stale_watch_is_on() {
+  Decision d;
+  CHECK(d.onEvent(scrollAt(7, 8, 0)).emits.empty());
+  Result r = d.setStaleWatch(true);
+  CHECK(r.emits.empty() && !r.swallow && r.injects.empty());
+  r = d.onEvent(scrollAt(70, 80, 1000));
+  const Emit* s = findEmit(r, Emit::Kind::Scroll);
+  CHECK(s != nullptr && s->x == 70 && s->y == 80);
+  d.setStaleWatch(false);
+  CHECK(d.onEvent(scrollAt(70, 80, 2000)).emits.empty());
+  // Paused or off: nothing is reported either.
+  d.setStaleWatch(true);
+  d.setSuspended(true);
+  CHECK(d.onEvent(scrollAt(70, 80, 3000)).emits.empty());
+  d.setSuspended(false);
+  d.setEnabled(false);
+  CHECK(d.onEvent(scrollAt(70, 80, 4000)).emits.empty());
+  d.setEnabled(true);
+  CHECK(findEmit(d.onEvent(scrollAt(70, 80, 5000)), Emit::Kind::Scroll) != nullptr);
+}
+
+static void test_scroll_is_coalesced_to_one_per_100ms() {
+  Decision d;
+  d.setStaleWatch(true);
+  CHECK(findEmit(d.onEvent(scrollAt(1, 1, 5000)), Emit::Kind::Scroll) != nullptr);
+  CHECK(d.onEvent(scrollAt(2, 2, 5030)).emits.empty());
+  CHECK(d.onEvent(scrollAt(3, 3, 5099)).emits.empty());
+  const Emit* s = findEmit(d.onEvent(scrollAt(4, 4, 5100)), Emit::Kind::Scroll);
+  CHECK(s != nullptr && s->x == 4 && s->y == 4);
+  // The gap counts from the last one reported, not the last one seen.
+  CHECK(d.onEvent(scrollAt(5, 5, 5150)).emits.empty());
+  CHECK(findEmit(d.onEvent(scrollAt(6, 6, 5200)), Emit::Kind::Scroll) != nullptr);
+  // A fresh watch reports its first scroll at once.
+  d.setStaleWatch(false);
+  d.setStaleWatch(true);
+  CHECK(findEmit(d.onEvent(scrollAt(7, 7, 5210)), Emit::Kind::Scroll) != nullptr);
+}
+
+static void test_scroll_is_never_swallowed() {
+  Decision d;
+  d.setStaleWatch(true);
+  Result r = d.onEvent(scrollAt(1, 1, 0));
+  CHECK(!r.swallow && r.injects.empty());
+  r = d.onEvent(scrollAt(1, 1, 10));  // coalesced
+  CHECK(!r.swallow && r.injects.empty());
+  openWheel(d);
+  r = d.onEvent(scrollAt(2, 2, 500));
+  CHECK(!r.swallow && r.injects.empty() && d.state() == S::Wheel);
+  Decision p;  // watch off
+  CHECK(!p.onEvent(scrollAt(1, 1, 0)).swallow);
+}
+
+static void test_stale_watch_keeps_a_wheel_that_is_open() {
+  Decision d;
+  openWheel(d);
+  Result r = d.setStaleWatch(true);
+  CHECK(r.emits.empty() && d.state() == S::Wheel);
+  r = d.setStaleWatch(false);
+  CHECK(r.emits.empty() && d.state() == S::Wheel);
+  r = d.onEvent(mu(Btn::Left, 130, 100));
+  CHECK(r.swallow && findEmit(r, Emit::Kind::WheelRelease) != nullptr && findEmit(r, Emit::Kind::Cancel) == nullptr);
+}
+
+static void test_wheel_released_after_its_key_was_let_go_reports_trigger_up_at_once() {
+  Decision d = withAsk();
+  d.onEvent(kd(WIN));
+  d.onEvent(md(Btn::Left, 100, 100));
+  d.onEvent(mv(130, 100));
+  Result r = d.onEvent(ku(WIN));
+  CHECK(r.emits.empty());  // the wheel is still open
+  r = d.onEvent(mu(Btn::Left, 130, 100));
+  CHECK(r.swallow && r.emits.size() == 2);
+  CHECK(r.emits.size() == 2 && r.emits[0].kind == Emit::Kind::WheelRelease && emitIs(&r.emits[0], WheelKind::Ask));
+  CHECK(r.emits.size() == 2 && r.emits[1].kind == Emit::Kind::TriggerUp && emitIs(&r.emits[1], WheelKind::Ask));
+  // Nothing more when the key is pressed again and let go.
+  CHECK(d.onEvent(kd(WIN)).emits.empty());
+  CHECK(d.onEvent(ku(WIN)).emits.empty());
+  // A spot from this same hold does not send the ask while the wheel is still open: one report, at the release.
+  Decision e = withAsk();
+  e.onEvent(kd(WIN));
+  e.onEvent(md(Btn::Left, 100, 100));
+  e.onEvent(mv(130, 100));
+  e.onEvent(mu(Btn::Left, 130, 100));
+  e.onEvent(md(Btn::Left, 200, 100));
+  e.onEvent(mv(230, 100));
+  CHECK(findEmit(e.onEvent(ku(WIN)), Emit::Kind::TriggerUp) == nullptr);
+  r = e.onEvent(mu(Btn::Left, 230, 100));
+  CHECK(r.emits.size() == 2 && r.emits[1].kind == Emit::Kind::TriggerUp);
+  // The ping wheel reports it too (main ignores a ping's).
+  Decision p;
+  openWheel(p);
+  p.onEvent(ku(ALT));
+  r = p.onEvent(mu(Btn::Left, 130, 100));
+  CHECK(r.emits.size() == 2 && r.emits[1].kind == Emit::Kind::TriggerUp && emitIs(&r.emits[1], WheelKind::Ping));
+  // A custom key behaves like the modifiers.
+  Decision c = withAsk(Trigger::CustomVk, KEY_V);
+  c.onEvent(kd(KEY_V));
+  c.onEvent(md(Btn::Left, 0, 0));
+  c.onEvent(mv(0, 40));
+  c.onEvent(ku(KEY_V));
+  r = c.onEvent(mu(Btn::Left, 0, 40));
+  CHECK(r.emits.size() == 2 && r.emits[1].kind == Emit::Kind::TriggerUp && emitIs(&r.emits[1], WheelKind::Ask));
+}
+
+static void test_a_mouse_5_ask_key_never_reports_trigger_up() {
+  Decision d = withAsk(Trigger::Mouse5);
+  d.onEvent(md(Btn::X2, 100, 100));
+  d.onEvent(mv(130, 100));
+  Result r = d.onEvent(mu(Btn::X2, 130, 100));
+  CHECK(emitIs(findEmit(r, Emit::Kind::WheelRelease), WheelKind::Ask));
+  CHECK(findEmit(r, Emit::Kind::TriggerUp) == nullptr);
+}
+
+static void test_formats_ask_words_and_scroll() {
+  Emit w{Emit::Kind::AskWords};
+  w.x = 12;
+  w.y = -3;
+  CHECK(formatEmit(w) == R"({"type":"askWords","x":12,"y":-3})");
+  Emit s{Emit::Kind::Scroll};
+  s.x = 4;
+  s.y = 5;
+  CHECK(formatEmit(s) == R"({"type":"scroll","x":4,"y":5})");
+}
+
+static void test_parses_ask_double_tap_stale_watch_and_the_scroll_sim_event() {
+  const Config cur;
+  Command c = parseCommand(R"({"type":"config","askDoubleTap":true})", cur);
+  CHECK(c.kind == Command::Kind::Config && c.config.askDoubleTap);
+  c = parseCommand(R"({"type":"config","trigger":"alt"})", c.config);
+  CHECK(c.config.askDoubleTap);  // a config without the field keeps it
+  c = parseCommand(R"({"type":"config","askDoubleTap":false})", c.config);
+  CHECK(!c.config.askDoubleTap);
+  c = parseCommand(R"({"type":"staleWatch","on":true})", cur);
+  CHECK(c.kind == Command::Kind::StaleWatch && c.flag);
+  c = parseCommand(R"({"type":"staleWatch","on":false})", cur);
+  CHECK(c.kind == Command::Kind::StaleWatch && !c.flag);
+  c = parseCommand(R"({"type":"sim","ev":"scroll","x":9,"y":-8,"t":250})", cur);
+  CHECK(c.kind == Command::Kind::SimEvent && c.event.kind == EvKind::Scroll);
+  CHECK(c.event.x == 9 && c.event.y == -8 && c.event.timeMs == 250);
+}
+
 static void test_mask_menu_keys_off_leaves_alt_up_alone() {
   Decision d;
   d.setMaskMenuKeys(false);
@@ -1614,6 +2030,27 @@ int main() {
   test_ask_and_ping_keys_independent();
   test_custom_ask_key_taps_through();
   test_parse_config_ask_fields();
+  test_double_tap_emits_ask_words_at_the_pointer();
+  test_double_tap_masks_the_second_win_up_and_leaves_the_first_alone();
+  test_double_tap_on_macos_swallows_nothing();
+  test_a_lone_tap_passes_through_untouched();
+  test_a_held_key_is_not_a_tap();
+  test_taps_400ms_apart_are_not_a_double_tap();
+  test_a_key_between_the_taps_cancels_the_double_tap();
+  test_a_mouse_press_between_the_taps_cancels_the_double_tap();
+  test_a_mouse_move_between_the_taps_keeps_the_double_tap();
+  test_double_tap_is_off_for_a_caps_lock_or_custom_ask_key();
+  test_double_tap_uses_the_ping_key_when_the_ask_key_is_off();
+  test_no_double_tap_while_ask_double_tap_is_off();
+  test_double_tap_yields_to_a_fullscreen_game_and_to_resets();
+  test_scroll_is_reported_only_while_the_stale_watch_is_on();
+  test_scroll_is_coalesced_to_one_per_100ms();
+  test_scroll_is_never_swallowed();
+  test_stale_watch_keeps_a_wheel_that_is_open();
+  test_wheel_released_after_its_key_was_let_go_reports_trigger_up_at_once();
+  test_a_mouse_5_ask_key_never_reports_trigger_up();
+  test_formats_ask_words_and_scroll();
+  test_parses_ask_double_tap_stale_watch_and_the_scroll_sim_event();
   test_mask_menu_keys_off_leaves_alt_up_alone();
   test_mac_keycodes_map_to_vks();
   test_mac_modifier_held();

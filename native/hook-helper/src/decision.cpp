@@ -151,6 +151,72 @@ void Decision::markSwallow() {
   if (maskMenuKeys_ && (mods() & (ModAlt | ModWin)) != 0) needMask_ = true;
 }
 
+bool Decision::anySpotWhileHeld() const {
+  for (const bool spot : spotWhileHeld_) {
+    if (spot) return true;
+  }
+  return false;
+}
+
+// The modifier whose double tap asks: the ask key's, or the ping key's when the ask key is off. 0 = none (the
+// feature is off, paused, or the key is not Alt, Ctrl, Shift or Win: a Caps Lock or custom key is swallowed).
+uint32_t Decision::tapBit() const {
+  if (!cfg_.askDoubleTap || !active()) return 0;
+  switch (spec(cfg_.askTrigger != Trigger::None ? WheelKind::Ask : WheelKind::Ping).trigger) {
+    case Trigger::Alt: return ModAlt;
+    case Trigger::Ctrl: return ModCtrl;
+    case Trigger::Shift: return ModShift;
+    case Trigger::Win: return ModWin;
+    default: return 0;
+  }
+}
+
+// Every key press passes here first, so any key but the tap key starts the double tap over.
+void Decision::onTapKeyDown(uint32_t vk, bool repeat, uint64_t nowMs) {
+  const uint32_t bit = tapBit();
+  if (bit == 0 || modBit(vk) != bit) {
+    resetDoubleTap();
+    return;
+  }
+  if (repeat) return;  // a held key is past the window; its up will say so
+  if (tap_ == Tap::Down1 || tap_ == Tap::Down2) {  // the other Alt, say, while the first is down
+    resetDoubleTap();
+    return;
+  }
+  // A tap starts clean: no gesture, no spot waiting for its key-up, no other modifier held (Ctrl+Alt+...).
+  if (state_ != State::Idle || anySpotWhileHeld() || (mods() & ~bit) != 0) {
+    resetDoubleTap();
+    return;
+  }
+  const bool second = tap_ == Tap::Up1 && vk == tapVk_ && nowMs >= tapMs_ && nowMs - tapMs_ <= kDoubleTapMs;
+  tap_ = second ? Tap::Down2 : Tap::Down1;
+  tapVk_ = vk;
+  tapMs_ = nowMs;
+}
+
+// Called as the tap key comes up. The second up completes the double tap.
+void Decision::onTapKeyUp(uint32_t vk, uint64_t nowMs, Result& r) {
+  const uint32_t bit = tapBit();
+  if (bit == 0 || modBit(vk) != bit || vk != tapVk_) return;
+  if (tap_ != Tap::Down1 && tap_ != Tap::Down2) return;
+  const Tap was = tap_;
+  resetDoubleTap();
+  // A key held past the window is not a tap, nor is one that ended a gesture's spots.
+  if (nowMs < tapMs_ || nowMs - tapMs_ > kDoubleTapMs || state_ != State::Idle || anySpotWhileHeld()) return;
+  if (was == Tap::Down1) {
+    tap_ = Tap::Up1;
+    tapMs_ = nowMs;
+    return;
+  }
+  if (cfg_.gameCheck && fullscreenProbe_ && fullscreenProbe_(lastX_, lastY_)) return;
+  Emit w{Emit::Kind::AskWords};
+  w.x = lastX_;
+  w.y = lastY_;
+  r.emits.push_back(w);
+  // The second up of Alt or Win would open a menu: it gets the mask key like a swallowed press does.
+  if (maskMenuKeys_ && (bit & (ModAlt | ModWin)) != 0) needMask_ = true;
+}
+
 void Decision::cancelGesture(Result& r) {
   if (state_ == State::Pending || state_ == State::Wheel) {
     r.emits.push_back(Emit{Emit::Kind::Cancel});
@@ -164,21 +230,34 @@ Result Decision::setConfig(const Config& c) {
   cfg_ = c;
   enabled_ = c.enabled;
   spotWhileHeld_ = {};
+  resetDoubleTap();
   return r;
 }
 
 Result Decision::setEnabled(bool on) {
   Result r;
-  if (!on) cancelGesture(r);
+  if (!on) {
+    cancelGesture(r);
+    resetDoubleTap();
+  }
   enabled_ = on;
   return r;
 }
 
 Result Decision::setSuspended(bool on) {
   Result r;
-  if (on) cancelGesture(r);
+  if (on) {
+    cancelGesture(r);
+    resetDoubleTap();
+  }
   suspended_ = on;
   return r;
+}
+
+Result Decision::setStaleWatch(bool on) {
+  staleWatch_ = on;
+  scrollSent_ = false;  // the first scroll of a watch always goes
+  return Result{};
 }
 
 void Decision::setFullscreenProbe(std::function<bool(int x, int y)> probe) { fullscreenProbe_ = std::move(probe); }
@@ -243,12 +322,14 @@ Result Decision::onEvent(const InputEvent& e) {
       lastX_ = e.x;
       lastY_ = e.y;
       lastMouseMs_ = e.timeMs;
+      resetDoubleTap();
       onMouseDown(e, r);
       break;
     case EvKind::MouseUp:
       lastX_ = e.x;
       lastY_ = e.y;
       lastMouseMs_ = e.timeMs;
+      resetDoubleTap();
       onMouseUp(e, r);
       break;
     case EvKind::MouseMove:
@@ -256,6 +337,9 @@ Result Decision::onEvent(const InputEvent& e) {
       lastY_ = e.y;
       lastMouseMs_ = e.timeMs;
       onMouseMove(e, r);
+      break;
+    case EvKind::Scroll:
+      onScroll(e, r);
       break;
   }
   return r;
@@ -277,6 +361,7 @@ void Decision::onKeyDown(const InputEvent& e, Result& r) {
   const uint32_t vk = e.vk & 0xFF;
   const bool repeat = keyDown_[vk];
   keyDown_[vk] = true;
+  onTapKeyDown(vk, repeat, e.timeMs);
   // Windows stops a key's auto-repeat once another key goes down, so a key press while the panel key is held
   // is proof it is still held: keep the repeat watchdog from hiding the panel.
   if (panelDown_ != 0 && vk != panelDown_) lastPanelMs_ = e.timeMs;
@@ -369,6 +454,7 @@ void Decision::onKeyUp(const InputEvent& e, Result& r) {
   const bool triggerReleased = released(owner_);
 
   if (swallowKeyUps_.erase(vk) > 0) r.swallow = true;
+  onTapKeyUp(vk, e.timeMs, r);
   if (vk == panelDown_) {
     panelDown_ = 0;
     r.emits.push_back(panelEmit(false));
@@ -409,7 +495,8 @@ void Decision::onKeyUp(const InputEvent& e, Result& r) {
   for (const WheelKind k : kWheels) {
     if (!released(k)) continue;
     bool& spot = spotWhileHeld_[static_cast<std::size_t>(k)];
-    if (spot) {
+    // An open wheel's release is still to come and reports it, spot included.
+    if (spot && !(k == owner_ && state_ == State::Wheel)) {
       Emit up{Emit::Kind::TriggerUp};
       up.wheel = k;
       r.emits.push_back(up);
@@ -475,6 +562,14 @@ void Decision::onMouseUp(const InputEvent& e, Result& r) {
   } else if (state_ == State::Wheel) {
     r.emits.push_back(point(Emit::Kind::WheelRelease, e.x, e.y, owner_));
     markSpot();
+    // The key came up before the button (a trackpad's three-finger drag sends the up late), so its key-up has
+    // passed: report it now instead of leaving the spots to main's timer.
+    if (!isMouseTrigger(owner_) && spec(owner_).trigger != Trigger::None && !held(owner_)) {
+      Emit up{Emit::Kind::TriggerUp};
+      up.wheel = owner_;
+      r.emits.push_back(up);
+      spotWhileHeld_[static_cast<std::size_t>(owner_)] = false;
+    }
   }
   state_ = State::Idle;
 }
@@ -490,6 +585,17 @@ void Decision::onMouseMove(const InputEvent& e, Result& r) {
   } else if (state_ == State::Wheel) {
     r.emits.push_back(point(Emit::Kind::WheelMove, e.x, e.y, owner_));
   }
+}
+
+void Decision::onScroll(const InputEvent& e, Result& r) {
+  lastX_ = e.x;
+  lastY_ = e.y;
+  resetDoubleTap();
+  if (!staleWatch_ || !active()) return;
+  if (scrollSent_ && e.timeMs >= lastScrollMs_ && e.timeMs - lastScrollMs_ < kScrollGapMs) return;
+  scrollSent_ = true;
+  lastScrollMs_ = e.timeMs;
+  r.emits.push_back(point(Emit::Kind::Scroll, e.x, e.y, WheelKind::Ping));
 }
 
 }  // namespace lp

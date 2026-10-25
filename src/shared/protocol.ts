@@ -4,8 +4,11 @@ import type { Settings } from './settings';
 /** Which wheel a gesture belongs to: the ping trigger's, the emote key's or the teammate's ask key. */
 export type WheelKind = 'ping' | 'emote' | 'ask';
 
-/** The helper's `ready` version this build expects. 5: the ask key, `"wheel":"ask"` and `triggerUp`. */
-export const HELPER_VERSION = 5;
+/**
+ * The helper's `ready` version this build expects. 5: the ask key, `"wheel":"ask"` and `triggerUp`.
+ * 6 adds `askWords`, `scroll`, the `askDoubleTap` config field and the `staleWatch` command.
+ */
+export const HELPER_VERSION = 6;
 
 /**
  * Messages the hook helper writes to stdout, one JSON object per line.

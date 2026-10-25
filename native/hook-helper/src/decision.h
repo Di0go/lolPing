@@ -8,7 +8,7 @@
 namespace lp {
 
 enum class Btn { None, Left, Right, Middle, X1, X2 };
-enum class EvKind { MouseDown, MouseUp, MouseMove, KeyDown, KeyUp };
+enum class EvKind { MouseDown, MouseUp, MouseMove, KeyDown, KeyUp, Scroll };
 
 struct InputEvent {
   EvKind kind = EvKind::MouseMove;
@@ -44,6 +44,8 @@ struct Config {
   Trigger askTrigger = Trigger::None;  // the teammate's ask wheel
   uint32_t askTriggerVk = 0;           // only for Trigger::CustomVk
   bool askClick = false;
+  // A double tap of the ask key (the ping key when the ask key is off) asks with words. Modifier keys only.
+  bool askDoubleTap = false;
   int dragThresholdPx = 8;
   uint32_t toggleMods = ModCtrl | ModAlt;
   uint32_t toggleVk = 0x50;  // 'P'
@@ -55,8 +57,12 @@ struct Config {
 };
 
 struct Emit {
-  // TriggerUp: a wheel's trigger key came up after a release or click while it was held.
-  enum class Kind { WheelOpen, WheelMove, WheelRelease, Click, Cancel, Toggled, TextRequested, Panel, TriggerUp } kind;
+  // TriggerUp: a wheel's trigger key came up after a release or click while it was held, or the wheel was
+  // released after its key. AskWords: a double tap of the ask key, at the pointer. Scroll: the wheel turned
+  // while the stale watch is on, at the pointer.
+  enum class Kind {
+    WheelOpen, WheelMove, WheelRelease, Click, Cancel, Toggled, TextRequested, Panel, TriggerUp, AskWords, Scroll
+  } kind;
   int x = 0;
   int y = 0;
   WheelKind wheel = WheelKind::Ping;  // point events and TriggerUp: the wheel whose trigger started the gesture
@@ -82,6 +88,10 @@ constexpr uint32_t kMaskVk = 0xFC;  // VK_NONAME: harmless key that stops Alt/Wi
 constexpr uint64_t kWatchdogMs = 10000;
 // A held key repeats well inside this; a captured panel key that goes quiet for longer has lost its key-up.
 constexpr uint64_t kPanelRepeatGapMs = 1500;
+// Each press and release of a double tap, and the gap between the taps, must fit in this.
+constexpr uint64_t kDoubleTapMs = 350;
+// At most one scroll is reported per this long: a wheel notch burst or a trackpad glide sends hundreds.
+constexpr uint64_t kScrollGapMs = 100;
 
 // Decides what happens to every input event. Pure logic: no Windows calls.
 class Decision {
@@ -103,6 +113,9 @@ class Decision {
   void setPanelRepeatGap(uint64_t ms) { panelRepeatGapMs_ = ms; }
   // Hides the panel without a key-up (the OS stopped telling us about keys). The up, if it comes, stays swallowed.
   Result releasePanel();
+  // Scroll events are reported only while this is on (the teammate has marks on screen). It never touches a
+  // gesture, which is why it is not a config field.
+  Result setStaleWatch(bool on);
 
   // Resync with the OS: forget keys we believe are down but isDown(vk) says are up
   // (key-ups the hook never saw: Win+L, Ctrl+Alt+Del, UAC, hook reinstall). Never marks a key as down.
@@ -135,6 +148,11 @@ class Decision {
   bool clickOn(WheelKind k) const { return spec(k).click; }
   bool startsGesture(WheelKind k, Btn btn) const;
   void markSpot();
+  bool anySpotWhileHeld() const;
+  uint32_t tapBit() const;
+  void resetDoubleTap() { tap_ = Tap::Idle; }
+  void onTapKeyDown(uint32_t vk, bool repeat, uint64_t nowMs);
+  void onTapKeyUp(uint32_t vk, uint64_t nowMs, Result& r);
   void markSwallow();
   void cancelGesture(Result& r);
   bool flushHeldBack(uint32_t vk, Result& r);
@@ -143,6 +161,11 @@ class Decision {
   void onMouseDown(const InputEvent& e, Result& r);
   void onMouseUp(const InputEvent& e, Result& r);
   void onMouseMove(const InputEvent& e, Result& r);
+  void onScroll(const InputEvent& e, Result& r);
+
+  // The double tap of the tap key: Down1 (first down) -> Up1 -> Down2 -> its up asks. Each step must follow the
+  // last within kDoubleTapMs; anything else starts over.
+  enum class Tap { Idle, Down1, Up1, Down2 };
 
   Config cfg_;
   bool enabled_ = true;
@@ -178,6 +201,12 @@ class Decision {
   uint64_t panelRepeatGapMs_ = kPanelRepeatGapMs;
   int lastX_ = 0;  // last mouse position, for the fullscreen probe on a key press
   int lastY_ = 0;
+  Tap tap_ = Tap::Idle;
+  uint32_t tapVk_ = 0;  // the physical key of the double tap in progress
+  uint64_t tapMs_ = 0;  // when the last step happened
+  bool staleWatch_ = false;
+  bool scrollSent_ = false;  // a scroll has been reported since the watch went on
+  uint64_t lastScrollMs_ = 0;
 };
 
 }  // namespace lp

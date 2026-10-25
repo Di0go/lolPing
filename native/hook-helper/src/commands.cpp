@@ -81,6 +81,7 @@ Command parseCommand(const std::string& line, const Config& current) {
     if (m.count("askTrigger") != 0 && !parseEmoteTrigger(m["askTrigger"], cfg.askTrigger)) return c;
     cfg.askTriggerVk = static_cast<uint32_t>(getInt(m, "askTriggerVk", cfg.askTriggerVk));
     cfg.askClick = getBool(m, "askClick", cfg.askClick);
+    cfg.askDoubleTap = getBool(m, "askDoubleTap", cfg.askDoubleTap);
     const long long drag = getInt(m, "dragThresholdPx", cfg.dragThresholdPx);
     cfg.dragThresholdPx = drag < 1 ? 1 : static_cast<int>(drag);
     cfg.toggleMods = static_cast<uint32_t>(getInt(m, "toggleMods", cfg.toggleMods));
@@ -96,6 +97,9 @@ Command parseCommand(const std::string& line, const Config& current) {
     c.flag = getBool(m, "enabled", true);
   } else if (type == "suspend") {
     c.kind = Command::Kind::Suspend;
+    c.flag = getBool(m, "on", false);
+  } else if (type == "staleWatch") {
+    c.kind = Command::Kind::StaleWatch;
     c.flag = getBool(m, "on", false);
   } else if (type == "shutdown") {
     c.kind = Command::Kind::Shutdown;
@@ -118,6 +122,7 @@ Command parseCommand(const std::string& line, const Config& current) {
     else if (ev == "move") e.kind = EvKind::MouseMove;
     else if (ev == "kdown") e.kind = EvKind::KeyDown;
     else if (ev == "kup") e.kind = EvKind::KeyUp;
+    else if (ev == "scroll") e.kind = EvKind::Scroll;
     else return c;
     c.kind = Command::Kind::SimEvent;
     c.event = e;
