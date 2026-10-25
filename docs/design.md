@@ -263,6 +263,7 @@ Changes apply live, with no Save button. Writes are debounced (300 ms) and atomi
 ### 8.2 Settings window (matches `prototype/settings-demo.html`)
 
 - **Window:** Fluent UI React v9 components, `backgroundMaterial: 'mica'`, theme follows Windows light/dark, Windows 11 caption buttons, left navigation (Trigger, Toggle, Pings & sound, Wheel, App), Windows 11 Settings–style cards.
+- **Scroll bars:** on Windows and Linux a thin rounded thumb in the theme's colours that widens under the pointer, with no arrows or track; Chromium's own bar stays light in dark mode. macOS keeps its overlay bars.
 - **Status card:** at the top, a master on/off switch with a live hint ("Hold Alt and drag… · Ctrl + Alt + P to turn off"). Turning it off dims the dependent cards.
 - **Trigger key:** a Fluent `Dropdown`, *not* a native select, with Keyboard and Mouse option groups plus "Custom key…", which captures the next key press.
 - **Toggle shortcut:** a key-capture field showing keycaps. Click it, press a combination, and it rebinds; Esc cancels. A conflict reported by the helper shows inline and keeps the old binding.
