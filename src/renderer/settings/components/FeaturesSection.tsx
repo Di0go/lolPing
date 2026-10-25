@@ -29,10 +29,13 @@ export function FeaturesSection({ settings: s, update }: { settings: Settings; u
   const t = useText();
   const [firstRun, setFirstRun] = useState(false);
   const set = (id: FeatureId, v: boolean) => {
-    void update({ features: { ...s.features, [id]: v } }).then((r) => {
+    const features = { ...s.features, [id]: v };
+    const first = id === 'teammate' && v && !s.teammate.firstRunDone;
+    // The card is done once it opens: closing Settings with it open must not bring it back next time.
+    void update(first ? { features, teammate: { ...s.teammate, firstRunDone: true } } : { features }).then((r) => {
       if (!r.ok || !v || id !== 'teammate') return;
       showTeammate();
-      if (!s.teammate.firstRunDone) setFirstRun(true);
+      if (first) setFirstRun(true);
     });
   };
   return (
