@@ -235,6 +235,19 @@ describe('members', () => {
     expect(toasts.map((t) => t.kind)).toEqual(['joinedRoom', 'joined', 'disconnected']);
   });
 
+  it('says "disconnected" once for a member that keeps dropping out, and still says when it leaves', async () => {
+    await joinActive();
+    const alex = new Remote('1111111111111111', 'lan:a', lan);
+    alex.presence({ name: 'Alex' });
+    await vi.advanceTimersByTimeAsync(15_000);
+    alex.presence({ name: 'Alex' }); // a sleeping laptop that wakes now and then
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(room.state().members).toHaveLength(1);
+    alex.presence({ name: 'Alex' });
+    alex.bye();
+    expect(toasts.map((t) => t.kind)).toEqual(['joinedRoom', 'joined', 'disconnected', 'left']);
+  });
+
   it('announces a member that comes back under a new peer ID, because that one joined again', async () => {
     await joinActive();
     new Remote('1111111111111111', 'lan:a', lan).presence({ name: 'Alex' });

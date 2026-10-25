@@ -658,9 +658,11 @@ export class RoomManager extends EventEmitter {
     this.transferLimiter.forget(m.peer);
     for (const p of Object.values(m.paths)) this.answered.delete(p.key);
     if (this.members.size === 0 && this.phase !== 'idle') this.aloneSince = this.deps.now();
+    // A laptop that sleeps and wakes now and then would toast every cycle: once is news, then the member list tells.
+    const repeat = kind === 'disconnected' && this.timedOut.has(m.peer);
     if (kind === 'disconnected') this.timedOut.add(m.peer);
     this.emit('memberGone', m.peer);
-    this.emit('toast', { kind, name: m.name } satisfies RoomToast);
+    if (!repeat) this.emit('toast', { kind, name: m.name } satisfies RoomToast);
     this.emitState();
   }
 
