@@ -24,6 +24,10 @@ describe('ping table', () => {
     });
   });
 
+  it('draws On My Way with the upright arrow recoloured to cyan, not the flat ground render', () => {
+    expect(pingById('omw')).toMatchObject({ icon: 'omw_cyan', art: ['omw_cyan'] });
+  });
+
   it('uses the in-game sounds for Bait and Vision Cleared', () => {
     expect(pingById('bait')?.sound).toBe('SRP_11');
     expect(pingById('visioncleared')?.sound).toBe('SRP_6');

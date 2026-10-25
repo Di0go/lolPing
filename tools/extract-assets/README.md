@@ -33,6 +33,8 @@ py -3.14 tools/extract-assets/extract_assets.py --league "C:/Riot Games/League o
 py -3.14 tools/extract-assets/extract_assets.py --derived
 ```
 
+`omw_cyan.png` is made the same way: League's upright On My Way (`omw.png`) is colourblind blue, and its only normal-colour one is the flat ground render `pingwheel_omw.png`. `--derived` measures the hue, saturation and brightness change between `pingwheel_omw_cb.png` and `pingwheel_omw.png` and applies it to `omw.png`. This step also needs NumPy.
+
 No game file says which sound those two pings play: `SRP_11` (Bait) and `SRP_6` (Vision Cleared) were identified by listening. `SRP_13` is the structure-defend ping.
 
 Never reference the colourblind files in the app: the `*_cb*` ones, and the 128 px icons from `PingUpdate/Need/` (lime, lemon, blue and pink where the normal set is teal, gold, cyan and red).

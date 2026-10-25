@@ -5,7 +5,8 @@ Requirements:
   * Python 3.14+ (uses the built-in compression.zstd module)
   * ffmpeg on PATH
   * vgmstream-cli (https://github.com/vgmstream/vgmstream/releases), passed with --vgmstream
-  * Pillow, only for --dds-dir, --derived, --wad-textures, --ui, --emote-gallery and --emotes; NumPy, only for the last two
+  * Pillow, only for --dds-dir, --derived, --wad-textures, --ui, --emote-gallery and --emotes; NumPy, only for --dds-dir,
+    --derived and the last two
 
 Examples:
   py -3.14 tools/extract-assets/extract_assets.py --league "C:/Riot Games/League of Legends" --vgmstream C:/tools/vgmstream/vgmstream-cli.exe
@@ -386,12 +387,34 @@ DERIVED_TEXTURES = {
     'enemy_missing_flipped': ('png_enemymissing_128x128', 180),  # the upside-down Enemy Missing ping (#24)
 }
 
+# output texture -> (extracted texture to recolour, a colourblind texture, the same texture in normal colours). The
+# first gets the hue, saturation and brightness change that turns League's colourblind pair into its normal one.
+RECOLOURED_TEXTURES = {
+    # League's only upright On My Way is colourblind blue, and its normal-colour one is a flat ground render (#83)
+    'omw_cyan': ('omw', 'pingwheel_omw_cb', 'pingwheel_omw'),
+}
+
 
 def derive_textures() -> None:
+    import numpy as np
     from PIL import Image
 
     for name, (source, degrees) in DERIVED_TEXTURES.items():
         Image.open(TEXTURE_OUT / f'{source}.png').rotate(degrees).save(TEXTURE_OUT / f'{name}.png')
+        print('derived texture', name)
+    for name, (source, colourblind, normal) in RECOLOURED_TEXTURES.items():
+        def hsv(stem: str):
+            img = Image.open(TEXTURE_OUT / f'{stem}.png').convert('RGBA')
+            return np.asarray(img.convert('RGB').convert('HSV')).astype(float), np.asarray(img.getchannel('A'))
+        (cb, cb_alpha), (nm, nm_alpha) = hsv(colourblind), hsv(normal)
+        solid = (cb_alpha > 200) & (nm_alpha > 200)
+        hue_shift = np.median((nm[..., 0][solid] - cb[..., 0][solid] + 128) % 256 - 128)
+        scale = [np.median(nm[..., c][solid]) / np.median(cb[..., c][solid]) for c in (1, 2)]
+        src, alpha = hsv(source)
+        out = np.stack([(src[..., 0] + hue_shift) % 256, src[..., 1] * scale[0], src[..., 2] * scale[1]], axis=-1)
+        img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), 'HSV').convert('RGBA')
+        img.putalpha(Image.fromarray(alpha))
+        img.save(TEXTURE_OUT / f'{name}.png')
         print('derived texture', name)
 
 
