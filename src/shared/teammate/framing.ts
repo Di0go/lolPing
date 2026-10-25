@@ -50,3 +50,22 @@ export function frameAsk(task: PingId, chain: readonly Rect[], display: Rect, sp
   const padded = intersect(grown, display) ?? block;
   return { area, crop: zoomRect(padded, spot, MAX_CLOSE) };
 }
+
+/**
+ * Frames each spot alone with its own chain, as frameAsk does; the overview area is the smallest rect holding every
+ * spot's area, so one picture shows them all.
+ */
+export function frameSpots(
+  task: PingId,
+  chains: readonly (readonly Rect[])[],
+  display: Rect,
+  spots: readonly Point[],
+): { area: Rect; crops: Rect[] } {
+  const framed = spots.map((spot, i) => frameAsk(task, chains[i] ?? [], display, spot));
+  const left = Math.min(...framed.map((f) => f.area.x));
+  const top = Math.min(...framed.map((f) => f.area.y));
+  const right = Math.max(...framed.map((f) => f.area.x + f.area.w));
+  const bottom = Math.max(...framed.map((f) => f.area.y + f.area.h));
+  const area = intersect({ x: left, y: top, w: right - left, h: bottom - top }, display) ?? display;
+  return { area, crops: framed.map((f) => f.crop) };
+}

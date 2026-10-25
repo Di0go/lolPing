@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { frameAsk } from '../../../src/shared/teammate/framing';
+import { frameAsk, frameSpots } from '../../../src/shared/teammate/framing';
 
 const DISPLAY = { x: 0, y: 0, w: 2752, h: 1152 };
 const SPOT = { x: 700, y: 400 };
@@ -51,5 +51,40 @@ describe('frameAsk', () => {
     expect(frameAsk('missing', [], DISPLAY, SPOT)).toEqual({
       area: DISPLAY, crop: { x: 200, y: 25, w: 1000, h: 750 },
     });
+  });
+});
+
+describe('frameSpots', () => {
+  // Two 1000 x 900 windows side by side, a spot in each.
+  const LEFT = { x: 0, y: 40, w: 1000, h: 900 };
+  const RIGHT = { x: 1000, y: 40, w: 1000, h: 900 };
+  const LEFT_SPOT = { x: 300, y: 400 };
+  const RIGHT_SPOT = { x: 1700, y: 400 };
+
+  it('frames one spot as frameAsk does', () => {
+    const one = frameAsk('missing', CHAIN, DISPLAY, SPOT);
+    expect(frameSpots('missing', [CHAIN], DISPLAY, [SPOT])).toEqual({ area: one.area, crops: [one.crop] });
+  });
+
+  it('holds every spot in the overview and gives each its own close-up', () => {
+    const framing = frameSpots('missing', [[LEFT], [RIGHT]], DISPLAY, [LEFT_SPOT, RIGHT_SPOT]);
+    expect(framing.area).toEqual({ x: 0, y: 40, w: 2000, h: 900 });
+    expect(framing.crops).toEqual([
+      frameAsk('missing', [LEFT], DISPLAY, LEFT_SPOT).crop,
+      frameAsk('missing', [RIGHT], DISPLAY, RIGHT_SPOT).crop,
+    ]);
+  });
+
+  it('keeps each close-up inside the display', () => {
+    const edge = { x: 20, y: 20 };
+    const far = { x: DISPLAY.w - 20, y: DISPLAY.h - 20 };
+    const framing = frameSpots('missing', [[], []], DISPLAY, [edge, far]);
+    for (const c of framing.crops) {
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + c.w).toBeLessThanOrEqual(DISPLAY.w);
+      expect(c.y + c.h).toBeLessThanOrEqual(DISPLAY.h);
+    }
+    expect(framing.area).toEqual(DISPLAY);
   });
 });
