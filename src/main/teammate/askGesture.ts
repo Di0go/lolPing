@@ -40,11 +40,14 @@ export class AskGesture {
     });
   }
 
-  /** An ask click, or a double tap at the pointer (intent 'generic'): the words box opens with the held spots. */
+  /**
+   * An ask click, or a double tap at the pointer (intent 'generic'): the words box opens with the held spots. A click
+   * whose own spot is refused (four held, another screen) still opens it, with the held spots alone.
+   */
   click(spot: Spot): void {
     if (this.spots.size > 0) {
       const r = this.spots.add(spot, true);
-      if (r.t === 'refused') return this.deps.note(spot, r.why);
+      if (r.t === 'refused') this.deps.note(spot, r.why);
     }
     const spots = this.spots.size > 0 ? this.spots.take() : [spot];
     this.disarm();

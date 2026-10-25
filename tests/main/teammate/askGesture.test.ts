@@ -109,12 +109,30 @@ describe('AskGesture', () => {
     for (const s of four.slice(1)) h.gesture.release(s);
     const fifth = spot('danger', 600);
     h.gesture.release(fifth);
-    const click = spot('generic', 700);
-    h.gesture.click(click); // four are held: the click is refused too, and no box opens
-    expect(h.notes).toEqual([[other, 'display'], [fifth, 'full'], [click, 'full']]);
-    expect(h.words).toEqual([]);
     h.gesture.keyUp();
+    expect(h.notes).toEqual([[other, 'display'], [fifth, 'full']]);
     expect(h.asks).toEqual([four]);
+  });
+
+  it('opens the words box with the held spots when the click\'s own spot is refused', () => {
+    const h = harness();
+    const four = [100, 200, 300, 400].map((x) => spot('missing', x));
+    for (const s of four) h.gesture.release(s);
+    const click = spot('generic', 700);
+    h.gesture.click(click); // a fifth spot: noted, and the box opens with the four
+    expect(h.notes).toEqual([[click, 'full']]);
+    expect(h.words).toEqual([four]);
+    h.gesture.keyUp();
+    h.advance(5000);
+    expect(h.asks).toEqual([]);
+
+    // A click on another screen than the held spot.
+    const a = spot('missing', 100);
+    const away = spot('generic', 200, 2);
+    h.gesture.release(a);
+    h.gesture.click(away);
+    expect(h.notes).toEqual([[click, 'full'], [away, 'display']]);
+    expect(h.words).toEqual([four, [a]]);
   });
 
   it('drops held spots on cancel', () => {
