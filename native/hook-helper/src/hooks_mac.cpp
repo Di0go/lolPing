@@ -183,6 +183,10 @@ CGEventRef tapCallback(CGEventTapProxy, CGEventType type, CGEventRef event, void
       if (!mouseButton(event, e.btn)) return event;
       e.kind = type == kCGEventOtherMouseDown ? EvKind::MouseDown : EvKind::MouseUp;
       break;
+    // A scroll is only reported (while the stale watch is on), never swallowed.
+    case kCGEventScrollWheel:
+      apply(g_decision->onEvent(e));
+      return event;
     default:
       return event;
   }
@@ -221,7 +225,8 @@ int runHooks(Output& out) {
       CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) |
       CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp) |
       CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventLeftMouseDragged) |
-      CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged);
+      CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged) |
+      CGEventMaskBit(kCGEventScrollWheel);
   g_tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, tapCallback, nullptr);
   if (g_tap == nullptr) {
     out.error("noAccess", "Can't read input: lolPing needs Accessibility permission");

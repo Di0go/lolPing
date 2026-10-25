@@ -285,7 +285,7 @@ static void test_front_reply() {
 }
 
 static void test_front_without_platform_is_bad() {
-  Fake fake;  // no front hook, like macOS until its port
+  Fake fake;  // no front hook, like the Linux helper
   const auto f = fields(handleCommand(parseCommand(R"({"type":"front","id":"w2"})"), fake.platform()).line);
   CHECK(f.at("type") == "error" && f.at("id") == "w2" && f.at("code") == "bad");
 }

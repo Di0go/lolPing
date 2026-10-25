@@ -108,6 +108,7 @@ struct OnScreen {
   pid_t pid = 0;
   uint32_t number = 0;
   CGRect bounds = CGRectZero;
+  std::string title;  // empty without Screen Recording permission
 };
 
 // The normal-level windows on screen, front to back, in global points with the origin at the top left.
@@ -130,6 +131,8 @@ std::vector<OnScreen> normalWindows() {
       s.pid = static_cast<pid_t>([w[(__bridge NSString*)kCGWindowOwnerPID] intValue]);
       s.number = [w[(__bridge NSString*)kCGWindowNumber] unsignedIntValue];
       s.bounds = bounds;
+      NSString* name = w[(__bridge NSString*)kCGWindowName];
+      if ([name isKindOfClass:[NSString class]] && name.UTF8String) s.title = name.UTF8String;
       out.push_back(s);
     }
     CFRelease(info);
@@ -142,6 +145,18 @@ std::string frontWindowKey(pid_t pid) {
     if (w.pid == pid) return windowKey(pid, w.number);
   }
   return std::string();
+}
+
+// The same window frontWindowKey names, with its caption and box; false when the app has none on screen.
+bool frontWindowOf(pid_t pid, std::string& key, std::string& title, CGRect& bounds) {
+  for (const OnScreen& w : normalWindows()) {
+    if (w.pid != pid) continue;
+    key = windowKey(pid, w.number);
+    title = w.title;
+    bounds = w.bounds;
+    return true;
+  }
+  return false;
 }
 
 // Empty when no normal window is under the point.
@@ -423,6 +438,12 @@ void collect(AXUIElementRef el, int depth, Walk& w) {
 }  // namespace
 
 std::string frontWindowId(pid_t pid) { return frontWindowKey(pid); }
+
+bool frontWindowInfo(pid_t pid, std::string& window, std::string& title, CGRect& box) {
+  @autoreleasepool {
+    return frontWindowOf(pid, window, title, box);
+  }
+}
 
 bool formFieldsAt(const std::vector<Point>& spots, std::vector<RawField>& out, Failure& fail) {
   @autoreleasepool {

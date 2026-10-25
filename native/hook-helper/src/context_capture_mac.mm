@@ -7,6 +7,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,8 @@ namespace lp::ctx {
 
 // In context_write_mac.mm: the id of the app's topmost normal window, which the paste and setField commands name.
 std::string frontWindowId(pid_t pid);
+// Also in context_write_mac.mm: the same window with its caption and box (global points, top left origin).
+bool frontWindowInfo(pid_t pid, std::string& window, std::string& title, CGRect& box);
 
 namespace {
 
@@ -264,6 +267,23 @@ bool foreground(std::string& app, std::string& title, std::string& windowId, Fai
   }
 }
 
+// The window in front for the stale watch, polled twice a second: the window list only, no Accessibility call.
+bool front(FrontWindow& out, Failure&) {
+  @autoreleasepool {
+    out = FrontWindow();
+    // NSWorkspace learns about app switches from run loop notifications; this process blocks on stdin otherwise.
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate date]];
+    NSRunningApplication* app = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (!app) return true;  // nothing in front: all stay empty
+    CGRect box = CGRectZero;
+    if (!frontWindowInfo(app.processIdentifier, out.window, out.title, box)) return true;
+    out.box = Rect{static_cast<int>(std::lround(box.origin.x)), static_cast<int>(std::lround(box.origin.y)),
+                   static_cast<int>(std::lround(box.size.width)), static_cast<int>(std::lround(box.size.height))};
+    out.pid = static_cast<uint32_t>(app.processIdentifier);
+    return true;
+  }
+}
+
 }  // namespace
 
 // The text probes, in context_text_mac.mm.
@@ -283,6 +303,7 @@ ContextPlatform nativePlatform() {
   p.resize = resize;
   p.writeJpeg = writeJpeg;
   p.foreground = foreground;
+  p.front = front;
   p.controls = nearbyControls;
   p.systemText = systemTextAt;
   p.fileOf = fileBehindWindow;
