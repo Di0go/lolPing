@@ -3,9 +3,11 @@ import { DEFAULT_CLICK_EMOTE, DEFAULT_EMOTE_WHEEL } from '../../src/shared/emote
 import { MOD } from '../../src/shared/keys';
 import { formatRoomCode, makeRoomCode } from '../../src/shared/roomCode';
 import {
-  askKeyClashes, DEFAULT_SETTINGS, keyboardTriggers, mergeSettings, normalizeSettings, overlaySettings, patchClashes, rendererPatch,
-  sameTrigger, separateAskKey, soundLevel, triggerLabel, triggersClash,
+  askKeyClashes, askKeyHeld, asksOnPing, DEFAULT_SETTINGS, keyboardTriggers, mergeSettings, normalizeSettings,
+  overlaySettings, patchClashes, rendererPatch, sameTrigger, separateAskKey, soundLevel, triggerLabel, triggersClash,
+  type TriggerKey,
 } from '../../src/shared/settings';
+import type { AskTrigger } from '../../src/shared/teammate/settings';
 
 describe('normalizeSettings', () => {
   it('loads a 0.5.3 settings file with the teammate off', () => {
@@ -496,6 +498,28 @@ describe('ask key clashes', () => {
     expect(separateAskKey(current)).toBe('mouse4');
     expect(separateAskKey({ ...current, teammate: { ...current.teammate, askTrigger: 'same' } })).toBeNull();
     expect(separateAskKey({ ...current, features: DEFAULT_SETTINGS.features })).toBeNull();
+  });
+
+  it('asks on the ping wheel only with the teammate on and its ask key on the ping key', () => {
+    const same = { ...current, teammate: { ...current.teammate, askTrigger: 'same' as const } };
+    expect(asksOnPing(same)).toBe(true);
+    expect(asksOnPing(current)).toBe(false);
+    expect(asksOnPing({ ...same, features: DEFAULT_SETTINGS.features })).toBe(false);
+    expect(overlaySettings(same).ask.onPing).toBe(true);
+    expect(overlaySettings(current).ask.onPing).toBe(false);
+  });
+
+  it('holds the key that asks only when it is a keyboard key', () => {
+    const ask = (askTrigger: AskTrigger, trigger: TriggerKey = 'alt') => askKeyHeld({
+      ...current, trigger, teammate: { ...current.teammate, askTrigger },
+    });
+    expect(ask('mouse4')).toBe(false);
+    expect(ask('mouse5')).toBe(false);
+    expect(ask('win')).toBe(true);
+    expect(ask({ vk: 0x54 })).toBe(true);
+    // On the ping key, the ping trigger is the key that asks.
+    expect(ask('same', 'mouse5')).toBe(false);
+    expect(ask('same', 'ctrl')).toBe(true);
   });
 
   it('moves a separate ask key off a new ping key instead of making it share the ping key', () => {

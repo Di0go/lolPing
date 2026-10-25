@@ -20,7 +20,7 @@ import type { RoomState } from '../shared/room';
 import type { VoteKind } from '../shared/roomProtocol';
 import { formatRoomCode, parseRoomCode } from '../shared/roomCode';
 import { sameTagRgb, tagWire } from '../shared/roomColors';
-import { overlaySettings, separateAskKey, soundLevel, type Settings } from '../shared/settings';
+import { askKeyHeld, asksOnPing, overlaySettings, soundLevel, type Settings } from '../shared/settings';
 import type { Spot } from '../shared/teammate/askMachine';
 import { rememberApp } from '../shared/teammate/appRules';
 import type { ThreadRecord } from '../shared/teammate/history';
@@ -578,6 +578,38 @@ function start(): void {
     limitations: text().limitations,
   });
 
+  const mateLang = () => resolveLang(settings.language, app.getLocale());
+  const mateTag = () => {
+    const t = settings.teammate;
+    return { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom };
+  };
+  /** Turns ask-wheel releases into asks; made before the pause, helper and teammate paths that cancel it. */
+  const gesture = new AskGesture({
+    now: Date.now,
+    timer: (ms, fn) => {
+      const timer = setTimeout(() => {
+        try {
+          fn();
+        } catch (err) {
+          console.warn('[teammate]', err);
+        }
+      }, ms);
+      return () => clearTimeout(timer);
+    },
+    held: () => askKeyHeld(settings),
+    ask: (spots) => mate?.controller.ask(spots),
+    words: openWords,
+    note: (spot, why) => {
+      const at = overlays.toLocal(spot.phys);
+      if (!at) return;
+      const t = strings(mateLang(), PLATFORM).teammate.ask;
+      overlays.spawnText({
+        ...at, text: why === 'full' ? t.spotsFull : t.spotsDisplay, owner: 'mate', style: settings.roomTextStyle,
+        tag: mateTag(),
+      });
+    },
+  });
+
   function setEnabled(on: boolean): void {
     if (on === enabled) return;
     enabled = on;
@@ -673,7 +705,7 @@ function start(): void {
     } else if (ev.type === 'error') console.warn('[helper]', ev.code ?? '', ev.message);
     else if (ev.type === 'triggerUp') {
       // Only the key that asks sends the spots held so far; the emote key's up, or the ping key's outside it, doesn't.
-      if (ev.wheel === 'ask' || (ev.wheel === 'ping' && asksOnPing())) gesture.keyUp();
+      if (ev.wheel === 'ask' || (ev.wheel === 'ping' && asksOnPing(settings))) gesture.keyUp();
     } else overlays.handle(ev);
   });
   bridge.on('status', (s: HelperStatus) => {
@@ -701,11 +733,6 @@ function start(): void {
   let historyOpenFailed: string | null = null;
   /** Foreground apps of this session's asks, newest first; the rules card offers them as app names. */
   let recentApps: readonly string[] = [];
-  const mateLang = () => resolveLang(settings.language, app.getLocale());
-  const mateTag = () => {
-    const t = settings.teammate;
-    return { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom };
-  };
   function pushMateTray(): void {
     if (quitting) return;
     const h = settings.teammate.history;
@@ -1011,37 +1038,6 @@ function start(): void {
     wordsOpen = true;
     syncSuspended();
   }
-  /** The ping wheel is the ask wheel: its key's up sends the held spots. */
-  const asksOnPing = (): boolean => featureOn(settings, 'teammate') && settings.teammate.askTrigger === 'same';
-  const gesture = new AskGesture({
-    now: Date.now,
-    timer: (ms, fn) => {
-      const timer = setTimeout(() => {
-        try {
-          fn();
-        } catch (err) {
-          console.warn('[teammate]', err);
-        }
-      }, ms);
-      return () => clearTimeout(timer);
-    },
-    // A mouse button's up isn't reported, so with one each release asks alone.
-    held: () => {
-      const key = separateAskKey(settings) ?? settings.trigger;
-      return key !== 'mouse4' && key !== 'mouse5';
-    },
-    ask: (spots) => mate?.controller.ask(spots),
-    words: openWords,
-    note: (spot, why) => {
-      const at = overlays.toLocal(spot.phys);
-      if (!at) return;
-      const t = strings(mateLang(), PLATFORM).teammate.ask;
-      overlays.spawnText({
-        ...at, text: why === 'full' ? t.spotsFull : t.spotsDisplay, owner: 'mate', style: settings.roomTextStyle,
-        tag: mateTag(),
-      });
-    },
-  });
   overlays.on('askRelease', (r: AskRelease) => {
     gesture.release({ intent: r.id, phys: r.phys, displayId: r.displayId });
   });

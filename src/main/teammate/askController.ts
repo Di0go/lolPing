@@ -769,7 +769,7 @@ export class AskController extends EventEmitter {
     const overviewJpeg = await this.files.read(cap.overviewPath);
     const zoomJpegs = await Promise.all(cap.zooms.map((z) => this.files.read(z.path)));
     if (!this.alive(run)) return null;
-    run.thumb = deps.thumbnail(zoomJpegs[0] ?? overviewJpeg);
+    run.thumb = deps.thumbnail(zoomJpegs.at(-1) ?? overviewJpeg); // the last spot's close-up: the ask sits there
     run.screenMarks = layers.marks;
     run.system = layers.system;
     run.fields = layers.fields;

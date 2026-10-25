@@ -130,6 +130,8 @@ function harness(opts: HarnessOptions = {}) {
   /** The fake disk: folders and files under the temp folder. */
   const disk = new Set<string>();
   const dirs: string[] = [];
+  /** What each thumbnail was made from: the fake files hold their own path. */
+  const thumbs: string[] = [];
   const screen: Screen = { system: NO_TEXT, marksFile: '', fields: '', doc: null, boxes: [], ...opts.screen };
 
   const settings: Settings = {
@@ -267,7 +269,10 @@ function harness(opts: HarnessOptions = {}) {
       amend: async (threadId, at, done) => void amends.push({ threadId, at, done }),
     },
     tempDir: () => 'tmp',
-    thumbnail: () => 'thumb',
+    thumbnail: (jpeg) => {
+      thumbs.push(jpeg.toString());
+      return 'thumb';
+    },
     now: () => Date.now() + skew,
     usage: () => undefined,
     cursor: () => ({ x: 1200, y: 900 }),
@@ -291,7 +296,7 @@ function harness(opts: HarnessOptions = {}) {
     dragBubble: (to: { x: number; y: number } | null) => {
       bubblePlace = to;
     },
-    takenRuns, runner, dones, amends, putClicks, runnerCancels: () => runnerCancels,
+    takenRuns, runner, dones, amends, putClicks, runnerCancels: () => runnerCancels, thumbs,
     pings: (id?: string) => (of('ping') as DrawnPing[]).filter((p) => id === undefined || p.id === id),
     bubbles: () => of('bubble') as BubbleState[],
     cards: () => of('card') as CardState[],
@@ -1080,6 +1085,7 @@ describe('AskController', () => {
     // The last spot's intent decides the question.
     expect(req.system).toContain("The task: What's wrong.");
     expect(h.ctl.currentThread()?.entries.map((e) => e.spots)).toEqual([3]);
+    expect(h.thumbs).toEqual(['zoom1-2.jpg']); // the last spot's close-up: the ask sits there
     h.ctl.onTeammateAction('bubble', { t: 'more' });
     expect(h.cards().at(-1)?.entries[0].label).toBe(`${intentFor(DEFAULT_TEAMMATE, 'danger', 'en').label} · 3 spots`);
   });

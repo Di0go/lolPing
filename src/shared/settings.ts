@@ -243,6 +243,17 @@ export function separateAskKey(s: Pick<Settings, 'features' | 'teammate'>): Trig
   return featureOn(s, 'teammate') && s.teammate.askTrigger !== 'same' ? s.teammate.askTrigger : null;
 }
 
+/** The teammate is on and asks on the ping key: the ping wheel is the ask wheel. */
+export const asksOnPing = (s: Pick<Settings, 'features' | 'teammate'>): boolean => (
+  featureOn(s, 'teammate') && s.teammate.askTrigger === 'same'
+);
+
+/** The key that asks (the ping key in same-key mode) is a keyboard key, whose up the helper reports. */
+export function askKeyHeld(s: Pick<Settings, 'features' | 'teammate' | 'trigger'>): boolean {
+  const key = separateAskKey(s) ?? s.trigger;
+  return key !== 'mouse4' && key !== 'mouse5';
+}
+
 /**
  * Whether `patch` puts the ping trigger or the emote key on the teammate's separate ask key. Saving it would move the
  * ask key, so it is refused with a reason instead, as the emote key's clash is.
@@ -434,6 +445,6 @@ function askWheel(s: Settings, lang: Lang): OverlaySettings['ask'] {
   }
   return {
     tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled,
-    onPing: featureOn(s, 'teammate') && t.askTrigger === 'same', click: t.askClick,
+    onPing: asksOnPing(s), click: t.askClick,
   };
 }
