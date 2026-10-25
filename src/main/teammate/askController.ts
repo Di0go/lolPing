@@ -211,6 +211,8 @@ interface Run {
   info: RunInfo | null;
   /** The page under its marks moved: no more of its pings or emotes are drawn, and its later bubble isn't watched. */
   stale: boolean;
+  /** Its bubble went with the stale fade (or its line hadn't come yet): a later say brings the line back, once. */
+  bubbleBack: boolean;
 }
 
 const isAction = (c: ToolCall): c is ActionCall => (
@@ -414,7 +416,7 @@ export class AskController extends EventEmitter {
       rest: '', markdown: [], tokens: null,
       calls: [], early: [], pings: 0, marks: [], dir: join(this.deps.tempDir(), machine.id),
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
-      system: null, fields: [], box: null, info: null, stale: false,
+      system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
     };
     this.run = run;
     this.shown = run;
@@ -544,6 +546,8 @@ export class AskController extends EventEmitter {
     for (const timer of this.pingTimers) clearTimeout(timer);
     this.pingTimers.clear();
     for (const run of [this.shown, this.watched]) if (run) run.stale = true;
+    // Only a bubble the fade took comes back: one the user dismissed, or a card they closed, stays closed.
+    if (this.shown && !this.cardShown && (this.bubbleShown || !this.shown.line)) this.shown.bubbleBack = true;
     if (this.marksShown) {
       this.deps.overlay.fadeMate();
       this.marksShown = false;
@@ -682,7 +686,7 @@ export class AskController extends EventEmitter {
       folder: '', cwd: null, session: null, agentRun: null, shot: null, app: '', title: '', window: '', thumb: '',
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [], box: null,
-      info: null, stale: false,
+      info: null, stale: false, bubbleBack: false,
     };
   }
 
@@ -1149,7 +1153,7 @@ export class AskController extends EventEmitter {
     if (run.line) {
       run.markdown.push(text);
       // The page moved and its line faded, but the user still wants the answer: the line comes back with it.
-      if (run.stale && !this.bubbleShown && !this.cardShown) this.showLine(run, run.line);
+      if (run.bubbleBack && !this.bubbleShown && !this.cardShown) this.showLine(run, run.line);
       else this.refresh(run);
       return;
     }
@@ -1285,6 +1289,7 @@ export class AskController extends EventEmitter {
 
   private showLine(run: Run, line: string): void {
     this.hiddenForPut = null;
+    run.bubbleBack = false;
     const state = this.bubbleState(run, line);
     if (this.bubbleShown) this.deps.windows.updateBubble(state);
     else this.deps.windows.showBubble(this.popupAt(run), state);
@@ -1395,6 +1400,7 @@ export class AskController extends EventEmitter {
    */
   private hideBubble(how: 'fast' | 'now' | 'stale' = 'fast'): void {
     this.hiddenForPut = null;
+    if (how !== 'stale' && this.shown) this.shown.bubbleBack = false;
     this.clearTimer('bubble');
     this.bubbleEndsAt = 0;
     if (!this.bubbleShown) return;
@@ -1421,6 +1427,7 @@ export class AskController extends EventEmitter {
 
   private hideCard(): void {
     this.hiddenForPut = null;
+    if (this.shown) this.shown.bubbleBack = false; // the user closed the answer: a later say doesn't reopen it
     if (!this.cardShown) return;
     this.deps.windows.hideCard();
     this.cardShown = false;

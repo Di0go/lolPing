@@ -947,6 +947,82 @@ describe('AskController', () => {
       expect(h.of('fade')).toHaveLength(1);
     });
 
+    /** An ask whose answer streams says one by one, while the test sends them. */
+    const streaming = () => {
+      let handlers: StreamHandlers | null = null;
+      const slow: Step = (_req, s) => {
+        s.accepted();
+        handlers = s;
+        return new Promise(() => undefined);
+      };
+      const h = harness({ steps: [slow] });
+      let n = 0;
+      const say = async (text: string): Promise<void> => {
+        n += 1;
+        handlers?.call?.(call('say', { text }, `s${n}`));
+        await flush();
+      };
+      return { h, say };
+    };
+
+    it('brings back only a bubble that went stale, once', async () => {
+      const { h, say } = streaming();
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      await say('Line 3 divides by zero.');
+      h.ctl.stale();
+      await say('B4 is empty too.');
+      expect(h.popupsAt).toHaveLength(2);
+      h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+      await say('And C2.');
+      expect(h.popupsAt).toHaveLength(2);
+    });
+
+    it('keeps a bubble the user dismissed before the page moved down', async () => {
+      const { h, say } = streaming();
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      await say('Line 3 divides by zero.');
+      h.ctl.onTeammateAction('bubble', { t: 'dismiss' });
+      h.ctl.stale();
+      await say('B4 is empty too.');
+      expect(h.popupsAt).toHaveLength(1);
+    });
+
+    it('keeps a card the user closed after the page moved closed', async () => {
+      const { h, say } = streaming();
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      await say('Line 3 divides by zero.');
+      h.ctl.onTeammateAction('bubble', { t: 'more' });
+      h.ctl.stale();
+      h.ctl.onTeammateAction('card', { t: 'close' });
+      await say('B4 is empty too.');
+      expect(h.popupsAt).toHaveLength(1);
+      expect(h.cardOpens).toHaveLength(1);
+    });
+
+    it('keeps a bubble hidden for a paste down', async () => {
+      const { h, say } = streaming();
+      h.ctl.ask([spot('danger')]);
+      await flush();
+      await say('Line 3 divides by zero.');
+      h.ctl.stale();
+      await say('B4 is empty too.'); // the line came back
+      h.ctl.hideBubbleForPut();
+      await say('And C2.');
+      expect(h.popupsAt).toHaveLength(2);
+
+      const before = streaming();
+      before.h.ctl.ask([spot('danger')]);
+      await flush();
+      await before.say('Line 3 divides by zero.');
+      before.h.ctl.hideBubbleForPut();
+      before.h.ctl.stale();
+      await before.say('B4 is empty too.');
+      expect(before.h.popupsAt).toHaveLength(1);
+    });
+
     it('drops the pings still waiting their turn', async () => {
       const h = harness({
         steps: [answers([
