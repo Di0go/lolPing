@@ -48,7 +48,10 @@ bool writeAll(int fd, const char* data, size_t size) {
 
 int runKWinBridge(Output& out) {
   const char* runtime = std::getenv("XDG_RUNTIME_DIR");
-  const std::string path = std::string(runtime ? runtime : "/tmp") + "/lolping-kwin.sock";
+  // The plugin names its socket after KWin's Wayland display, so each KWin (a nested one too) has its own.
+  std::string display = std::getenv("WAYLAND_DISPLAY") ? std::getenv("WAYLAND_DISPLAY") : "wayland-0";
+  if (const size_t slash = display.rfind('/'); slash != std::string::npos) display.erase(0, slash + 1);
+  const std::string path = std::string(runtime ? runtime : "/tmp") + "/lolping-kwin-" + display + ".sock";
   int fd = connectTo(path);
   if (fd < 0) {
     loadPlugin();

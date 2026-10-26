@@ -6,8 +6,10 @@
 #include "keyboard_input.h"
 #include "plugin.h"
 #include "pointer_input.h"
+#include "wayland_server.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QPointer>
@@ -40,8 +42,10 @@ class Bridge : public KWin::Plugin, public KWin::InputEventFilter {
  public:
   // After the lock screen, before screen edges, global shortcuts and window actions (Alt+drag moves windows).
   Bridge() : KWin::InputEventFilter(KWin::InputFilterOrder::ScreenEdge) {
+    // Named after this KWin's Wayland socket: a nested KWin in the same session must not take over the real one's.
     const QString dir = qEnvironmentVariable("XDG_RUNTIME_DIR", QDir::tempPath());
-    path_ = dir + QStringLiteral("/lolping-kwin.sock");
+    const QString display = QFileInfo(KWin::waylandServer()->socketName()).fileName();
+    path_ = dir + QStringLiteral("/lolping-kwin-") + display + QStringLiteral(".sock");
     QLocalServer::removeServer(path_);
     server_.setSocketOptions(QLocalServer::UserAccessOption);
     if (!server_.listen(path_)) qWarning("lolping: cannot listen on %s", qPrintable(path_));

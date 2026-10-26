@@ -89,6 +89,9 @@ const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.preference.se
 if (IS_LINUX) {
   app.commandLine.appendSwitch('ozone-platform', 'x11');
   app.commandLine.appendSwitch('force-device-scale-factor', '1');
+  // Under a Wayland session the GPU process can crash on XWayland at start (seen with KWin 6.8, exit 139), and
+  // the overlay then never paints its first frame, so it never shows. In-process GPU initialises without crashing.
+  if (process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('in-process-gpu');
 }
 
 registerAppScheme();
