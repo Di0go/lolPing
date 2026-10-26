@@ -14,3 +14,8 @@ tools/extract-assets/__pycache__/
 docs/superpowers/
 docs/fix/
 native/kwin-plugin/build/
+
+# makepkg output
+packaging/arch/*.pkg.tar.zst
+packaging/arch/pkg/
+packaging/arch/src/

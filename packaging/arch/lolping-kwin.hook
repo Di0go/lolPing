@@ -1,0 +1,11 @@
+# The KWin plugin is tied to the exact KWin version it was built against; after a KWin update it stops loading
+# (safely) until it is rebuilt. Say so at the update instead of leaving lolPing quietly without input.
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = kwin
+
+[Action]
+Description = lolPing: the KWin plugin must be rebuilt for the new KWin (packaging/arch/build.sh)
+When = PostTransaction
+Exec = /usr/bin/true

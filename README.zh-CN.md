@@ -50,7 +50,7 @@ Mac 版需要 Apple 芯片（M1 或更新）的 Mac 和 macOS 13 或更新版本
 
 ### Linux（实验性，X11）
 
-此源码分支已增加 Linux 支持，在 Ubuntu 24.04 / X11 上开发验证。请使用真正的 **X11 / Xorg 登录会话**；目前不支持 Wayland（包括 Wayland 会话中的 XWayland）。
+此源码分支已增加 Linux 支持，在 Ubuntu 24.04 / X11 上开发验证。请使用真正的 **X11 / Xorg 登录会话**。**KDE Plasma 6（Wayland）** 可通过 KWin 插件（`native/kwin-plugin`）运行，每次 KWin 更新后需重新编译插件；Arch 打包脚本见 `packaging/arch`。暂不支持其他 Wayland 桌面。
 
 - 构建：安装 Node.js 22.12+、C++20 编译器及 `libx11-dev libxi-dev libxtst-dev`，运行 `npm ci` 和 `npm run dist:linux`。
 - 输出：`release/` 中的 `.AppImage` 和 `.deb`。Ubuntu/Debian 推荐 `sudo apt install ./release/lolPing-0.5.1-amd64.deb`。

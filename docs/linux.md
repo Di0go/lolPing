@@ -1,11 +1,11 @@
-# Linux (experimental X11 port)
+# Linux (experimental: X11, and KDE Plasma 6 on Wayland)
 
 This source tree adds a Linux backend to lolPing 0.5.1. It is a local development port; upstream releases may not contain Linux packages yet.
 
 ## Requirements
 
 - x86-64 Linux; development and package validation use Ubuntu 24.04.
-- A genuine **X11 desktop session**, with a compositor for transparent overlays. Choose **Ubuntu on Xorg** / an X11 session at login. Running an XWayland window inside a Wayland session is insufficient: it cannot capture native Wayland application input. The helper reports this limitation instead of silently running with partial input.
+- A genuine **X11 desktop session**, with a compositor for transparent overlays, or **KDE Plasma 6 on Wayland** with the KWin plugin below. Running the X11 helper through XWayland inside a Wayland session is insufficient: it cannot see or hold back input meant for native Wayland applications.
 - XInput 2.1, XTest, and the usual Electron desktop libraries. No root privileges or access to `/dev/input` are needed to run the input helper.
 - GNOME needs its AppIndicator extension to display the tray. Ubuntu normally includes this extension. Other desktops need a system tray.
 
@@ -39,6 +39,18 @@ chmod +x release/lolPing-0.5.1-x86_64.AppImage
 ```
 
 On Ubuntu versions that restrict unprivileged user namespaces, prefer the installed `.deb` if the portable build reports a Chromium sandbox error. Do not change global security settings to run it. If only FUSE is missing, AppImage's `--appimage-extract-and-run` can be used instead.
+
+## KDE Plasma 6 on Wayland
+
+A Wayland client cannot see or hold back another client's input, so on Wayland the gesture decision (`decision.cpp`, the same code the other platforms use) runs inside KWin as a binary compositor plugin, `native/kwin-plugin/lolping.cpp`. It sits in KWin's input chain after the lock screen and before global shortcuts and window actions, swallows only wheel gestures, replays short trigger clicks, and speaks the helper's JSON-lines protocol over `$XDG_RUNTIME_DIR/lolping-kwin.sock`. The hook helper detects Wayland, asks KWin to load the plugin (`org.kde.KWin.Plugins.LoadPlugin`) and relays lines between the app and that socket. With no app connected the plugin passes every event; it has no timers while no gesture is open.
+
+- Build: `native/kwin-plugin/build.sh` (needs the `kwin` headers, which Arch ships in the `kwin` package, and Qt 6). Install `build/lolping.so` into `/usr/lib/qt6/plugins/kwin/plugins/`.
+- KWin refuses a binary plugin built for another KWin version (it logs "mismatching plugin version" and keeps running), so **rebuild the plugin after every KWin update**. Until then the app reports that input is unavailable.
+- The overlay still runs through XWayland. KWin does not let an XWayland window's always-on-top hint win against Wayland windows, so on KDE Wayland the app adds a window rule (`lolping-overlay` in `kwinrulesrc`, visible in System Settings → Window Rules) that forces the overlay into KWin's overlay layer, over full-screen windows too.
+- KWin itself binds Alt + drag (move window). While lolPing is on, its trigger wins; paused, KWin's binding works again. AltGr (a custom key trigger) is free of desktop bindings.
+- Gesture positions are KWin logical pixels. They match the overlay at a desktop scale of 100%; other scales are untested.
+- Arch Linux: `packaging/arch/build.sh` builds the helper, the plugin and the app, then a package with a menu entry and a pacman hook that reminds you to rebuild after a KWin update.
+- `native/hook-helper/tests/evdev_tests.cpp` checks the plugin's key map against the system's XKB keycode names. The plugin's input path was tested in a headless nested KWin (`kwin_wayland --virtual`) with libei input.
 
 ## Behavior and limits
 

@@ -1,0 +1,24 @@
+# Arch Linux package for lolPing on KDE Plasma 6 (Wayland or X11), built from this checkout.
+# Build the pieces first, from the repository root (see build.sh), then: makepkg -f
+pkgname=lolping
+pkgver=0.6.0
+pkgrel=1
+pkgdesc='League of Legends style ping wheel for the desktop, with a KWin plugin for Plasma on Wayland'
+arch=('x86_64')
+url='https://github.com/darrenprx/lolPing'
+license=('MIT')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libxi' 'libx11' 'libnotify' 'kwin' 'qt6-base' 'systemd')
+options=('!strip' '!debug')
+_root="$(realpath "$startdir/../..")"
+
+package() {
+  install -d "$pkgdir/opt/lolPing" "$pkgdir/usr/bin"
+  cp -a "$_root/release/linux-unpacked/." "$pkgdir/opt/lolPing/"
+  ln -s /opt/lolPing/lolping "$pkgdir/usr/bin/lolping"
+  # KWin loads binary plugins only from the version they were built for: see lolping-kwin.hook.
+  install -Dm755 "$_root/native/kwin-plugin/build/lolping.so" "$pkgdir/usr/lib/qt6/plugins/kwin/plugins/lolping.so"
+  install -Dm644 "$startdir/lolping.desktop" "$pkgdir/usr/share/applications/lolping.desktop"
+  install -Dm644 "$_root/build/icon.png" "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/lolping.png"
+  install -Dm644 "$startdir/lolping-kwin.hook" "$pkgdir/usr/share/libalpm/hooks/lolping-kwin.hook"
+  install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=lolPing
+Comment=Desktop ping wheel
+Exec=/opt/lolPing/lolping %U
+Icon=lolping
+Terminal=false
+Categories=Utility;
+StartupWMClass=lolping
