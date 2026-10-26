@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { parkedBounds } from '../../src/main/overlayManager';
 import type { EmoteArt } from '../../src/shared/emotes';
 import { OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED } from '../../src/shared/ipc';
 import { DEFAULT_SETTINGS, overlaySettings } from '../../src/shared/settings';
@@ -631,44 +632,81 @@ describe('OverlayManager z-order', () => {
   });
 });
 
+describe('parkedBounds', () => {
+  const display = { x: 0, y: 0, width: 1920, height: 1080 };
+  const overlay = { x: 0, y: 0, width: 1920, height: 1079 };
+
+  it('moves the overlay above its display, leaving one DIP on it so it keeps that display’s scale', () => {
+    expect(parkedBounds(display, overlay, [{ x: 1920, y: 0, width: 1280, height: 1024 }]))
+      .toEqual({ x: 0, y: -1078, width: 1920, height: 1079 });
+  });
+
+  it('goes below, left or right when the side before it borders another display', () => {
+    const above = { x: 0, y: -1080, width: 1920, height: 1080 };
+    const below = { x: 0, y: 1080, width: 1920, height: 1080 };
+    const left = { x: -1920, y: 0, width: 1920, height: 1080 };
+    expect(parkedBounds(display, overlay, [above])).toEqual({ x: 0, y: 1079, width: 1920, height: 1079 });
+    expect(parkedBounds(display, overlay, [above, below])).toEqual({ x: -1919, y: 0, width: 1920, height: 1079 });
+    expect(parkedBounds(display, overlay, [above, below, left])).toEqual({ x: 1919, y: 0, width: 1920, height: 1079 });
+  });
+
+  it('gives up when every side borders another display', () => {
+    const around = [
+      { x: 0, y: -1080, width: 1920, height: 1080 }, { x: 0, y: 1080, width: 1920, height: 1080 },
+      { x: -1920, y: 0, width: 1920, height: 1080 }, { x: 1920, y: 0, width: 1920, height: 1080 },
+    ];
+    expect(parkedBounds(display, overlay, around)).toBeNull();
+  });
+});
+
 describe('OverlayManager idle windows', () => {
   const idle = (i: number, value: unknown): void => h.handlers.get(OVERLAY_IDLE)!({ sender: h.windows[i].webContents }, value);
   const shownAtStart = (): void => {
     for (const w of h.windows) w.emit('ready-to-show');
   };
+  const parked = { x: 0, y: -1078, width: 1920, height: 1079 };
+  const overDisplay = { x: 0, y: 0, width: 1920, height: 1079 };
 
-  it('hides an overlay on Windows while its page has nothing on it, so screenshot tools do not take it for a window', () => {
+  it('parks an empty overlay on Windows off its display, shown, so screenshot tools see the windows under it', () => {
     shownAtStart();
     idle(0, true);
-    expect(h.windows.map((w) => w.visible)).toEqual([false, true]);
+    expect(h.windows.map((w) => w.visible)).toEqual([true, true]);
+    expect(h.windows[0].bounds).toEqual(parked);
+    expect(h.windows[1].bounds).toEqual({ x: 1920, y: 0, width: 1280, height: 1023 });
   });
 
-  it('shows it again without focus, back on top, as soon as its page draws something', () => {
+  it('puts it back over its display, back on top, as soon as its page draws something', () => {
     shownAtStart();
     idle(0, true);
     const levels = h.windows[0].onTop.length;
     idle(0, false);
-    expect(h.windows[0].visible).toBe(true);
+    expect(h.windows[0].bounds).toEqual(overDisplay);
     expect(h.windows[0].onTop.slice(levels)).toEqual(['screen-saver']);
   });
 
-  it('keeps an overlay hidden when its page said it was empty before the window was ready to show', () => {
+  it('parks an overlay whose page said it was empty before the window was ready to show', () => {
     idle(0, true);
     shownAtStart();
-    expect(h.windows.map((w) => w.visible)).toEqual([false, true]);
-    idle(0, false);
     expect(h.windows[0].visible).toBe(true);
-    expect(h.windows[0].bounds).toEqual({ x: 0, y: 0, width: 1920, height: 1079 });
+    expect(h.windows[0].bounds).toEqual(parked);
+  });
+
+  it('keeps a parked overlay parked when the displays change under it', () => {
+    shownAtStart();
+    idle(0, true);
+    h.setDisplayBounds(1, { height: 1200 });
+    mgr.toast('t', 'b'); // something new to draw makes the manager notice; the page has not drawn it yet
+    expect(h.windows[0].bounds).toEqual({ x: 0, y: -1198, width: 1920, height: 1199 });
   });
 
   it('ignores a malformed report', () => {
     shownAtStart();
     idle(0, 'yes');
     idle(0, 1);
-    expect(h.windows.map((w) => w.visible)).toEqual([true, true]);
+    expect(h.windows[0].bounds).toEqual(overDisplay);
   });
 
-  it('keeps the overlays shown on macOS and Linux', async () => {
+  it('leaves the overlays over their displays on macOS and Linux', async () => {
     for (const platform of ['mac', 'linux'] as const) {
       h.windows.length = 0;
       h.handlers.clear();
@@ -679,7 +717,7 @@ describe('OverlayManager idle windows', () => {
       new OverlayManager(overlaySettings(DEFAULT_SETTINGS), resolveArt).start();
       shownAtStart();
       idle(0, true);
-      expect(h.windows.map((w) => w.visible)).toEqual([true, true]);
+      expect(h.windows[0].bounds).toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
     }
   });
 });

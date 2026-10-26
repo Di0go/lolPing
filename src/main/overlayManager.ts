@@ -57,6 +57,26 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 export const overlayBounds = (d: Display): Rectangle =>
   IS_MAC || IS_LINUX ? d.bounds : { ...d.bounds, height: d.bounds.height - 1 };
 
+const overlaps = (a: Rectangle, b: Rectangle): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * Where an empty overlay waits on Windows (#127): still shown, moved off its display but for one DIP along a side no
+ * other display borders. Screenshot tools then find the windows under the pointer. Hiding it instead made Windows play
+ * its show animation each time, so the wheel slid in from the display's centre. The DIP left on the display keeps the
+ * window at that display's scale. Null when every side borders another display.
+ */
+export function parkedBounds(display: Rectangle, overlay: Rectangle, others: readonly Rectangle[]): Rectangle | null {
+  const { x, y, width, height } = overlay;
+  const sides = [
+    { x, y: display.y - height + 1, width, height },
+    { x, y: display.y + display.height - 1, width, height },
+    { x: display.x - width + 1, y, width, height },
+    { x: display.x + display.width - 1, y, width, height },
+  ];
+  return sides.find((r) => !others.some((o) => overlaps(r, o))) ?? null;
+}
+
 /** Physical pixels per DIP in a display's map. macOS reports DIPs; Linux is forced to scale 1 at startup. */
 const mapScale = (d: Display): number => (IS_MAC || IS_LINUX ? 1 : d.scaleFactor);
 
@@ -87,7 +107,7 @@ export class OverlayManager extends EventEmitter {
   private wheelAt: { local: LocalPoint; phys: { x: number; y: number } } | null = null;
   private mateTicket: string | null = null;
   private captureExcluded = false;
-  /** Overlays whose page last said it has nothing on it (Windows only). */
+  /** Overlays whose page last said it has nothing on it, parked off their displays (Windows only). */
   private readonly idleWindows = new WeakSet<BrowserWindow>();
 
   /** `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here. */
@@ -118,22 +138,17 @@ export class OverlayManager extends EventEmitter {
       this.clearElsewhere(displayId, 'self');
     });
     ipcMain.on(OVERLAY_IDLE, (event, idle: unknown) => {
-      // Screenshot tools on Windows take a shown overlay for a window over the whole display (#127): hide an empty one.
+      // Screenshot tools on Windows take a shown overlay for a window over the whole display (#127): park an empty one.
       if (IS_MAC || IS_LINUX || typeof idle !== 'boolean') return;
       const displayId = this.displayOf(event.sender);
       const win = displayId === undefined ? undefined : this.windows.get(displayId);
-      if (!win || win.isDestroyed()) return;
-      if (idle) {
-        this.idleWindows.add(win);
-        win.hide();
-        return;
-      }
-      this.idleWindows.delete(win);
-      if (win.isVisible()) return;
-      win.showInactive();
-      win.setAlwaysOnTop(true, 'screen-saver');
       const d = screen.getAllDisplays().find((x) => x.id === displayId);
-      if (d) win.setBounds(overlayBounds(d)); // as at ready-to-show: a first show can be sized wrong on mixed DPI
+      if (!win || win.isDestroyed() || !d) return;
+      if (idle) this.idleWindows.add(win);
+      else this.idleWindows.delete(win);
+      if (!idle && !win.isVisible()) win.showInactive(); // it had no free side to park on
+      this.place(win, d);
+      if (!idle) win.setAlwaysOnTop(true, 'screen-saver');
     });
     this.rebuild();
     screen.on('display-added', () => this.rebuild());
@@ -432,7 +447,7 @@ export class OverlayManager extends EventEmitter {
     }
     for (const d of displays) {
       const win = this.windows.get(d.id);
-      if (win) win.setBounds(overlayBounds(d));
+      if (win) this.place(win, d);
       else this.windows.set(d.id, this.createWindow(d));
     }
   }
@@ -472,11 +487,23 @@ export class OverlayManager extends EventEmitter {
     }
     win.webContents.on('did-finish-load', () => win.webContents.send('overlay:settings', this.settings));
     win.once('ready-to-show', () => {
-      if (!this.idleWindows.has(win)) win.showInactive(); // a page that already said it is empty stays hidden
-      win.setBounds(overlayBounds(d)); // re-apply: mixed-DPI setups can size the first frame wrong
+      win.showInactive();
+      this.place(win, d); // re-apply: mixed-DPI setups can size the first frame wrong
     });
     void loadPage(win, 'overlay');
     return win;
+  }
+
+  /** Over its display, or parked off it while its page has nothing on it (Windows only). */
+  private place(win: BrowserWindow, d: Display): void {
+    if (!this.idleWindows.has(win)) {
+      win.setBounds(overlayBounds(d));
+      return;
+    }
+    const others = screen.getAllDisplays().filter((o) => o.id !== d.id).map((o) => o.bounds);
+    const parked = parkedBounds(d.bounds, overlayBounds(d), others);
+    if (parked) win.setBounds(parked);
+    else win.hide(); // boxed in by other displays: hidden instead, show animation and all
   }
 
   private send<C extends OverlayChannel>(displayId: number, channel: C, payload: OverlayEvents[C]): void {
