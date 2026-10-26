@@ -35,7 +35,7 @@ const emoteLayer = document.createElement('div');
 emoteLayer.id = 'emotes';
 pingLayer.after(emoteLayer);
 
-const sounds = new SoundBank();
+const sounds = new SoundBank(navigator.platform.startsWith('Linux'));
 const stage = new EmoteStage(emoteLayer);
 const texts = new TextStage(textLayer);
 const glows = new GlowStage(pingLayer);
