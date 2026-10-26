@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ASSEMBLY_TIMEOUT_MS, EMOTE_CHUNK_BYTES, EmoteTransfer, LAN_TOTAL_CHUNKS_PER_TICK, MAX_ASSEMBLIES, MAX_PENDING_BYTES,
-  REASKS_MAX, type EmoteTransferDeps,
+  REASKS_MAX, TRANSFER_TICK_MS, type EmoteTransferDeps,
 } from '../../src/main/emoteTransfer';
 import type { ChunkMsg, WantMsg } from '../../src/shared/roomProtocol';
 
@@ -378,5 +378,28 @@ describe('EmoteTransfer: audit regressions', () => {
     h.setAnnounced([hash]);
     for (let n = 0; n < 50; n++) h.t.onWant(wantOf(hash, []));
     expect(h.reads.still).toBe(1);
+  });
+});
+
+describe('EmoteTransfer: idle', () => {
+  it('keeps no timer while nothing is queued, and drops it once the queue drains', async () => {
+    const h = harness();
+    expect(vi.getTimerCount()).toBe(0);
+    const bytes = still(EMOTE_CHUNK_BYTES + 10);
+    const hash = hashOf(bytes);
+    h.routes.set(ANNOUNCER, 'lan');
+    h.t.announced(ANNOUNCER, [hash]);
+    expect(vi.getTimerCount()).toBe(1);
+    h.t.onChunk(chunkOf(hash, 0, 2, bytes.subarray(0, EMOTE_CHUNK_BYTES)));
+    h.t.onChunk(chunkOf(hash, 1, 2, bytes.subarray(EMOTE_CHUNK_BYTES)));
+    await vi.advanceTimersByTimeAsync(TRANSFER_TICK_MS);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('never starts again after stop', () => {
+    const h = harness();
+    h.t.stop();
+    h.routes.set(ANNOUNCER, 'lan');
+    h.t.announced(ANNOUNCER, [hashOf(still())]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -72,19 +72,38 @@ export class EmoteTransfer {
   private readonly announcers = new Map<string, Set<string>>();
   private readonly assemblies = new Map<string, Assembly>();
   private readonly sends = new Map<string, SendQueue>();
-  private readonly timer: NodeJS.Timeout;
+  // Runs only while something is queued or being assembled: an idle app gets no wakeups from it.
+  private timer: NodeJS.Timeout | null = null;
+  private stopped = false;
 
-  constructor(private readonly deps: EmoteTransferDeps) {
+  constructor(private readonly deps: EmoteTransferDeps) {}
+
+  stop(): void {
+    this.stopped = true;
+    this.sleep();
+  }
+
+  private wake(): void {
+    if (this.timer || this.stopped || (this.sends.size === 0 && this.assemblies.size === 0)) return;
     this.timer = setInterval(() => this.tick(), TRANSFER_TICK_MS);
     this.timer.unref();
   }
 
-  stop(): void {
-    clearInterval(this.timer);
+  private sleep(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   /** A presence announced `hashes`: prefetch whatever isn't here yet, on the announcer's route. */
   announced(peer: string, hashes: readonly string[]): void {
+    try {
+      this.announcedNow(peer, hashes);
+    } finally {
+      this.wake();
+    }
+  }
+
+  private announcedNow(peer: string, hashes: readonly string[]): void {
     this.announcers.set(peer, new Set(hashes));
     if (!this.deps.enabled()) return;
     for (const hash of hashes) {
@@ -97,6 +116,14 @@ export class EmoteTransfer {
 
   /** Another member asks for one of our stills. Only hashes in our own current announcement are served. */
   onWant(w: WantMsg): void {
+    try {
+      this.wantNow(w);
+    } finally {
+      this.wake();
+    }
+  }
+
+  private wantNow(w: WantMsg): void {
     if (!this.deps.enabled()) return; // the switch stops both directions: nothing of ours leaves either
     if (!this.deps.announced().includes(w.h)) return;
     const lane = this.deps.routeOf(w.peer);
@@ -121,6 +148,14 @@ export class EmoteTransfer {
 
   /** One slice of a still, from the member that announced the hash. Assemblies finish into the cache once verified. */
   onChunk(c: ChunkMsg): void {
+    try {
+      this.chunkNow(c);
+    } finally {
+      this.wake();
+    }
+  }
+
+  private chunkNow(c: ChunkMsg): void {
     if (!this.deps.enabled()) return;
     if (!(this.announcers.get(c.peer)?.has(c.h) ?? false)) return; // only from a member who announced that hash
     const part = Buffer.from(c.b, 'base64');
@@ -249,5 +284,6 @@ export class EmoteTransfer {
     } catch {
       // a send that failed (a packet that wouldn't seal, a route that vanished) waits for the next tick
     }
+    if (this.sends.size === 0 && this.assemblies.size === 0) this.sleep();
   }
 }
