@@ -29,11 +29,13 @@ esac
 "$CXX" $FLAGS ${CPPFLAGS:-} -O0 tests/context_tests.cpp src/context.cpp src/json.cpp -o build/context_tests
 if [ "$(uname -s)" = Linux ]; then
   "$CXX" $FLAGS ${CPPFLAGS:-} -O0 tests/evdev_tests.cpp src/evdevinput.cpp src/linuxinput.cpp -o build/evdev_tests
+  "$CXX" $FLAGS ${CPPFLAGS:-} -O0 tests/kwin_bridge_tests.cpp src/hooks_kwin.cpp src/output.cpp src/json.cpp \
+    src/decision.cpp -o build/kwin_bridge_tests
 fi
 if [ "$(uname -s)" = Darwin ]; then
   "$CXX" $FLAGS -O0 tests/hooks_mac_tests.cpp src/decision.cpp src/commands.cpp src/macinput.cpp src/json.cpp src/output.cpp \
     -framework ApplicationServices -framework CoreFoundation -o build/hooks_mac_tests
   echo "Built build/hook-helper, build/context-helper, build/helper_tests, build/context_tests and build/hooks_mac_tests"
 else
-  echo "Built build/hook-helper, build/helper_tests, build/context_tests and build/evdev_tests"
+  echo "Built build/hook-helper, build/helper_tests, build/context_tests, build/evdev_tests and build/kwin_bridge_tests"
 fi

@@ -7,6 +7,8 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -46,18 +48,13 @@ bool writeAll(int fd, const char* data, size_t size) {
 }
 }
 
-int runKWinBridge(Output& out) {
-  const char* runtime = std::getenv("XDG_RUNTIME_DIR");
-  // The plugin names its socket after KWin's Wayland display, so each KWin (a nested one too) has its own.
-  std::string display = std::getenv("WAYLAND_DISPLAY") ? std::getenv("WAYLAND_DISPLAY") : "wayland-0";
-  if (const size_t slash = display.rfind('/'); slash != std::string::npos) display.erase(0, slash + 1);
-  const std::string path = std::string(runtime ? runtime : "/tmp") + "/lolping-kwin-" + display + ".sock";
-  int fd = connectTo(path);
+int relayKWin(Output& out, int in, const KWinRelayOptions& o) {
+  int fd = connectTo(o.path);
   if (fd < 0) {
-    loadPlugin();
-    for (int i = 0; i < 20 && fd < 0; ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      fd = connectTo(path);
+    if (o.loadPlugin) o.loadPlugin();
+    for (int i = 0; i < o.startAttempts && fd < 0; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(o.retryMs));
+      fd = connectTo(o.path);
     }
   }
   if (fd < 0) {
@@ -68,12 +65,39 @@ int runKWinBridge(Output& out) {
   // The plugin says ready itself; every line it sends is already in the protocol's format.
   std::string fromPlugin;
   char buf[4096];
+  auto lost = [&] {
+    out.error("The KWin plugin closed the connection; reconnecting");
+    close(fd);
+    fd = -1;
+    fromPlugin.clear();
+  };
+  auto nextTry = std::chrono::steady_clock::now();
   for (;;) {
-    pollfd fds[] = {{fd, POLLIN, 0}, {STDIN_FILENO, POLLIN, 0}};
-    if (poll(fds, 2, -1) < 0) break;
+    if (fd < 0) {
+      // KWin restarted or the plugin was reloaded. The plugin's ready on the new connection makes the app send
+      // its state again, so commands that arrive meanwhile are dropped; only the app leaving ends the wait.
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= nextTry) {
+        fd = connectTo(o.path);
+        if (fd < 0 && o.loadPlugin) o.loadPlugin();
+        nextTry = now + std::chrono::milliseconds(o.reconnectMs);
+        if (fd >= 0) continue;
+      }
+      pollfd p{in, POLLIN, 0};
+      const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(nextTry - now).count();
+      const int r = poll(&p, 1, static_cast<int>(std::max<long long>(wait, 0)));
+      if (r < 0 && errno != EINTR) return 1;
+      if (r > 0 && read(in, buf, sizeof(buf)) <= 0) return 0;
+      continue;
+    }
+    pollfd fds[] = {{fd, POLLIN, 0}, {in, POLLIN, 0}};
+    if (poll(fds, 2, -1) < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
     if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
       const ssize_t n = read(fd, buf, sizeof(buf));
-      if (n <= 0) { out.error("The KWin plugin closed the connection"); close(fd); return 1; }
+      if (n <= 0) { lost(); continue; }
       fromPlugin.append(buf, static_cast<size_t>(n));
       size_t end;
       while ((end = fromPlugin.find('\n')) != std::string::npos) {
@@ -83,12 +107,23 @@ int runKWinBridge(Output& out) {
       if (fromPlugin.size() > 65536) { out.error("plugin line too long"); break; }
     }
     if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
-      const ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+      const ssize_t n = read(in, buf, sizeof(buf));
       if (n <= 0) break;  // the app is gone: closing the socket makes the plugin pass everything again
-      if (!writeAll(fd, buf, static_cast<size_t>(n))) { out.error("The KWin plugin closed the connection"); close(fd); return 1; }
+      if (!writeAll(fd, buf, static_cast<size_t>(n))) lost();
     }
   }
   close(fd);
   return 0;
+}
+
+int runKWinBridge(Output& out) {
+  const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+  // The plugin names its socket after KWin's Wayland display, so each KWin (a nested one too) has its own.
+  std::string display = std::getenv("WAYLAND_DISPLAY") ? std::getenv("WAYLAND_DISPLAY") : "wayland-0";
+  if (const size_t slash = display.rfind('/'); slash != std::string::npos) display.erase(0, slash + 1);
+  KWinRelayOptions o;
+  o.path = std::string(runtime ? runtime : "/tmp") + "/lolping-kwin-" + display + ".sock";
+  o.loadPlugin = loadPlugin;
+  return relayKWin(out, STDIN_FILENO, o);
 }
 }
