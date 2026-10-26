@@ -78,6 +78,7 @@ import { WinBackend } from './updateWin';
 import { Updater } from './updater';
 import { setLinuxAutostart } from './linuxAutostart';
 import { ensureKWinRule, isKdeWayland } from './kwinRule';
+import { x11RelaunchArgs } from './ozone';
 
 const ACCESSIBILITY_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 /** How many foreground app names the rules card is offered. */
@@ -86,8 +87,9 @@ const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.preference.se
 
 // X11 uses root-window pixels. Keep Electron in the same coordinate space on every monitor. On Wayland too: the
 // overlay needs XWayland to stay on top and let clicks through, and KWin reports gestures in the same pixels at scale 1.
+// The platform itself can only be chosen on the command line, so a Wayland start relaunches with it (x11RelaunchArgs).
+const x11Args = IS_LINUX ? x11RelaunchArgs(process.argv, process.env) : null;
 if (IS_LINUX) {
-  app.commandLine.appendSwitch('ozone-platform', 'x11');
   app.commandLine.appendSwitch('force-device-scale-factor', '1');
   // Under a Wayland session the GPU process can crash on XWayland at start (seen with KWin 6.8, exit 139), and
   // the overlay then never paints its first frame, so it never shows. In-process GPU initialises without crashing.
@@ -97,7 +99,10 @@ if (IS_LINUX) {
 registerAppScheme();
 app.setAppUserModelId('com.lolping.app');
 
-if (!app.requestSingleInstanceLock()) {
+if (x11Args) {
+  app.relaunch({ args: x11Args });
+  app.exit(0);
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => openSettingsWindow());
