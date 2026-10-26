@@ -10,6 +10,11 @@ export default defineConfig({
       rollupOptions: {
         input: { index: resolve('src/main/index.ts'), bridge: resolve('src/main/mcp/bridge.ts') },
         output: { format: 'cjs', entryFileNames: '[name].js' },
+        onwarn(warning, warn) {
+          // zod (under the MCP SDK) has comments that talk about `@__PURE__`; Rollup only drops them, the code is unchanged.
+          if (warning.code === 'INVALID_ANNOTATION' && /[\\/]node_modules[\\/]zod[\\/]/.test(warning.id ?? '')) return;
+          warn(warning);
+        },
       },
     },
   },
