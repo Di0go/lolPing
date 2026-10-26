@@ -2,6 +2,7 @@
 // XI2 raw keyboard events observe modifiers without taking keyboard focus or reading /dev/input.
 #include "app.h"
 #include "commands.h"
+#include "hooks_kwin.h"
 #include "linuxinput.h"
 #include <X11/Xlib.h>
 #include <X11/XKBlib.h>
@@ -264,10 +265,8 @@ class Hooks {
 }
 int runHooks(Output& out) {
   const char* session = std::getenv("XDG_SESSION_TYPE");
-  if ((session && std::strcmp(session, "wayland") == 0) || std::getenv("WAYLAND_DISPLAY")) {
-    out.error("noAccess", "Linux requires an X11 login session; XWayland cannot capture input from native Wayland apps.");
-    return 3;
-  }
+  // XWayland cannot see or hold back input meant for native Wayland apps: on Wayland, KWin decides instead.
+  if ((session && std::strcmp(session, "wayland") == 0) || std::getenv("WAYLAND_DISPLAY")) return runKWinBridge(out);
   Display* display = XOpenDisplay(nullptr);
   if (!display) { out.error("noAccess", "Cannot connect to X11. Start lolPing inside an X11 desktop session."); return 3; }
   XSetErrorHandler(xError);

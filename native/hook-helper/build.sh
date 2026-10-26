@@ -19,7 +19,7 @@ case "$(uname -s)" in
   Linux)
     CXX=${CXX:-c++}
     FLAGS="-std=c++20 -Wall -Wextra -pthread"
-    "$CXX" $FLAGS ${CPPFLAGS:-} -O2 src/main_posix.cpp src/hooks_linux.cpp src/linuxinput.cpp src/simulate.cpp \
+    "$CXX" $FLAGS ${CPPFLAGS:-} -O2 src/main_posix.cpp src/hooks_linux.cpp src/hooks_kwin.cpp src/linuxinput.cpp src/simulate.cpp \
       src/commands.cpp src/output.cpp src/json.cpp src/decision.cpp ${LDFLAGS:-} -lX11 -lXi -lXtst -o build/hook-helper
     ;;
   *) echo "Unsupported operating system" >&2; exit 1 ;;
@@ -27,10 +27,13 @@ esac
 "$CXX" $FLAGS ${CPPFLAGS:-} -O0 tests/helper_tests.cpp src/decision.cpp src/commands.cpp src/macinput.cpp src/json.cpp src/output.cpp \
   -o build/helper_tests
 "$CXX" $FLAGS ${CPPFLAGS:-} -O0 tests/context_tests.cpp src/context.cpp src/json.cpp -o build/context_tests
+if [ "$(uname -s)" = Linux ]; then
+  "$CXX" $FLAGS ${CPPFLAGS:-} -O0 tests/evdev_tests.cpp src/evdevinput.cpp src/linuxinput.cpp -o build/evdev_tests
+fi
 if [ "$(uname -s)" = Darwin ]; then
   "$CXX" $FLAGS -O0 tests/hooks_mac_tests.cpp src/decision.cpp src/commands.cpp src/macinput.cpp src/json.cpp src/output.cpp \
     -framework ApplicationServices -framework CoreFoundation -o build/hooks_mac_tests
   echo "Built build/hook-helper, build/context-helper, build/helper_tests, build/context_tests and build/hooks_mac_tests"
 else
-  echo "Built build/hook-helper, build/helper_tests and build/context_tests"
+  echo "Built build/hook-helper, build/helper_tests, build/context_tests and build/evdev_tests"
 fi
