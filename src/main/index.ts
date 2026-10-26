@@ -77,13 +77,15 @@ import { MacBackend, RELEASES_API } from './updateMac';
 import { WinBackend } from './updateWin';
 import { Updater } from './updater';
 import { setLinuxAutostart } from './linuxAutostart';
+import { ensureKWinRule, isKdeWayland } from './kwinRule';
 
 const ACCESSIBILITY_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 /** How many foreground app names the rules card is offered. */
 const RECENT_APPS_MAX = 20;
 const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
 
-// X11 uses root-window pixels. Keep Electron in the same coordinate space on every monitor.
+// X11 uses root-window pixels. Keep Electron in the same coordinate space on every monitor. On Wayland too: the
+// overlay needs XWayland to stay on top and let clicks through, and KWin reports gestures in the same pixels at scale 1.
 if (IS_LINUX) {
   app.commandLine.appendSwitch('ozone-platform', 'x11');
   app.commandLine.appendSwitch('force-device-scale-factor', '1');
@@ -209,6 +211,7 @@ function start(): void {
     rendererRoot: process.env.ELECTRON_RENDERER_URL ? null : join(__dirname, '../renderer'), // development pages come from Vite
     emoteDirs: () => [library.dir, cache.dir], // the library wins; the cache only fills the gaps
   });
+  if (IS_LINUX && isKdeWayland(process.env)) void ensureKWinRule();
   if (IS_MAC) {
     app.dock?.hide(); // a menu bar app: the Dock icon only shows while settings are open
     setMacMenu();
