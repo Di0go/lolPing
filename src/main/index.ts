@@ -1,5 +1,6 @@
 import {
-  app, clipboard, ClipboardItem, dialog, Menu, nativeImage, powerMonitor, safeStorage, screen, shell, systemPreferences,
+  app, clipboard, ClipboardItem, dialog, Menu, nativeImage, Notification, powerMonitor, safeStorage, screen, shell,
+  systemPreferences,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
@@ -738,6 +739,10 @@ function start(): void {
       if (trusted()) staleAccess = true;
       else waitForAccess();
       openSettingsWindow();
+    }
+    if (s === 'noAccess' && IS_LINUX && isKdeWayland(process.env) && Notification.isSupported()) {
+      // The tray icon alone went unnoticed after KWin updates: say it where KDE keeps it, with the fix.
+      new Notification({ title: text().kwinPluginNotLoaded, body: text().kwinPluginNotLoadedBody }).show();
     }
     pushStatus();
     if (s === 'failed') overlays.toast(text().toastHelperStopped, text().toastHelperStoppedBody);
