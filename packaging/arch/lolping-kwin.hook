@@ -1,11 +1,11 @@
-# The KWin plugin is tied to the exact KWin version it was built against; after a KWin update it stops loading
-# (safely) until it is rebuilt. Say so at the update instead of leaving lolPing quietly without input.
+# The KWin plugin is tied to the exact KWin version it was built against; after a KWin update KWin refuses it
+# (safely) until it is rebuilt. Rebuild it here, so it loads at the next login. If this fails, the app says so.
 [Trigger]
 Operation = Upgrade
 Type = Package
 Target = kwin
 
 [Action]
-Description = lolPing: the KWin plugin must be rebuilt for the new KWin (packaging/arch/build.sh)
+Description = lolPing: rebuilding the KWin plugin for the new KWin...
 When = PostTransaction
-Exec = /usr/bin/true
+Exec = /usr/lib/lolping/rebuild-kwin-plugin

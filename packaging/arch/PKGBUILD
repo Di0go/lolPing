@@ -2,12 +2,12 @@
 # Build the pieces first, from the repository root (see build.sh), then: makepkg -f
 pkgname=lolping
 pkgver=0.6.0
-pkgrel=1
+pkgrel=2
 pkgdesc='League of Legends style ping wheel for the desktop, with a KWin plugin for Plasma on Wayland'
 arch=('x86_64')
 url='https://github.com/darrenprx/lolPing'
 license=('MIT')
-depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libxi' 'libx11' 'libnotify' 'kwin' 'qt6-base' 'systemd')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libxi' 'libx11' 'libnotify' 'kwin' 'qt6-base' 'systemd' 'gcc' 'pkgconf')
 options=('!strip' '!debug')
 _root="$(realpath "$startdir/../..")"
 
@@ -20,5 +20,11 @@ package() {
   install -Dm644 "$startdir/lolping.desktop" "$pkgdir/usr/share/applications/lolping.desktop"
   install -Dm644 "$_root/build/icon.png" "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/lolping.png"
   install -Dm644 "$startdir/lolping-kwin.hook" "$pkgdir/usr/share/libalpm/hooks/lolping-kwin.hook"
+  # What lolping-kwin.hook needs to rebuild the plugin after a KWin update, without the rest of the checkout.
+  install -Dm755 "$startdir/rebuild-kwin-plugin" "$pkgdir/usr/lib/lolping/rebuild-kwin-plugin"
+  install -d "$pkgdir/usr/share/lolping/src/native/kwin-plugin" "$pkgdir/usr/share/lolping/src/native/hook-helper/src"
+  install -m644 "$_root"/native/kwin-plugin/{lolping.cpp,metadata.json} "$pkgdir/usr/share/lolping/src/native/kwin-plugin/"
+  install -m755 "$_root/native/kwin-plugin/build.sh" "$pkgdir/usr/share/lolping/src/native/kwin-plugin/"
+  install -m644 "$_root"/native/hook-helper/src/*.{h,cpp} "$pkgdir/usr/share/lolping/src/native/hook-helper/src/"
   install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

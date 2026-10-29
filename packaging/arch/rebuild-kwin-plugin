@@ -1,0 +1,13 @@
+#!/bin/sh
+# Rebuilds lolPing's KWin plugin against the installed KWin, from the sources this package ships. No network, no npm.
+# lolping-kwin.hook runs it after every KWin update; by hand: pkexec /usr/lib/lolping/rebuild-kwin-plugin
+set -eu
+src=/usr/share/lolping/src
+dest=/usr/lib/qt6/plugins/kwin/plugins/lolping.so
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cp -r "$src/native" "$work/"
+"$work/native/kwin-plugin/build.sh"
+# A running KWin keeps what it already loaded or refused, so the new plugin loads at the next login.
+install -m755 "$work/native/kwin-plugin/build/lolping.so" "$dest.new"
+mv -f "$dest.new" "$dest"

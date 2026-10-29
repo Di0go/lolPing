@@ -28,7 +28,7 @@ Pings and emotes show up in whole-screen capture, so friends watching your Disco
 
 ## Linux (experimental)
 
-This source tree includes an **X11 Linux port**, with AppImage and Debian package targets. It requires a genuine X11 session, XInput 2.1/XTest and a compositor. On **KDE Plasma 6 under Wayland** it runs through a KWin plugin (`native/kwin-plugin`) that has to be rebuilt after every KWin update; an Arch package recipe is in `packaging/arch`. Other Wayland desktops are not supported yet. Caps Lock triggers and automatic fullscreen-game detection are not available on Linux. Build with Node.js 22.12+, a C++20 compiler and `libx11-dev libxi-dev libxtst-dev`, then run `npm ci` and `npm run dist:linux`.
+This source tree includes an **X11 Linux port**, with AppImage and Debian package targets. It requires a genuine X11 session, XInput 2.1/XTest and a compositor. On **KDE Plasma 6 under Wayland** it runs through a KWin plugin (`native/kwin-plugin`) that has to be rebuilt after every KWin update; the Arch package recipe in `packaging/arch` does that in a pacman hook. Other Wayland desktops are not supported yet. Caps Lock triggers and automatic fullscreen-game detection are not available on Linux. Build with Node.js 22.12+, a C++20 compiler and `libx11-dev libxi-dev libxtst-dev`, then run `npm ci` and `npm run dist:linux`.
 
 See [Linux build, installation and testing instructions](docs/linux.md) for package usage, desktop shortcut conflicts, tray requirements, HiDPI behavior and manual updates. Upstream releases may not yet contain this port.
 

@@ -50,7 +50,7 @@ A Wayland client cannot see or hold back another client's input, so on Wayland t
 - The overlay still runs through XWayland. Electron chooses between Wayland and X11 before the main script runs, so a start inside a Wayland session relaunches itself once with `--ozone-platform=x11` (`src/main/ozone.ts`). KWin does not let an XWayland window's always-on-top hint win against Wayland windows, so on KDE Wayland the app adds a window rule (`lolping-overlay` in `kwinrulesrc`, visible in System Settings → Window Rules) that forces the overlay into KWin's overlay layer, over full-screen windows too.
 - KWin itself binds Alt + drag (move window). While lolPing is on, its trigger wins; paused, KWin's binding works again. AltGr (a custom key trigger) is free of desktop bindings.
 - Gesture positions are KWin logical pixels. They match the overlay at a desktop scale of 100%; other scales are untested.
-- Arch Linux: `packaging/arch/build.sh` builds the helper, the plugin and the app, then a package with a menu entry and a pacman hook that reminds you to rebuild after a KWin update.
+- Arch Linux: `packaging/arch/build.sh` builds the helper, the plugin and the app, then a package with a menu entry. The package also ships the plugin's sources and `/usr/lib/lolping/rebuild-kwin-plugin`, which a pacman hook runs after every KWin update: a compile of about 7 seconds with the system compiler, no npm and no network. If it fails, the app's notification gives the same command to run by hand.
 - `native/hook-helper/tests/evdev_tests.cpp` checks the plugin's key map against the system's XKB keycode names. The plugin's input path was tested in a headless nested KWin (`kwin_wayland --virtual`) with libei input.
 
 ## Behavior and limits
